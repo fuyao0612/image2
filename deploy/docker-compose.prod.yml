@@ -1,0 +1,129 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7.4
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      HTTP_ADDR: :8080
+      MYSQL_DSN: ${MYSQL_DSN}
+      SQLITE_PATH: ""
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+      EMAIL_DELIVERY: ${EMAIL_DELIVERY}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      SMTP_USE_TLS: ${SMTP_USE_TLS}
+      SMTP_STARTTLS: ${SMTP_STARTTLS}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT}
+      CHECKIN_POINTS: ${CHECKIN_POINTS}
+      IMAGE_COST_POINTS: ${IMAGE_COST_POINTS}
+      IMAGE_PROVIDER_BATCH_URL: ${IMAGE_PROVIDER_BATCH_URL}
+      IMAGE_PROVIDER_API_BASE_URL: ${IMAGE_PROVIDER_API_BASE_URL}
+      IMAGE_PROVIDER_API_KEY: ${IMAGE_PROVIDER_API_KEY}
+      IMAGE_PROVIDER_TIMEOUT: ${IMAGE_PROVIDER_TIMEOUT}
+      IMAGE_PROVIDER_POLL_INTERVAL: ${IMAGE_PROVIDER_POLL_INTERVAL}
+      IMAGE_TASK_STALE_TTL: ${IMAGE_TASK_STALE_TTL}
+      BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL}
+      IMAGE_STORAGE_DRIVER: ${IMAGE_STORAGE_DRIVER}
+      IMAGE_STORAGE_LOCAL_DIR: /app/storage/uploads
+      IMAGE_STORAGE_PUBLIC_PATH: /uploads
+      IMAGE_STORAGE_TIMEOUT: ${IMAGE_STORAGE_TIMEOUT}
+      IMAGE_STORAGE_MAX_BYTES: ${IMAGE_STORAGE_MAX_BYTES}
+      IMAGE_STORAGE_S3_ENDPOINT: ${IMAGE_STORAGE_S3_ENDPOINT}
+      IMAGE_STORAGE_S3_REGION: ${IMAGE_STORAGE_S3_REGION}
+      IMAGE_STORAGE_S3_BUCKET: ${IMAGE_STORAGE_S3_BUCKET}
+      IMAGE_STORAGE_S3_ACCESS_KEY_ID: ${IMAGE_STORAGE_S3_ACCESS_KEY_ID}
+      IMAGE_STORAGE_S3_SECRET_ACCESS_KEY: ${IMAGE_STORAGE_S3_SECRET_ACCESS_KEY}
+      IMAGE_STORAGE_S3_PUBLIC_BASE_URL: ${IMAGE_STORAGE_S3_PUBLIC_BASE_URL}
+      IMAGE_STORAGE_S3_PATH_PREFIX: ${IMAGE_STORAGE_S3_PATH_PREFIX}
+      IMAGE_STORAGE_S3_FORCE_PATH_STYLE: ${IMAGE_STORAGE_S3_FORCE_PATH_STYLE}
+      IMAGE_STORAGE_S3_DISABLE_SSL: ${IMAGE_STORAGE_S3_DISABLE_SSL}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED}
+      RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR}
+      RATE_LIMIT_LOGIN_PER_MINUTE: ${RATE_LIMIT_LOGIN_PER_MINUTE}
+      RATE_LIMIT_CHECKIN_PER_MINUTE: ${RATE_LIMIT_CHECKIN_PER_MINUTE}
+      RATE_LIMIT_IMAGE_PER_MINUTE: ${RATE_LIMIT_IMAGE_PER_MINUTE}
+      RATE_LIMIT_PURCHASE_PER_MINUTE: ${RATE_LIMIT_PURCHASE_PER_MINUTE}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED}
+    volumes:
+      - backend_storage:/app/storage/uploads
+    expose:
+      - "8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep '\"status\":\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_REGISTRATION_ENABLED: ${VITE_REGISTRATION_ENABLED}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
+  backend_storage:

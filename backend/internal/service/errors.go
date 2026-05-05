@@ -1,0 +1,40 @@
+package service
+
+import "errors"
+
+var (
+	ErrInvalidVerificationCode      = errors.New("验证码错误或已过期")
+	ErrAccountExists                = errors.New("用户名或邮箱已被注册")
+	ErrRegistrationDisabled         = errors.New("注册功能暂时关闭")
+	ErrInvalidCredentials           = errors.New("账号或密码错误")
+	ErrUserDisabled                 = errors.New("账号已被禁用")
+	ErrCurrentPasswordIncorrect     = errors.New("当前密码错误")
+	ErrPasswordConfirmationMismatch = errors.New("两次输入的新密码不一致")
+	ErrPasswordUnchanged            = errors.New("新密码不能和当前密码相同")
+	ErrAlreadyCheckedIn             = errors.New("今日已签到")
+	ErrInsufficientPoints           = errors.New("积分不足")
+	ErrUserNotFound                 = errors.New("用户不存在")
+	ErrTaskNotFound                 = errors.New("任务不存在")
+	ErrTaskStillGenerating          = errors.New("任务仍在生成中，不能重试")
+	ErrAuditNotFound                = errors.New("内容审核记录不存在")
+	ErrOrderNotFound                = errors.New("订单不存在")
+	ErrOrderInvalidState            = errors.New("订单状态不允许当前操作")
+	ErrOrderAmountMismatch          = errors.New("订单金额不一致")
+	ErrPackageInvalid               = errors.New("套餐不存在或不合法")
+	ErrPackageProtected             = errors.New("至少需要保留一个启用套餐")
+	ErrSettingsInvalid              = errors.New("系统配置参数不合法")
+	ErrInsufficientCredits          = errors.New("次数不足")
+	ErrPromptRequired               = errors.New("prompt 不能为空")
+	ErrProviderNotConfigured        = errors.New("图片服务未配置")
+	ErrEmailSenderNotConfigured     = errors.New("邮件发送服务未配置")
+	ErrForbidden                    = errors.New("无权限执行该操作")
+	ErrContentRejected              = errors.New("内容安全审核未通过")
+	ErrUploadFileRequired           = errors.New("请选择要上传的图片")
+	ErrUploadFileTooLarge           = errors.New("图片大小超出限制")
+	ErrUploadStorageNotConfig       = errors.New("图片存储未配置")
+)
+
+var (
+	ErrImageNotFound       = errors.New("图片不存在")
+	ErrImageDownloadFailed = errors.New("图片下载失败")
+)
