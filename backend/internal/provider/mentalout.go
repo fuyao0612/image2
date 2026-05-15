@@ -35,14 +35,16 @@ var (
 
 // GenerateRequest 是图片生成请求参数。
 type GenerateRequest struct {
-	Prompt            string
-	Size              string
-	Style             string
-	Count             int
-	Quality           string
-	OutputFormat      string
-	ReferenceImageURL string
-	ReferenceImage    *ReferenceImage
+	Prompt             string
+	Size               string
+	Style              string
+	Count              int
+	Quality            string
+	OutputFormat       string
+	ReferenceImageURL  string
+	ReferenceImageURLs []string
+	ReferenceImage     *ReferenceImage
+	ReferenceImages    []ReferenceImage
 }
 
 type ReferenceImage struct {
@@ -207,10 +209,10 @@ func (p *MentaloutProvider) submitBatch(ctx context.Context, req GenerateRequest
 		status int
 		err    error
 	)
-	if req.ReferenceImage == nil && strings.TrimSpace(req.ReferenceImageURL) == "" {
+	if len(req.ReferenceImages) == 0 && req.ReferenceImage == nil && len(req.ReferenceImageURLs) == 0 && strings.TrimSpace(req.ReferenceImageURL) == "" {
 		body, status, err = p.doJSONRequest(ctx, http.MethodPost, p.submitURL(), p.buildSubmitPayload(req))
 	} else {
-		body, status, err = p.doMultipartBatchRequest(ctx, p.submitURL(), p.buildSubmitPayload(req), req.ReferenceImageURL, req.ReferenceImage)
+		body, status, err = p.doMultipartBatchRequest(ctx, p.submitURL(), p.buildSubmitPayload(req), req.ReferenceImageURL, req.ReferenceImage, req.ReferenceImageURLs, req.ReferenceImages)
 	}
 	if err != nil {
 		return GenerateResult{}, err
@@ -239,10 +241,10 @@ func (p *MentaloutProvider) buildSubmitPayload(req GenerateRequest) map[string]a
 	return payload
 }
 
-func (p *MentaloutProvider) doMultipartBatchRequest(ctx context.Context, targetURL string, payload map[string]any, referenceImageURL string, providedImage *ReferenceImage) ([]byte, int, error) {
-	var image referenceImageFile
+func (p *MentaloutProvider) doMultipartBatchRequest(ctx context.Context, targetURL string, payload map[string]any, referenceImageURL string, providedImage *ReferenceImage, referenceImageURLs []string, providedImages []ReferenceImage) ([]byte, int, error) {
+	var images []referenceImageFile
 	if providedImage != nil && len(providedImage.Data) > 0 {
-		image = referenceImageFile{
+		image := referenceImageFile{
 			Name:        providedImage.Name,
 			ContentType: providedImage.ContentType,
 			Data:        providedImage.Data,
@@ -250,15 +252,45 @@ func (p *MentaloutProvider) doMultipartBatchRequest(ctx context.Context, targetU
 		if strings.TrimSpace(image.Name) == "" {
 			image.Name = referenceImageNameFromURL(referenceImageURL, image.ContentType)
 		}
-	} else {
-		var err error
-		image, err = p.downloadReferenceImage(ctx, referenceImageURL)
+		images = append(images, image)
+	}
+	for _, provided := range providedImages {
+		if len(provided.Data) == 0 {
+			continue
+		}
+		image := referenceImageFile{Name: provided.Name, ContentType: provided.ContentType, Data: provided.Data}
+		if strings.TrimSpace(image.Name) == "" {
+			image.Name = referenceImageNameFromURL("", image.ContentType)
+		}
+		images = append(images, image)
+	}
+	if len(images) == 0 && strings.TrimSpace(referenceImageURL) != "" {
+		image, err := p.downloadReferenceImage(ctx, referenceImageURL)
 		if err != nil {
 			return nil, 0, err
 		}
+		images = append(images, image)
+	} else {
+		for _, url := range referenceImageURLs {
+			if strings.TrimSpace(url) == "" {
+				continue
+			}
+			image, err := p.downloadReferenceImage(ctx, url)
+			if err != nil {
+				return nil, 0, err
+			}
+			images = append(images, image)
+		}
+	}
+	if len(images) == 0 {
+		image, err := p.downloadReferenceImage(ctx, referenceImageURL)
+		if err != nil {
+			return nil, 0, err
+		}
+		images = append(images, image)
 	}
 
-	raw, contentType, err := buildMultipartBatchBody(payload, image)
+	raw, contentType, err := buildMultipartBatchBody(payload, images)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -272,7 +304,7 @@ type referenceImageFile struct {
 	Data        []byte
 }
 
-func buildMultipartBatchBody(payload map[string]any, image referenceImageFile) ([]byte, string, error) {
+func buildMultipartBatchBody(payload map[string]any, images []referenceImageFile) ([]byte, string, error) {
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 
@@ -284,16 +316,18 @@ func buildMultipartBatchBody(payload map[string]any, image referenceImageFile) (
 		return nil, "", err
 	}
 
-	fileName := sanitizeReferenceImageFileName(image.Name, image.ContentType)
-	header := make(textproto.MIMEHeader)
-	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, "image", fileName))
-	header.Set("Content-Type", image.ContentType)
-	part, err := writer.CreatePart(header)
-	if err != nil {
-		return nil, "", err
-	}
-	if _, err := part.Write(image.Data); err != nil {
-		return nil, "", err
+	for _, image := range images {
+		fileName := sanitizeReferenceImageFileName(image.Name, image.ContentType)
+		header := make(textproto.MIMEHeader)
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, "image", fileName))
+		header.Set("Content-Type", image.ContentType)
+		part, err := writer.CreatePart(header)
+		if err != nil {
+			return nil, "", err
+		}
+		if _, err := part.Write(image.Data); err != nil {
+			return nil, "", err
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return nil, "", err

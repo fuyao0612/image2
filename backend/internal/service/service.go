@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -32,13 +33,14 @@ import (
 )
 
 type imageTaskGenerationInput struct {
-	Prompt            string `json:"prompt"`
-	Size              string `json:"size,omitempty"`
-	Style             string `json:"style,omitempty"`
-	Count             int    `json:"count,omitempty"`
-	Quality           string `json:"quality,omitempty"`
-	OutputFormat      string `json:"outputFormat,omitempty"`
-	ReferenceImageURL string `json:"referenceImageUrl,omitempty"`
+	Prompt             string   `json:"prompt"`
+	Size               string   `json:"size,omitempty"`
+	Style              string   `json:"style,omitempty"`
+	Count              int      `json:"count,omitempty"`
+	Quality            string   `json:"quality,omitempty"`
+	OutputFormat       string   `json:"outputFormat,omitempty"`
+	ReferenceImageURL  string   `json:"referenceImageUrl,omitempty"`
+	ReferenceImageURLs []string `json:"referenceImageUrls,omitempty"`
 }
 
 // Service 承载平台核心业务。
@@ -1230,6 +1232,17 @@ func (s *Service) referenceImageForProvider(ctx context.Context, referenceImageU
 	}
 }
 
+func (s *Service) referenceImagesForProvider(ctx context.Context, referenceImageURLs []string) []provider.ReferenceImage {
+	images := make([]provider.ReferenceImage, 0, len(referenceImageURLs))
+	for _, imageURL := range referenceImageURLs {
+		image := s.referenceImageForProvider(ctx, imageURL)
+		if image != nil {
+			images = append(images, *image)
+		}
+	}
+	return images
+}
+
 func (s *Service) failImageTaskAndRefund(taskID uint64, userID uint64, result provider.GenerateResult, message string) (int64, error) {
 	return s.failImageTaskAndRefundV2(taskID, userID, result, message)
 }
@@ -1719,7 +1732,10 @@ func (s *Service) normalizeReferenceImageURL(userID uint64, rawURL string) (stri
 			return "", ErrInvalidReferenceImageURL
 		}
 		base, err := url.Parse(strings.TrimRight(strings.TrimSpace(s.cfg.BackendPublicURL), "/"))
-		if err == nil && base.Scheme != "" && base.Host != "" && strings.EqualFold(parsed.Scheme, base.Scheme) && strings.EqualFold(parsed.Host, base.Host) && s.isAllowedReferenceImagePath(userID, parsed.Path) {
+		if err == nil && base.Scheme != "" && base.Host != "" && strings.EqualFold(parsed.Scheme, base.Scheme) && strings.EqualFold(parsed.Host, base.Host) {
+			return rawURL, nil
+		}
+		if isSafeExternalReferenceImageURL(parsed) {
 			return rawURL, nil
 		}
 		return "", ErrInvalidReferenceImageURL
@@ -1734,6 +1750,70 @@ func (s *Service) normalizeReferenceImageURL(userID uint64, rawURL string) (stri
 		}
 	}
 	return "", ErrInvalidReferenceImageURL
+}
+
+func isSafeExternalReferenceImageURL(parsed *url.URL) bool {
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	lowerHost := strings.ToLower(host)
+	if lowerHost == "localhost" || strings.HasSuffix(lowerHost, ".localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return isPublicReferenceIP(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !isPublicReferenceIP(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+func isPublicReferenceIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return !ip.IsLoopback() &&
+		!ip.IsPrivate() &&
+		!ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast() &&
+		!ip.IsMulticast() &&
+		!ip.IsUnspecified()
+}
+
+func (s *Service) normalizeReferenceImageURLs(userID uint64, primary string, urls []string) ([]string, error) {
+	candidates := make([]string, 0, len(urls)+1)
+	if strings.TrimSpace(primary) != "" {
+		candidates = append(candidates, primary)
+	}
+	candidates = append(candidates, urls...)
+	seen := make(map[string]struct{}, len(candidates))
+	normalized := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		url, err := s.normalizeReferenceImageURL(userID, strings.TrimSpace(candidate))
+		if err != nil {
+			return nil, err
+		}
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		normalized = append(normalized, url)
+		if len(normalized) > 12 {
+			return nil, ErrInvalidReferenceImageURL
+		}
+	}
+	return normalized, nil
 }
 
 func (s *Service) isAllowedReferenceImagePath(userID uint64, rawPath string) bool {
@@ -1883,7 +1963,7 @@ func shouldUseSingleImageProviderBatches(input imageTaskGenerationInput) bool {
 func (s *Service) processImageTaskInSingleImageBatchesV2(taskID uint64, userID uint64, input imageTaskGenerationInput) {
 	requestedCount := normalizeImageCount(input.Count)
 	referenceCtx, referenceCancel := context.WithTimeout(context.Background(), s.cfg.ImageStorageTimeout)
-	referenceImage := s.referenceImageForProvider(referenceCtx, input.ReferenceImageURL)
+	referenceImages := s.referenceImagesForProvider(referenceCtx, input.ReferenceImageURLs)
 	referenceCancel()
 
 	aggregate := provider.GenerateResult{
@@ -1893,14 +1973,15 @@ func (s *Service) processImageTaskInSingleImageBatchesV2(taskID uint64, userID u
 		imageStartedAt := time.Now()
 		submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 		submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
-			Prompt:            input.Prompt,
-			Size:              input.Size,
-			Style:             input.Style,
-			Count:             1,
-			Quality:           input.Quality,
-			OutputFormat:      input.OutputFormat,
-			ReferenceImageURL: input.ReferenceImageURL,
-			ReferenceImage:    referenceImage,
+			Prompt:             input.Prompt,
+			Size:               input.Size,
+			Style:              input.Style,
+			Count:              1,
+			Quality:            input.Quality,
+			OutputFormat:       input.OutputFormat,
+			ReferenceImageURL:  input.ReferenceImageURL,
+			ReferenceImageURLs: input.ReferenceImageURLs,
+			ReferenceImages:    referenceImages,
 		})
 		submitCancel()
 		currentProviderTaskID := strings.TrimSpace(submitted.ProviderTaskID)
@@ -2039,14 +2120,15 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	imageStartedAt := time.Now()
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 	submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
-		Prompt:            input.Prompt,
-		Size:              input.Size,
-		Style:             input.Style,
-		Count:             input.Count,
-		Quality:           input.Quality,
-		OutputFormat:      input.OutputFormat,
-		ReferenceImageURL: input.ReferenceImageURL,
-		ReferenceImage:    s.referenceImageForProvider(submitCtx, input.ReferenceImageURL),
+		Prompt:             input.Prompt,
+		Size:               input.Size,
+		Style:              input.Style,
+		Count:              input.Count,
+		Quality:            input.Quality,
+		OutputFormat:       input.OutputFormat,
+		ReferenceImageURL:  input.ReferenceImageURL,
+		ReferenceImageURLs: input.ReferenceImageURLs,
+		ReferenceImages:    s.referenceImagesForProvider(submitCtx, input.ReferenceImageURLs),
 	})
 	submitCancel()
 

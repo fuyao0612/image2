@@ -236,6 +236,7 @@ export interface CreateImageTaskRequest {
   quality?: string
   outputFormat?: string
   referenceImageUrl?: string
+  referenceImageUrls?: string[]
   emailNotifyOnComplete?: boolean
 }
 
@@ -621,7 +622,20 @@ export interface AdminListActionLogsResponse {
 }
 
 export interface DataCleanupRequest {
-  mode: 'date' | 'days_ago'
+  type:
+    | 'failed_image_tasks'
+    | 'generated_images'
+    | 'user_reference_images'
+    | 'temporary_keys'
+    | 'action_logs'
+    | 'email_failure_notifications'
+    | 'successful_image_tasks'
+    | 'balance_logs'
+    | 'user_activity'
+    | 'announcement_reads'
+    | 'rejected_prompt_plaza'
+  mode?: 'retention' | 'date' | 'days_ago'
+  keepDays?: number
   startDate?: string
   endDate?: string
   daysAgo?: number
@@ -635,8 +649,11 @@ export interface DataCleanupTableStat {
 }
 
 export interface DataCleanupResponse {
-  mode: 'date' | 'days_ago'
+  mode: 'retention' | 'date' | 'days_ago'
+  type: DataCleanupRequest['type']
+  typeLabel: string
   targetDate: string
+  keepDays: number
   startedAt: string
   finishedAt?: string | null
   dryRun: boolean

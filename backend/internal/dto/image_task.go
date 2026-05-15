@@ -4,14 +4,15 @@ import "time"
 
 // CreateImageTaskRequest 是创建生图任务的请求体。
 type CreateImageTaskRequest struct {
-	Prompt                string `json:"prompt" binding:"required,min=1,max=2000"`
-	Size                  string `json:"size,omitempty" binding:"omitempty,max=32"`
-	Style                 string `json:"style,omitempty" binding:"omitempty,max=64"`
-	Count                 int    `json:"count,omitempty" binding:"omitempty,min=1,max=6"`
-	Quality               string `json:"quality,omitempty" binding:"omitempty,oneof=auto low medium high"`
-	OutputFormat          string `json:"outputFormat,omitempty" binding:"omitempty,oneof=default jpeg webp png"`
-	ReferenceImageURL     string `json:"referenceImageUrl,omitempty" binding:"omitempty,max=1024"`
-	EmailNotifyOnComplete bool   `json:"emailNotifyOnComplete,omitempty"`
+	Prompt                string   `json:"prompt" binding:"required,min=1,max=2000"`
+	Size                  string   `json:"size,omitempty" binding:"omitempty,max=32"`
+	Style                 string   `json:"style,omitempty" binding:"omitempty,max=64"`
+	Count                 int      `json:"count,omitempty" binding:"omitempty,min=1,max=6"`
+	Quality               string   `json:"quality,omitempty" binding:"omitempty,oneof=auto low medium high"`
+	OutputFormat          string   `json:"outputFormat,omitempty" binding:"omitempty,oneof=default jpeg webp png"`
+	ReferenceImageURL     string   `json:"referenceImageUrl,omitempty" binding:"omitempty,max=1024"`
+	ReferenceImageURLs    []string `json:"referenceImageUrls,omitempty" binding:"omitempty,max=12,dive,max=1024"`
+	EmailNotifyOnComplete bool     `json:"emailNotifyOnComplete,omitempty"`
 }
 
 // CreateImageTaskResponse 是提交任务后的简化返回体。

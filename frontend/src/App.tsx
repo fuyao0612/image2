@@ -107,6 +107,12 @@ type BusyAction =
 
 type ReferenceImageSource = 'none' | 'local' | 'network'
 
+interface ReferenceImageItem {
+  url: string
+  name: string
+  source: Exclude<ReferenceImageSource, 'none'>
+}
+
 type GenerationStatus = 'idle' | 'running' | 'success' | 'failed'
 
 const REGISTRATION_ENABLED = String(import.meta.env.VITE_REGISTRATION_ENABLED ?? 'true').toLowerCase() !== 'false'
@@ -144,6 +150,8 @@ interface TaskRequestSnapshot {
   quality?: string
   outputFormat?: string
   referenceImageUrl?: string
+  referenceImageUrls?: string[]
+  referenceImages?: ReferenceImageItem[]
   emailNotifyOnComplete?: boolean
 }
 
@@ -164,6 +172,9 @@ interface PromptGalleryItem {
 }
 
 type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
+
+const MAX_REFERENCE_IMAGES = 12
+const FREE_REFERENCE_IMAGE_COUNT = 3
 
 interface PasswordChangeForm {
   currentPassword: string
@@ -414,6 +425,8 @@ function App() {
   const [referenceImageURL, setReferenceImageURL] = useState('')
   const [referenceImageName, setReferenceImageName] = useState('')
   const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
+  const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
+  const [referenceImagesDialogOpen, setReferenceImagesDialogOpen] = useState(false)
   const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
   const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
   const [showRegisterPassword, setShowRegisterPassword] = useState(false)
@@ -1541,7 +1554,9 @@ function App() {
       count: taskCount,
       quality,
       outputFormat,
-      referenceImageUrl: referenceImageURL.trim() || undefined,
+      referenceImageUrl: referenceImages[0]?.url || referenceImageURL.trim() || undefined,
+      referenceImageUrls: referenceImages.map((item) => item.url).filter(Boolean),
+      referenceImages,
       emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
     } satisfies TaskRequestSnapshot
     const startedAt = Date.now()
@@ -1864,11 +1879,13 @@ function App() {
       }
     }
 
-    const referenceImageUrl = parsed?.referenceImageUrl?.trim() || ''
-    setReferenceImageURL(referenceImageUrl)
-    setReferenceImageName('')
-    setReferenceImageSource(referenceImageUrl ? 'network' : 'none')
-    setShowNetworkImageInput(Boolean(referenceImageUrl))
+    const parsedReferenceImages = normalizeReferenceImagesFromSnapshot(parsed)
+    const firstReferenceImage = parsedReferenceImages[0]
+    setReferenceImages(parsedReferenceImages)
+    setReferenceImageURL(firstReferenceImage?.url || '')
+    setReferenceImageName(firstReferenceImage?.name || '')
+    setReferenceImageSource(firstReferenceImage?.source || 'none')
+    setShowNetworkImageInput(false)
     setActivePage('home')
     setSidebarOpen(false)
     setPreviewDetailOpen(false)
@@ -2023,6 +2040,8 @@ function App() {
     setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
+    setReferenceImages([])
+    setReferenceImagesDialogOpen(false)
     setShowNetworkImageInput(false)
     setPreviewDetailOpen(false)
     setChangePasswordForm({
@@ -2182,9 +2201,19 @@ function App() {
     try {
       setReferenceImageUploading(true)
       setBusy('upload-reference')
+      if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
+        setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+        return
+      }
       const result: UploadImageResponse = await api.uploadReferenceImage(file)
-      setReferenceImageURL(result.imageUrl)
-      setReferenceImageName(result.fileName || file.name)
+      const nextImage: ReferenceImageItem = {
+        url: result.imageUrl,
+        name: result.fileName || file.name,
+        source: 'local',
+      }
+      setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
+      setReferenceImageURL(nextImage.url)
+      setReferenceImageName(nextImage.name)
       setReferenceImageSource('local')
       setShowNetworkImageInput(false)
     } catch (error) {
@@ -2196,9 +2225,14 @@ function App() {
   }
 
   async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
+    const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    await uploadLocalReferenceImage(file)
+    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
+      await uploadLocalReferenceImage(file)
+    }
+    if (files.length > MAX_REFERENCE_IMAGES - referenceImages.length) {
+      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+    }
   }
 
   function handlePromptDrag(event: DragEvent<HTMLTextAreaElement>) {
@@ -2220,21 +2254,25 @@ function App() {
   async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
     event.preventDefault()
     setPromptDragActive(false)
-    const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith('image/'))
-    if (!file) {
+    const files = Array.from(event.dataTransfer.files).filter((item) => item.type.startsWith('image/'))
+    if (!files.length) {
       setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
       return
     }
-    await uploadLocalReferenceImage(file)
+    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
+      await uploadLocalReferenceImage(file)
+    }
   }
 
   async function handlePromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith('image/'))
-    if (!file) {
+    const files = Array.from(event.clipboardData.files).filter((item) => item.type.startsWith('image/'))
+    if (!files.length) {
       return
     }
     event.preventDefault()
-    await uploadLocalReferenceImage(file)
+    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
+      await uploadLocalReferenceImage(file)
+    }
   }
 
   function handleNetworkReferenceImageInput(value: string) {
@@ -2242,14 +2280,52 @@ function App() {
     setReferenceImageSource(value.trim() ? 'network' : 'none')
   }
 
+  function handleAddNetworkReferenceImage() {
+    const trimmed = referenceImageURL.trim()
+    if (!trimmed) {
+      setMessage('请输入网络图片链接。')
+      return
+    }
+    if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
+      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+      return
+    }
+    const nextImage: ReferenceImageItem = {
+      url: trimmed,
+      name: getReferenceImageNameFromURL(trimmed) || '网络图片',
+      source: 'network',
+    }
+    setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
+    setReferenceImageName(nextImage.name)
+    setReferenceImageSource('network')
+    setReferenceImageURL('')
+    setShowNetworkImageInput(false)
+  }
+
   function handleClearReferenceImage() {
     setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
+    setReferenceImages([])
+    setReferenceImagesDialogOpen(false)
     setShowNetworkImageInput(false)
     if (referenceImageInputRef.current) {
       referenceImageInputRef.current.value = ''
     }
+  }
+
+  function handleDeleteReferenceImage(index: number) {
+    setReferenceImages((current) => {
+      const next = syncPrimaryReferenceImage(current.filter((_, itemIndex) => itemIndex !== index))
+      const first = next[0]
+      setReferenceImageURL(first?.url || '')
+      setReferenceImageName(first?.name || '')
+      setReferenceImageSource(first?.source || 'none')
+      if (!next.length) {
+        setReferenceImagesDialogOpen(false)
+      }
+      return next
+    })
   }
 
   function handleClearPromptOptions() {
@@ -2772,7 +2848,7 @@ function App() {
                           ? 'border-violet-400 bg-violet-950/40 ring-2 ring-violet-400/40'
                           : 'border-slate-700 bg-slate-900'
                       }`}
-                      placeholder="请输入提示词，或将本地图片拖入 / 粘贴到此框中"
+                      placeholder={`请输入提示词，或将本地图片拖入 / 粘贴到此框中\n参考图规则：可免费使用 ${FREE_REFERENCE_IMAGE_COUNT} 张参考图，后续每多 1 张额外消耗 1 积分，最多可添加 ${MAX_REFERENCE_IMAGES} 张。`}
                     />
 
                     <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2803,6 +2879,7 @@ function App() {
                       ref={referenceImageInputRef}
                       type="file"
                       accept="image/jpeg,image/png,image/webp,image/gif"
+                      multiple
                       className="hidden"
                       onChange={handleLocalReferenceImageChange}
                     />
@@ -2810,49 +2887,46 @@ function App() {
                     {showNetworkImageInput ? (
                       <label className="mt-3 block">
                         <span className="mb-2 block text-sm text-slate-400">网络图片链接</span>
-                        <input
-                          value={referenceImageURL}
-                          onChange={(event) => handleNetworkReferenceImageInput(event.target.value)}
-                          className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                          placeholder="请输入图片链接"
-                        />
+                        <div className="flex overflow-hidden rounded-md border border-slate-700 bg-slate-900 focus-within:border-violet-400">
+                          <input
+                            value={referenceImageURL}
+                            onChange={(event) => handleNetworkReferenceImageInput(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                handleAddNetworkReferenceImage()
+                              }
+                            }}
+                            className="h-11 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                            placeholder="请输入公网图片链接"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddNetworkReferenceImage}
+                            className="h-11 shrink-0 border-l border-slate-700 px-4 text-sm font-medium text-violet-200 transition hover:bg-violet-500/10 hover:text-violet-100"
+                          >
+                            确定
+                          </button>
+                        </div>
                       </label>
                     ) : null}
 
-                    <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3">
-                      {referenceImageURL.trim() ? (
-                        <div className="flex items-start gap-3">
-                          <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-slate-800 bg-slate-900">
-                            <img
-                              src={referenceImageURL}
-                              alt={referenceImageName || '参考图片'}
-                              className="h-full w-full object-cover"
-                            />
+                    <div className="mt-3 space-y-2">
+                      {referenceImages.length ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setReferenceImagesDialogOpen(true)}
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm font-medium text-slate-100 transition hover:border-violet-400 hover:bg-slate-800"
+                          >
+                            查看已添加的 {referenceImages.length} 张图片（最多 {MAX_REFERENCE_IMAGES} 张）
+                          </button>
+                          <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-500">
+                            参考图额外消耗 {getReferenceImageExtraPointCost(referenceImages.length)} 积分
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate text-sm text-slate-100">
-                                  {referenceImageSource === 'local'
-                                    ? referenceImageName || '本地图片'
-                                    : '网络图片'}
-                                </div>
-                                <div className="mt-1 break-all text-xs text-slate-500">
-                                  {referenceImageURL.trim()}
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={handleClearReferenceImage}
-                                className="inline-flex h-8 items-center justify-center rounded-md border border-slate-700 bg-slate-900 px-2 text-xs text-slate-300 transition hover:border-rose-400 hover:text-rose-200"
-                              >
-                                清除
-                              </button>
-                            </div>
-                          </div>
-                        </div>
+                        </>
                       ) : (
-                        <div className="text-sm text-slate-500">未添加参考图片。</div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-500">未添加参考图片。</div>
                       )}
                     </div>
 
@@ -3170,6 +3244,14 @@ function App() {
         />
       ) : null}
 
+      {referenceImagesDialogOpen ? (
+        <ReferenceImagesDialog
+          images={referenceImages}
+          onDelete={handleDeleteReferenceImage}
+          onClose={() => setReferenceImagesDialogOpen(false)}
+        />
+      ) : null}
+
       {announcementDialogOpen ? (
         <AnnouncementDialog
           items={announcements}
@@ -3481,6 +3563,62 @@ function RechargeConfirmDialog({
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
             {confirmLabel}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReferenceImagesDialog({
+  images,
+  onDelete,
+  onClose,
+}: {
+  images: ReferenceImageItem[]
+  onDelete: (index: number) => void
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭参考图列表" onClick={onClose} />
+      <div className="relative flex max-h-[82vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">已添加的参考图片</h2>
+            <p className="mt-1 text-xs text-slate-500">共 {images.length} 张，超过 {FREE_REFERENCE_IMAGE_COUNT} 张后每张额外 1 积分。</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-violet-300 hover:text-violet-600"
+            aria-label="关闭"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 overflow-y-auto p-3">
+          {images.map((image, index) => (
+            <div key={`${image.url}-${index}`} className="flex items-center gap-3 rounded-2xl bg-white p-3 shadow-sm">
+              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
+                <img src={image.url} alt={image.name || `参考图 ${index + 1}`} className="h-full w-full object-cover" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-slate-900" title={image.name}>
+                  {image.name || `参考图 ${index + 1}`}
+                </div>
+                <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-slate-500" title={image.url}>
+                  {image.url}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onDelete(index)}
+                className="shrink-0 rounded-xl px-2 py-1 text-sm text-slate-700 transition hover:bg-rose-50 hover:text-rose-600"
+              >
+                删除
+              </button>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -5957,6 +6095,58 @@ function parseTaskRequestParams(raw?: string): TaskRequestSnapshot | null {
   }
 }
 
+function syncPrimaryReferenceImage(images: ReferenceImageItem[]): ReferenceImageItem[] {
+  return images
+    .map((image) => ({
+      ...image,
+      url: image.url.trim(),
+      name: image.name.trim(),
+    }))
+    .filter((image) => image.url)
+    .slice(0, MAX_REFERENCE_IMAGES)
+}
+
+function getReferenceImageExtraPointCost(count: number): number {
+  return Math.max(0, count - FREE_REFERENCE_IMAGE_COUNT)
+}
+
+function getReferenceImageNameFromURL(rawURL: string): string {
+  try {
+    const parsed = new URL(rawURL, window.location.origin)
+    const fileName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '')
+    return fileName || ''
+  } catch {
+    return rawURL.split('/').filter(Boolean).pop() || ''
+  }
+}
+
+function normalizeReferenceImagesFromSnapshot(snapshot: TaskRequestSnapshot | null): ReferenceImageItem[] {
+  if (!snapshot) {
+    return []
+  }
+  if (Array.isArray(snapshot.referenceImages) && snapshot.referenceImages.length) {
+    return syncPrimaryReferenceImage(
+      snapshot.referenceImages.map((image) => ({
+        url: image.url,
+        name: image.name || getReferenceImageNameFromURL(image.url) || '参考图片',
+        source: image.source === 'local' ? 'local' : 'network',
+      })),
+    )
+  }
+  const urls = Array.isArray(snapshot.referenceImageUrls) && snapshot.referenceImageUrls.length
+    ? snapshot.referenceImageUrls
+    : snapshot.referenceImageUrl
+      ? [snapshot.referenceImageUrl]
+      : []
+  return syncPrimaryReferenceImage(
+    urls.map((url) => ({
+      url,
+      name: getReferenceImageNameFromURL(url) || '参考图片',
+      source: 'network',
+    })),
+  )
+}
+
 function parsePreviewSizeState(size?: string): { size: string; customWidth?: number; customHeight?: number } | null {
   const trimmed = size?.trim()
   if (!trimmed) {
@@ -5985,6 +6175,7 @@ function parsePreviewSizeState(size?: string): { size: string; customWidth?: num
 function buildPreviewRequestOptions(preview: ImageTaskDetailResponse): Array<{ label: string; value: string; wide?: boolean }> {
   const parsed = parseTaskRequestParams(preview.requestParams)
   const count = Number(parsed?.count ?? preview.requestedCount ?? preview.costCredits ?? preview.costPoints ?? 0)
+  const referenceImages = normalizeReferenceImagesFromSnapshot(parsed)
 
   return [
     {
@@ -6014,7 +6205,7 @@ function buildPreviewRequestOptions(preview: ImageTaskDetailResponse): Array<{ l
     },
     {
       label: '参考图片',
-      value: parsed?.referenceImageUrl || '未使用',
+      value: referenceImages.length ? `${referenceImages.length} 张` : '未使用',
       wide: true,
     },
   ]

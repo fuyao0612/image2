@@ -55,6 +55,7 @@ func TestAdminPreviewDataCleanupCountsOnlyTargetRange(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := fixture.svc.AdminPreviewDataCleanup(ctx, fixture.admin.ID, dto.DataCleanupRequest{
+		Type:      "successful_image_tasks",
 		Mode:      "date",
 		StartDate: fixture.rangeStartDate.Format("2006-01-02"),
 		EndDate:   fixture.rangeMiddleDate.Format("2006-01-02"),
@@ -69,19 +70,15 @@ func TestAdminPreviewDataCleanupCountsOnlyTargetRange(t *testing.T) {
 	if resp.TargetDate != "2026-05-06 ~ 2026-05-07" {
 		t.Fatalf("unexpected target date: %s", resp.TargetDate)
 	}
-	if resp.RecordsRemoved != 10 {
-		t.Fatalf("expected 10 records removed, got %d", resp.RecordsRemoved)
+	if resp.RecordsRemoved != 2 {
+		t.Fatalf("expected 2 records removed, got %d", resp.RecordsRemoved)
 	}
-	if resp.FilesRemoved != 6 {
-		t.Fatalf("expected 6 files removed, got %d", resp.FilesRemoved)
+	if resp.FilesRemoved != 4 {
+		t.Fatalf("expected 4 files removed, got %d", resp.FilesRemoved)
 	}
 
 	expected := map[string]int64{
-		"image_tasks":        2,
-		"points_logs":        2,
-		"credit_logs":        2,
-		"content_audit_logs": 2,
-		"announcement_reads": 2,
+		"image_tasks": 2,
 	}
 	if len(resp.TableStats) != len(expected) {
 		t.Fatalf("expected %d table stats, got %d", len(expected), len(resp.TableStats))
@@ -100,6 +97,7 @@ func TestAdminExecuteDataCleanupDeletesTargetRangeRowsAndFiles(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := fixture.svc.AdminExecuteDataCleanup(ctx, fixture.admin.ID, dto.DataCleanupRequest{
+		Type:      "successful_image_tasks",
 		Mode:      "date",
 		StartDate: fixture.rangeStartDate.Format("2006-01-02"),
 		EndDate:   fixture.rangeMiddleDate.Format("2006-01-02"),
@@ -116,13 +114,13 @@ func TestAdminExecuteDataCleanupDeletesTargetRangeRowsAndFiles(t *testing.T) {
 	}
 
 	assertModelCount(t, fixture.db, &model.ImageTask{}, 1)
-	assertModelCount(t, fixture.db, &model.PointsLog{}, 1)
-	assertModelCount(t, fixture.db, &model.CreditLog{}, 1)
-	assertModelCount(t, fixture.db, &model.ContentAuditLog{}, 1)
-	assertModelCount(t, fixture.db, &model.AnnouncementRead{}, 1)
+	assertModelCount(t, fixture.db, &model.PointsLog{}, 3)
+	assertModelCount(t, fixture.db, &model.CreditLog{}, 3)
+	assertModelCount(t, fixture.db, &model.ContentAuditLog{}, 3)
+	assertModelCount(t, fixture.db, &model.AnnouncementRead{}, 3)
 
 	assertFileMissing(t, fixture.targetImagePath)
-	assertFileMissing(t, fixture.targetRefPath)
+	assertFileExists(t, fixture.targetRefPath)
 	assertFileExists(t, fixture.outsideImagePath)
 
 	var actionLogs int64

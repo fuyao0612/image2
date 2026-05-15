@@ -1797,7 +1797,7 @@ func TestCreateImageTaskRejectsExternalReferenceImageURL(t *testing.T) {
 	}
 }
 
-func TestNormalizeReferenceImageURLAllowsOwnUploadsOnly(t *testing.T) {
+func TestNormalizeReferenceImageURLAllowsSiteAndPublicImages(t *testing.T) {
 	svc, _ := newTestService(t)
 	svc.cfg.BackendPublicURL = "https://example.com"
 	svc.cfg.ImageStoragePublicPath = "/uploads"
@@ -1826,8 +1826,12 @@ func TestNormalizeReferenceImageURLAllowsOwnUploadsOnly(t *testing.T) {
 		t.Fatalf("unexpected normalized shared reference url: %s", normalized)
 	}
 
-	if _, err := svc.normalizeReferenceImageURL(1, "https://example.com/api/v1/admin/stats"); !errors.Is(err, ErrInvalidReferenceImageURL) {
-		t.Fatalf("expected own non-upload path to be rejected, got %v", err)
+	normalized, err = svc.normalizeReferenceImageURL(1, "https://example.com/api/v1/admin/stats")
+	if err != nil {
+		t.Fatalf("expected same-site url to pass, got %v", err)
+	}
+	if normalized != "https://example.com/api/v1/admin/stats" {
+		t.Fatalf("unexpected normalized same-site url: %s", normalized)
 	}
 }
 

@@ -80,7 +80,7 @@ export function AdminConsole({ currentUser, onBackToApp, onLogout }: { currentUs
   const [userKeyword, setUserKeyword] = useState('')
   const [userStatus, setUserStatus] = useState('')
   const [userPage, setUserPage] = useState(1)
-  const [cleanupForm, setCleanupForm] = useState<DataCleanupRequest>({ mode: 'days_ago', daysAgo: 30 })
+  const [cleanupForm, setCleanupForm] = useState<DataCleanupRequest>({ type: 'failed_image_tasks', mode: 'retention', keepDays: 30 })
   const [cleanupResult, setCleanupResult] = useState<DataCleanupResponse | null>(null)
   const [logs, setLogs] = useState<AdminListActionLogsResponse | null>(null)
   const [logTargetType, setLogTargetType] = useState('')
@@ -193,7 +193,48 @@ function UsersPage(p: { data: AdminListUsersResponse | null; keyword: string; st
 }
 
 function Cleanup(p: { form: DataCleanupRequest; setForm: (v: DataCleanupRequest) => void; result: DataCleanupResponse | null; preview: () => void; execute: () => void; busy: Busy }) {
-  return <Panel title="数据清理" desc="危险操作，请先预览再执行。系统会保留仍在使用的资源。"><div className="grid gap-4 md:grid-cols-3"><label className="field-label">清理模式<Select value={p.form.mode} onChange={v => p.setForm({ ...p.form, mode: v as DataCleanupRequest['mode'] })} options={[["days_ago","按天数"],["date","按日期"]]} /></label>{p.form.mode === 'days_ago' ? <NumberField label="清理多少天前" value={p.form.daysAgo ?? 30} onChange={daysAgo => p.setForm({ ...p.form, daysAgo })} /> : <><LabeledInput label="开始日期" type="date" value={p.form.startDate ?? ''} onChange={startDate => p.setForm({ ...p.form, startDate })} /><LabeledInput label="结束日期" type="date" value={p.form.endDate ?? ''} onChange={endDate => p.setForm({ ...p.form, endDate })} /></>}</div><div className="mt-4 flex gap-2"><Button onClick={p.preview} loading={p.busy === 'cleanup-preview'}>预览</Button><Button danger onClick={p.execute} loading={p.busy === 'cleanup-execute'}>执行清理</Button></div>{p.result ? <div className="mt-5 rounded-3xl bg-slate-50 p-4"><div className="mb-3 font-semibold">{p.result.dryRun ? '预览结果' : '执行结果'}：记录 {p.result.recordsRemoved}，文件 {p.result.filesRemoved}，大小 {formatBytes(p.result.bytesRemoved)}</div><ResponsiveTable headers={['表名','数量','说明']} rows={p.result.tableStats.map(s => [s.table, s.count, s.note || '-'])} empty="暂无清理项" /></div> : null}</Panel>
+  const typeOptions: Array<[DataCleanupRequest['type'], string]> = [
+    ['failed_image_tasks', '失败生图任务记录'],
+    ['generated_images', '生成图原图和缩略图'],
+    ['user_reference_images', '用户上传参考图和缩略图'],
+    ['temporary_keys', '过期验证码 / Redis Key'],
+    ['action_logs', '操作日志'],
+    ['email_failure_notifications', '邮件失败通知记录'],
+    ['successful_image_tasks', '成功生图任务记录'],
+    ['balance_logs', '用户积分 / 福利次数流水'],
+    ['user_activity', '用户活动记录'],
+    ['announcement_reads', '公告已读记录'],
+    ['rejected_prompt_plaza', '提示词广场被拒绝记录'],
+  ]
+  const keepDays = p.form.keepDays ?? 30
+  return <Panel title="数据清理" desc="危险操作，请先预览空间和记录数量，再执行清理。生成图清理只处理任务生成图和缩略图，不会删除用户参考图。">
+    <div className="grid gap-4 md:grid-cols-2">
+      <label className="field-label">清理类型<Select value={p.form.type} onChange={v => p.setForm({ ...p.form, type: v as DataCleanupRequest['type'] })} options={typeOptions} /></label>
+      <NumberField label="保留最近多少天内记录" value={keepDays} onChange={keepDays => p.setForm({ ...p.form, mode: 'retention', keepDays: Math.max(0, Math.trunc(keepDays)) })} />
+    </div>
+    <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+      将清理 <b>{cleanupTypeLabel(p.form.type)}</b> 中早于保留天数的数据；Redis 临时 Key 没有业务创建时间，会清理当前残留的验证码、邮箱验证码和限流 Key。
+    </div>
+    <div className="mt-4 flex gap-2"><Button onClick={p.preview} loading={p.busy === 'cleanup-preview'}>空间预览</Button><Button danger onClick={p.execute} loading={p.busy === 'cleanup-execute'}>执行清理</Button></div>
+    {p.result ? <div className="mt-5 rounded-3xl bg-slate-50 p-4"><div className="mb-3 font-semibold">{p.result.dryRun ? '预览结果' : '执行结果'}：{p.result.typeLabel || cleanupTypeLabel(p.result.type)}，记录 {p.result.recordsRemoved}，文件 {p.result.filesRemoved}，预计释放 {formatBytes(p.result.bytesRemoved)}</div><ResponsiveTable headers={['清理对象','数量','空间','说明']} rows={p.result.tableStats.map(s => [s.table, s.count, formatBytes(s.bytes ?? 0), s.note || '-'])} empty="暂无清理项" /></div> : null}
+  </Panel>
+}
+
+function cleanupTypeLabel(type: DataCleanupRequest['type']) {
+  const labels: Record<DataCleanupRequest['type'], string> = {
+    failed_image_tasks: '失败生图任务记录',
+    generated_images: '生成图原图和缩略图',
+    user_reference_images: '用户上传参考图和缩略图',
+    temporary_keys: '过期验证码 / Redis Key',
+    action_logs: '操作日志',
+    email_failure_notifications: '邮件失败通知记录',
+    successful_image_tasks: '成功生图任务记录',
+    balance_logs: '用户积分 / 福利次数流水',
+    user_activity: '用户活动记录',
+    announcement_reads: '公告已读记录',
+    rejected_prompt_plaza: '提示词广场被拒绝记录',
+  }
+  return labels[type] || type
 }
 
 function Logs(p: { data: AdminListActionLogsResponse | null; targetType: string; targetId: string; setTargetType: (v: string) => void; setTargetId: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; open: (item: AdminActionLogItem) => void }) {

@@ -181,7 +181,9 @@ type AdminListActionLogsResponse struct {
 
 // DataCleanupRequest 描述管理员要清理的数据范围。
 type DataCleanupRequest struct {
-	Mode      string `json:"mode" binding:"required,oneof=date days_ago"`
+	Type      string `json:"type" binding:"required,oneof=failed_image_tasks generated_images user_reference_images temporary_keys action_logs email_failure_notifications successful_image_tasks balance_logs user_activity announcement_reads rejected_prompt_plaza"`
+	Mode      string `json:"mode,omitempty" binding:"omitempty,oneof=retention date days_ago"`
+	KeepDays  int    `json:"keepDays,omitempty" binding:"omitempty,min=0,max=3650"`
 	StartDate string `json:"startDate,omitempty"`
 	EndDate   string `json:"endDate,omitempty"`
 	DaysAgo   int    `json:"daysAgo,omitempty" binding:"omitempty,min=1,max=3650"`
@@ -198,7 +200,10 @@ type DataCleanupTableStat struct {
 // DataCleanupResponse 表示数据清理预览或执行结果。
 type DataCleanupResponse struct {
 	Mode           string                 `json:"mode"`
+	Type           string                 `json:"type"`
+	TypeLabel      string                 `json:"typeLabel"`
 	TargetDate     string                 `json:"targetDate"`
+	KeepDays       int                    `json:"keepDays"`
 	StartedAt      time.Time              `json:"startedAt"`
 	FinishedAt     *time.Time             `json:"finishedAt,omitempty"`
 	DryRun         bool                   `json:"dryRun"`

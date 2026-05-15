@@ -173,9 +173,13 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 		_ = s.recordContentAudit(ctx, userID, "image_task", "", "prompt", prompt, decision)
 		return dto.CreateImageTaskResponse{}, ErrContentRejected
 	}
-	referenceImageURL, err := s.normalizeReferenceImageURL(userID, strings.TrimSpace(req.ReferenceImageURL))
+	referenceImageURLs, err := s.normalizeReferenceImageURLs(userID, req.ReferenceImageURL, req.ReferenceImageURLs)
 	if err != nil {
 		return dto.CreateImageTaskResponse{}, err
+	}
+	referenceImageURL := ""
+	if len(referenceImageURLs) > 0 {
+		referenceImageURL = referenceImageURLs[0]
 	}
 	activeKeys, keyErr := s.ListActiveProviderKeys(ctx)
 	if keyErr != nil {
@@ -204,13 +208,14 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 	}
 
 	input := imageTaskGenerationInput{
-		Prompt:            prompt,
-		Size:              size,
-		Style:             style,
-		Count:             requestedCount,
-		Quality:           quality,
-		OutputFormat:      outputFormat,
-		ReferenceImageURL: referenceImageURL,
+		Prompt:             prompt,
+		Size:               size,
+		Style:              style,
+		Count:              requestedCount,
+		Quality:            quality,
+		OutputFormat:       outputFormat,
+		ReferenceImageURL:  referenceImageURL,
+		ReferenceImageURLs: referenceImageURLs,
 	}
 
 	var responseData dto.CreateImageTaskResponse
@@ -226,7 +231,11 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 
 		creditSpend := min64(user.FreeCredits+user.PaidCredits, int64(requestedCount))
 		remainingCount := int64(requestedCount) - creditSpend
-		pointSpend := remainingCount * imagePointCost
+		referenceExtraPointSpend := int64(0)
+		if len(referenceImageURLs) > 3 {
+			referenceExtraPointSpend = int64(len(referenceImageURLs) - 3)
+		}
+		pointSpend := remainingCount*imagePointCost + referenceExtraPointSpend
 		totalPointSpend := pointSpend + emailNotifyCost
 		beforePoints := user.PointsBalance
 		if beforePoints < totalPointSpend {
