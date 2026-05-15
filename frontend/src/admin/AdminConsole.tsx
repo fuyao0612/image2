@@ -125,7 +125,7 @@ export function AdminConsole({ currentUser, onBackToApp, onLogout }: { currentUs
 
   if (!currentUser || !isAdmin) return <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-slate-700"><TopNotice message={message} onDismiss={() => setMessage('')} /><div className="rounded-2xl bg-white p-5 shadow-sm">正在进入管理员后台...</div></div>
 
-  return <div className="admin-shell min-h-screen bg-gradient-to-br from-[#f7f8ff] via-white to-emerald-50 text-slate-900"><TopNotice message={message} onDismiss={() => setMessage('')} /><div className="admin-layout flex min-h-screen"><Sidebar active={activeTab} open={mobileNav} user={currentUser} pending={prompts?.pending ?? 0} onClose={() => setMobileNav(false)} onNav={(tab) => { setActiveTab(tab); setMobileNav(false) }} /><div className="admin-content min-w-0 flex-1"><header className="admin-header sticky top-0 z-30 border-b border-slate-100 bg-white/85 px-4 py-3 backdrop-blur"><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><button className="icon-btn lg:hidden" onClick={() => setMobileNav(true)}><Menu className="h-4 w-4" /></button><div><div className="text-sm text-slate-500">Administrator</div><h1 className="text-xl font-bold">{tabs.find(t => t.id === activeTab)?.label}</h1></div></div><div className="flex flex-wrap gap-2"><Button onClick={refresh} loading={busy === 'refresh'}><RefreshCcw className="h-4 w-4" />刷新</Button><Button onClick={toggleGeneration} loading={busy === 'toggle-generation'}>{billingForm.imageGenerationEnabled ? '关闭生图' : '开启生图'}</Button><Button onClick={onBackToApp}><ArrowLeft className="h-4 w-4" />用户端</Button><Button onClick={onLogout}><LogOut className="h-4 w-4" />退出</Button></div></div></header><main className="admin-main p-3 sm:p-5 lg:p-6">
+  return <div className="admin-shell min-h-screen bg-gradient-to-br from-[#f7f8ff] via-white to-emerald-50 text-slate-900"><TopNotice message={message} onDismiss={() => setMessage('')} /><div className="admin-layout flex min-h-screen"><Sidebar active={activeTab} open={mobileNav} user={currentUser} pending={prompts?.pending ?? 0} onClose={() => setMobileNav(false)} onNav={(tab) => { setActiveTab(tab); setMobileNav(false) }} /><div className="admin-content min-w-0 flex-1"><header className="admin-header sticky top-0 z-30 border-b border-slate-100 bg-white/85 px-4 py-3 backdrop-blur"><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><button className="icon-btn lg:hidden" onClick={() => setMobileNav(true)}><Menu className="h-4 w-4" /></button><div><div className="text-sm text-slate-500">Administrator</div><h1 className="text-xl font-bold">{tabs.find(t => t.id === activeTab)?.label}</h1></div></div><div className="admin-header-actions flex flex-wrap gap-2"><Button onClick={refresh} loading={busy === 'refresh'}><RefreshCcw className="h-4 w-4" /><span className="admin-btn-label">刷新</span></Button><Button onClick={toggleGeneration} loading={busy === 'toggle-generation'}><Sparkles className="h-4 w-4" /><span className="admin-btn-label">{billingForm.imageGenerationEnabled ? '关闭生图' : '开启生图'}</span></Button><Button onClick={onBackToApp}><ArrowLeft className="h-4 w-4" /><span className="admin-btn-label">用户端</span></Button><Button onClick={onLogout}><LogOut className="h-4 w-4" /><span className="admin-btn-label">退出</span></Button></div></div></header><main className="admin-main p-3 sm:p-5 lg:p-6">
     {activeTab === 'overview' && <Overview stats={stats} />}
     {activeTab === 'tasks' && <Tasks data={tasks} status={taskStatus} keyword={taskKeyword} setStatus={setTaskStatus} setKeyword={setTaskKeyword} search={() => loadTasks(1, taskStatus, taskKeyword)} page={taskPage} setPage={(p) => loadTasks(p, taskStatus, taskKeyword)} open={(item) => setModal({ type: 'task', item })} />}
     {activeTab === 'redeemCodes' && <Redeem data={redeem} status={redeemStatus} keyword={redeemKeyword} form={redeemForm} generated={generatedCodes} setStatus={setRedeemStatus} setKeyword={setRedeemKeyword} setForm={setRedeemForm} create={createRedeem} page={redeemPage} setPage={(p) => loadRedeem(p, redeemStatus, redeemKeyword)} search={() => loadRedeem(1, redeemStatus, redeemKeyword)} detail={(item) => setModal({ type: 'redeemCode', item })} del={(item) => askConfirm({ title: '删除兑换码', content: `确认删除兑换码 ${item.code}？`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeleteRedeemCode(item.id); setModal({ type: 'none' }); await loadRedeem(redeemPage) } })} />}
@@ -238,7 +238,7 @@ function cleanupTypeLabel(type: DataCleanupRequest['type']) {
 }
 
 function Logs(p: { data: AdminListActionLogsResponse | null; targetType: string; targetId: string; setTargetType: (v: string) => void; setTargetId: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; open: (item: AdminActionLogItem) => void }) {
-  return <Panel title="网站日志" desc="展示后台写入的全站操作日志，列表保留简略信息，详细变更请点详情查看。" actions={<div className="flex flex-wrap gap-2"><LabeledInput label="" value={p.targetType} onChange={p.setTargetType} placeholder="对象类型" /><LabeledInput label="" value={p.targetId} onChange={p.setTargetId} placeholder="对象编号" /><Button onClick={p.search}>搜索</Button></div>}><ResponsiveTable headers={['ID','操作人','操作内容','操作对象','简略信息','创建时间','详情']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.id}</Mono>, <span>管理员 #{item.adminId}</span>, logActionLabel(item.action), logTargetLabel(item), clip(item.remark, 56) || '-', date(item.createdAt), <Button small onClick={() => p.open(item)}>详情</Button>])} empty="暂无日志" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+  return <Panel title="网站日志" desc="展示全站用户行为和管理员操作，包括生图任务、积分流水、福利次数流水、后台操作等。" actions={<div className="flex flex-wrap gap-2"><LabeledInput label="" value={p.targetType} onChange={p.setTargetType} placeholder="对象类型，可空" /><LabeledInput label="" value={p.targetId} onChange={p.setTargetId} placeholder="对象编号，可空" /><Button onClick={p.search}>搜索</Button></div>}><ResponsiveTable headers={['ID','操作人','日志类型','操作内容','操作对象','简略信息','创建时间','详情']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.id}</Mono>, <span>{item.actorLabel || (item.userId ? `用户 #${item.userId}` : `管理员 #${item.adminId}`)}</span>, siteLogTypeLabel(item), item.title || logActionLabel(item.action), logTargetLabel(item), clip(item.description || item.remark, 64) || '-', date(item.createdAt), <Button small onClick={() => p.open(item)}>详情</Button>])} empty="暂无日志" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
 }
 
 function AllModals(props: { state: Modal; setState: (m: Modal) => void; busy: Busy; categories: ProductCategoryItem[]; onSavePrompt: (item: PromptPlazaItem | null, payload: AdminPromptPlazaPayload) => void; onReviewPrompt: (item: PromptPlazaItem, status: 'approved' | 'rejected', reason?: string) => void; onDeletePrompt: (item: PromptPlazaItem, reason?: string) => void; onSavePackage: (item: AdminPackageItem | null, payload: AdminPackagePayload) => void; onSaveProduct: (item: ProductItem | null, payload: AdminProductPayload) => void; onSaveCategory: (item: ProductCategoryItem | null, payload: AdminProductCategoryPayload) => void; onSaveProviderKey: (item: AdminProviderKeyItem | null, payload: AdminProviderKeyPayload) => void; onSaveAnnouncement: (item: AnnouncementItem | null, payload: AdminAnnouncementPayload) => void; onSavePoints: () => void; onOpenUserLogs: (user: AdminUserItem, page: number) => void }) {
@@ -259,7 +259,7 @@ function renderModal(s: Modal, p: Parameters<typeof AllModals>[0]): ReactNode {
   if (s.type === 'announcement') return <AnnouncementForm item={s.item} save={payload => p.onSaveAnnouncement(s.item, payload)} />
   if (s.type === 'points') return <PointsForm state={s} setState={p.setState} save={p.onSavePoints} />
   if (s.type === 'userLogs') return <UserLogs state={s} page={(page) => p.onOpenUserLogs(s.user, page)} />
-  if (s.type === 'log') return <Detail rows={[["日志ID", s.item.id], ["操作人", `管理员 #${s.item.adminId}`], ["操作内容", logActionLabel(s.item.action)], ["操作对象", logTargetLabel(s.item)], ["简略信息", s.item.remark], ["变更前", <PreText value={pretty(s.item.beforeJson)} />], ["变更后", <PreText value={pretty(s.item.afterJson)} />], ["时间", date(s.item.createdAt)]]} />
+  if (s.type === 'log') return <Detail rows={[["日志ID", s.item.id], ["操作人", s.item.actorLabel || (s.item.userId ? `用户 #${s.item.userId}` : `管理员 #${s.item.adminId}`)], ["日志类型", siteLogTypeLabel(s.item)], ["操作内容", s.item.title || logActionLabel(s.item.action)], ["操作对象", logTargetLabel(s.item)], ["简略信息", s.item.description || s.item.remark || '-'], ["状态", s.item.status ? statusText(s.item.status) : '-'], ["变更前", <PreText value={pretty(s.item.beforeJson)} />], ["详情", <PreText value={pretty(s.item.afterJson)} />], ["时间", date(s.item.createdAt)]]} />
   return null
 }
 
@@ -387,7 +387,18 @@ function logActionLabel(action: string): string {
   }
   return map[action] || action.replace(/\./g, ' / ')
 }
+function siteLogTypeLabel(item: AdminActionLogItem): string {
+  const type = item.recordType || item.targetType || ''
+  const map: Record<string, string> = {
+    admin_action: '后台操作',
+    points_log: '积分流水',
+    credit_log: '福利次数流水',
+    image_task: '生图任务',
+  }
+  return map[type] || type || '-'
+}
 function logTargetLabel(item: AdminActionLogItem): string {
+  if (!item.targetType && !item.targetId) return '-'
   const typeLabel: Record<string, string> = {
     product: '商品',
     product_category: '商品分类',
@@ -397,9 +408,14 @@ function logTargetLabel(item: AdminActionLogItem): string {
     announcement: '公告',
     provider_key: 'API Key',
     user: '用户',
+    image_task: '生图任务',
+    order: '订单',
+    redeem: '兑换',
+    checkin: '签到',
+    invite: '邀请',
   }
-  const label = typeLabel[item.targetType] || item.targetType
-  return `${label} #${item.targetId}`
+  const label = typeLabel[item.targetType] || item.targetType || '对象'
+  return item.targetId ? `${label} #${item.targetId}` : label
 }
 function paramSummary(raw?: string): string { if (!raw) return '-'; try { const p = JSON.parse(raw); return [p.size, p.count ? `${p.count}张` : '', p.quality, p.outputFormat].filter(Boolean).join(' / ') || '-' } catch { return '-' } }
 function taskNo(id: string): string { const s = String(id || '').trim(); const m = s.match(/\d+$/); return `#${m ? m[0] : clip(s, 10)}` }

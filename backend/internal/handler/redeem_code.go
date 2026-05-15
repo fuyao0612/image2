@@ -69,7 +69,7 @@ func (h *Handler) AdminListRedeemCodes(c *gin.Context) {
 func (h *Handler) AdminDeleteRedeemCode(c *gin.Context) {
 	adminID, ok := middleware.CurrentUserID(c)
 	if !ok {
-		response.Unauthorized(c, "璇峰厛鐧诲綍")
+		response.Unauthorized(c, "请先登录")
 		return
 	}
 

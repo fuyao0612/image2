@@ -57,7 +57,6 @@ type TaskNotification struct {
 	TaskID     string
 	Status     string
 	Message    string
-	Link       string
 	RefundNote string
 }
 
@@ -180,9 +179,12 @@ func (c *Client) SendTaskNotification(ctx context.Context, to string, subject st
 		"task_id":     strings.TrimSpace(data.TaskID),
 		"status":      strings.TrimSpace(data.Status),
 		"message":     textBody,
-		"link":        strings.TrimSpace(data.Link),
 		"refund_note": strings.TrimSpace(data.RefundNote),
 	})
+}
+
+func (c *Client) TaskNotificationConfigured() bool {
+	return c.tencentTaskConfigured()
 }
 
 type verificationEmail struct {
@@ -393,7 +395,6 @@ func buildTaskNotificationText(data TaskNotification) string {
 	taskID := strings.TrimSpace(data.TaskID)
 	status := strings.TrimSpace(data.Status)
 	message := strings.TrimSpace(data.Message)
-	link := strings.TrimSpace(data.Link)
 	refundNote := strings.TrimSpace(data.RefundNote)
 
 	b.WriteString("您好，这是一封来自 image2 平台的生图任务通知邮件，用于告知您在平台提交的图片生成任务处理结果。")
@@ -405,9 +406,6 @@ func buildTaskNotificationText(data TaskNotification) string {
 	}
 	if message != "" {
 		fmt.Fprintf(&b, "\n任务说明：%s", message)
-	}
-	if link != "" {
-		fmt.Fprintf(&b, "\n查看链接：%s", link)
 	}
 	if refundNote != "" {
 		fmt.Fprintf(&b, "\n%s", refundNote)

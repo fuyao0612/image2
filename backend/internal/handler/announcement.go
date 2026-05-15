@@ -95,12 +95,12 @@ func (h *Handler) AdminUpdateAnnouncement(c *gin.Context) {
 func (h *Handler) AdminUploadAnnouncementImage(c *gin.Context) {
 	adminID, ok := middleware.CurrentUserID(c)
 	if !ok {
-		response.Unauthorized(c, "璇峰厛鐧诲綍")
+		response.Unauthorized(c, "请先登录")
 		return
 	}
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		response.BadRequest(c, "璇烽€夋嫨瑕佷笂浼犵殑鍥剧墖")
+		response.BadRequest(c, "请选择要上传的图片")
 		return
 	}
 	var resp dto.UploadImageResponse

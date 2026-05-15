@@ -605,9 +605,15 @@ export interface AdminReviewContentAuditRequest {
 export interface AdminActionLogItem {
   id: string
   adminId: string
+  userId?: string
+  actorLabel?: string
   action: string
+  recordType?: string
   targetType: string
   targetId: string
+  title?: string
+  description?: string
+  status?: string
   beforeJson?: string
   afterJson?: string
   remark?: string

@@ -953,8 +953,9 @@ function App() {
       if (showBusy) {
         setBusy('refresh')
       }
+      const meResult = await api.getMe()
+      setCurrentUser(meResult)
       const [
-        meResult,
         pointsResult,
         historyResult,
         activityResult,
@@ -969,7 +970,6 @@ function App() {
         productCategoriesResult,
         settingsResult,
       ] = await Promise.all([
-        api.getMe(),
         api.getPoints(),
         api.listImageTasks(historyPage, HISTORY_PAGE_SIZE),
         api.listUserActivity(activityPage, ACTIVITY_PAGE_SIZE),
@@ -984,7 +984,6 @@ function App() {
         api.listProductCategories().catch(() => null),
         api.getBillingSettings().catch(() => null),
       ])
-      setCurrentUser(meResult)
       setPoints(pointsResult)
       setHistory(historyResult.items)
       setHistoryPage(historyResult.page)
@@ -1480,8 +1479,8 @@ function App() {
     }
     try {
       setBusy('copy-invite-link')
-      await navigator.clipboard.writeText(link)
-      setMessage('邀请链接已复制。')
+      const copied = await copyTextToClipboard(link)
+      setMessage(copied ? '邀请链接已复制。' : '复制失败，请手动选中邀请链接复制。')
     } catch {
       setMessage('复制失败，请手动选中邀请链接复制。')
     } finally {
@@ -3830,11 +3829,13 @@ function AppTopBar({
   onOpenAnnouncements: () => void
 }) {
   const [userMenuOpen, setUserMenuOpen] = useState(false)
-  const userMenuRef = useRef<HTMLDivElement | null>(null)
+  const desktopUserMenuRef = useRef<HTMLDivElement | null>(null)
+  const mobileUserMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
-      if (!userMenuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node
+      if (!desktopUserMenuRef.current?.contains(target) && !mobileUserMenuRef.current?.contains(target)) {
         setUserMenuOpen(false)
       }
     }
@@ -3843,56 +3844,10 @@ function AppTopBar({
     return () => window.removeEventListener('mousedown', handlePointerDown)
   }, [])
 
-  return (
-    <header className="app-shell__topbar sticky top-0 z-30 flex h-20 min-w-0 items-center overflow-visible border-b border-slate-800 bg-slate-950/95 px-2 backdrop-blur sm:px-4 lg:px-6">
-      <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-        <div className="flex min-w-0 items-center gap-2 pr-1">
-          <button
-            type="button"
-            onClick={onOpenSidebar}
-            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white ${
-              sidebarOpen ? 'hidden' : ''
-            }`}
-            title="打开侧边栏"
-          >
-            <Menu className="h-4 w-4" />
-          </button>
-          <nav className="flex flex-nowrap items-center gap-1 whitespace-nowrap text-sm font-medium sm:gap-2">
-            <button
-              type="button"
-              onClick={() => onNavigate(activePage === 'prompts' ? 'home' : 'prompts')}
-              className="rounded-md px-2.5 py-2 text-slate-400 transition hover:text-slate-100 sm:px-3"
-            >
-              {activePage === 'prompts' ? '首页' : '提示词广场'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('products')}
-              className={`rounded-md px-2.5 py-2 transition sm:px-3 ${activePage === 'products' ? 'text-slate-100' : 'text-slate-400 hover:text-slate-100'}`}
-            >
-              商品
-            </button>
-            <button
-              type="button"
-              onClick={onOpenAnnouncements}
-              className="relative inline-flex items-center gap-1 rounded-md px-2.5 py-2 text-slate-400 transition hover:text-slate-100 sm:px-3"
-              aria-label="查看公告"
-              title="查看公告"
-            >
-              <Megaphone className="h-4 w-4" />
-              公告
-              {unreadAnnouncementCount > 0 ? (
-                <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
-                  {unreadAnnouncementCount > 9 ? '9+' : unreadAnnouncementCount}
-                </span>
-              ) : null}
-            </button>
-          </nav>
-        </div>
-
-        <div className="flex min-w-0 shrink-0 items-center gap-1 text-sm sm:gap-2">
+  function renderUserMenu(ref: React.RefObject<HTMLDivElement>) {
+    return (
           <div
-            ref={userMenuRef}
+            ref={ref}
             className="relative"
           >
             <button
@@ -3974,7 +3929,92 @@ function AppTopBar({
               </div>
             ) : null}
           </div>
+    )
+  }
+
+  return (
+    <header className="app-shell__topbar sticky top-0 z-30 min-w-0 overflow-visible border-b border-slate-800 bg-slate-950/95 px-2 py-2 backdrop-blur sm:px-4 lg:flex lg:h-20 lg:items-center lg:px-6 lg:py-0">
+      <div className="hidden w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 lg:grid">
+        <div className="flex min-w-0 items-center gap-2 pr-1">
+          <button
+            type="button"
+            onClick={onOpenSidebar}
+            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white ${
+              sidebarOpen ? 'hidden' : ''
+            }`}
+            title="打开侧边栏"
+          >
+            <Menu className="h-4 w-4" />
+          </button>
+          <nav className="flex flex-nowrap items-center gap-2 whitespace-nowrap text-sm font-medium">
+            <button
+              type="button"
+              onClick={() => onNavigate(activePage === 'prompts' ? 'home' : 'prompts')}
+              className="rounded-md px-3 py-2 text-slate-400 transition hover:text-slate-100"
+            >
+              {activePage === 'prompts' ? '首页' : '提示词广场'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('products')}
+              className={`rounded-md px-3 py-2 transition ${activePage === 'products' ? 'text-slate-100' : 'text-slate-400 hover:text-slate-100'}`}
+            >
+              商品
+            </button>
+            <button
+              type="button"
+              onClick={onOpenAnnouncements}
+              className="relative inline-flex items-center gap-1 rounded-md px-3 py-2 text-slate-400 transition hover:text-slate-100"
+              aria-label="查看公告"
+              title="查看公告"
+            >
+              <Megaphone className="h-4 w-4" />
+              公告
+              {unreadAnnouncementCount > 0 ? (
+                <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                  {unreadAnnouncementCount > 9 ? '9+' : unreadAnnouncementCount}
+                </span>
+              ) : null}
+            </button>
+          </nav>
         </div>
+
+        <div className="flex min-w-0 shrink-0 items-center gap-2 text-sm">
+          {renderUserMenu(desktopUserMenuRef)}
+        </div>
+      </div>
+
+      <div className="app-mobile-topbar flex flex-col gap-1.5 lg:hidden">
+        <div className="flex h-9 items-center justify-end">
+          {renderUserMenu(mobileUserMenuRef)}
+        </div>
+        <nav className="grid grid-cols-5 gap-1">
+          <button type="button" onClick={onOpenSidebar} className="app-mobile-nav-btn" aria-label="展开导航">
+            <Menu className="h-4 w-4" />
+            <span>导航</span>
+          </button>
+          <button type="button" onClick={() => onNavigate('home')} className={`app-mobile-nav-btn ${activePage === 'home' ? 'is-active' : ''}`} aria-label="首页">
+            <Home className="h-4 w-4" />
+            <span>首页</span>
+          </button>
+          <button type="button" onClick={() => onNavigate('prompts')} className={`app-mobile-nav-btn ${activePage === 'prompts' ? 'is-active' : ''}`} aria-label="提示词广场">
+            <Sparkles className="h-4 w-4" />
+            <span>广场</span>
+          </button>
+          <button type="button" onClick={() => onNavigate('products')} className={`app-mobile-nav-btn ${activePage === 'products' ? 'is-active' : ''}`} aria-label="商品">
+            <ShoppingBag className="h-4 w-4" />
+            <span>商品</span>
+          </button>
+          <button type="button" onClick={onOpenAnnouncements} className="app-mobile-nav-btn relative" aria-label="公告">
+            <Megaphone className="h-4 w-4" />
+            <span>公告</span>
+            {unreadAnnouncementCount > 0 ? (
+              <span className="absolute right-2 top-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-semibold text-white">
+                {unreadAnnouncementCount > 9 ? '9+' : unreadAnnouncementCount}
+              </span>
+            ) : null}
+          </button>
+        </nav>
       </div>
     </header>
   )
@@ -5189,15 +5229,15 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   textarea.setAttribute('readonly', 'readonly')
   textarea.setAttribute('aria-hidden', 'true')
   textarea.style.position = 'fixed'
-  textarea.style.top = '0'
-  textarea.style.left = '0'
-  textarea.style.width = '1px'
-  textarea.style.height = '1px'
+  textarea.style.top = '-1000px'
+  textarea.style.left = '-1000px'
+  textarea.style.width = '2em'
+  textarea.style.height = '2em'
   textarea.style.padding = '0'
   textarea.style.border = '0'
-  textarea.style.opacity = '0'
+  textarea.style.opacity = '0.01'
   textarea.style.pointerEvents = 'none'
-  textarea.style.zIndex = '-1'
+  textarea.style.fontSize = '16px'
   document.body.appendChild(textarea)
 
   const selection = document.getSelection()

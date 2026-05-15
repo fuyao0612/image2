@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	ErrPromptPlazaInvalid  = errors.New("鎻愮ず璇嶅弬鏁颁笉鍚堟硶")
-	ErrPromptPlazaNotFound = errors.New("鎻愮ず璇嶄笉瀛樺湪")
+	ErrPromptPlazaInvalid  = errors.New("提示词参数不合法")
+	ErrPromptPlazaNotFound = errors.New("提示词不存在")
 )
 
 func (s *Service) ListPromptPlaza(ctx context.Context) (dto.ListPromptPlazaResponse, error) {

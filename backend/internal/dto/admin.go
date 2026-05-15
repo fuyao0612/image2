@@ -160,15 +160,21 @@ type AdminReviewContentAuditRequest struct {
 
 // AdminActionLogItem 是后台操作审计日志项。
 type AdminActionLogItem struct {
-	ID         string    `json:"id"`
-	AdminID    string    `json:"adminId"`
-	Action     string    `json:"action"`
-	TargetType string    `json:"targetType"`
-	TargetID   string    `json:"targetId"`
-	BeforeJSON string    `json:"beforeJson,omitempty"`
-	AfterJSON  string    `json:"afterJson,omitempty"`
-	Remark     string    `json:"remark,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID          string    `json:"id"`
+	AdminID     string    `json:"adminId"`
+	UserID      string    `json:"userId,omitempty"`
+	ActorLabel  string    `json:"actorLabel,omitempty"`
+	Action      string    `json:"action"`
+	RecordType  string    `json:"recordType,omitempty"`
+	TargetType  string    `json:"targetType"`
+	TargetID    string    `json:"targetId"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	BeforeJSON  string    `json:"beforeJson,omitempty"`
+	AfterJSON   string    `json:"afterJson,omitempty"`
+	Remark      string    `json:"remark,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // AdminListActionLogsResponse 是后台操作审计日志分页。

@@ -30,7 +30,7 @@ func (s *Service) notifyUserImageTaskFailureAsync(taskID uint64, userID uint64) 
 }
 
 func (s *Service) notifyUserImageTaskAsync(taskID uint64, userID uint64, success bool) {
-	if s == nil || s.mailer == nil || !s.mailer.Configured() {
+	if s == nil || s.mailer == nil || !s.mailer.TaskNotificationConfigured() {
 		return
 	}
 
@@ -101,35 +101,20 @@ func (s *Service) markImageTaskEmailNotifyFailed(ctx context.Context, taskID uin
 
 func (s *Service) buildUserImageTaskEmail(task model.ImageTask, success bool) (string, mailer.TaskNotification) {
 	taskID := strconv.FormatUint(task.ID, 10)
-	platformURL := strings.TrimRight(s.cfg.BackendPublicURL, "/")
-	if platformURL == "" {
-		platformURL = "http://111.230.17.35/app"
-	}
 
 	if success {
-		imageURLs := imageURLsFromTask(task)
-		link := platformURL
-		if len(imageURLs) > 0 {
-			link = strings.Join(imageURLs, "\n")
-		}
-
 		var b strings.Builder
 		fmt.Fprintf(&b, "任务已完成，完成时间：%s。", s.now().Format("2006-01-02 15:04:05"))
 		writePromptSummary(&b, task.Prompt)
-		if len(imageURLs) > 0 {
-			fmt.Fprintf(&b, " 本次生成结果链接共 %d 个，请打开链接或登录平台查看完整任务。", len(imageURLs))
-		} else {
-			b.WriteString(" 请登录平台查看完整任务。")
-		}
+		b.WriteString(" 本次任务已生成结果，请登录平台历史任务查看详情和生成图片。")
 		if note := strings.TrimSpace(task.ErrorMessage); note != "" {
-			fmt.Fprintf(&b, " 任务备注：%s", note)
+			fmt.Fprintf(&b, " 任务备注：%s。", note)
 		}
 
 		return "image2 生图任务已完成：" + taskID, mailer.TaskNotification{
 			TaskID:     taskID,
 			Status:     "生成成功",
 			Message:    b.String(),
-			Link:       link,
 			RefundNote: "",
 		}
 	}
@@ -150,11 +135,9 @@ func (s *Service) buildUserImageTaskEmail(task model.ImageTask, success bool) (s
 		TaskID:     taskID,
 		Status:     "生成失败",
 		Message:    b.String(),
-		Link:       platformURL,
 		RefundNote: refundNote,
 	}
 }
-
 func writePromptSummary(b *strings.Builder, prompt string) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {

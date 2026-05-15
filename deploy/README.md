@@ -61,15 +61,32 @@ IMAGE_STORAGE_LOCAL_DIR=/app/storage/uploads
 
 如后续切换对象存储，将 `IMAGE_STORAGE_DRIVER` 改为 `s3` 并补齐对应 S3/R2/MinIO/COS 配置。
 
-## 标准容器部署
+## 当前线上部署方式
 
-服务器资源充足时，可以在服务器执行：
+当前线上服务器使用轻量替换流程：本地测试、本地构建、本地打包、上传产物，然后用 `docker cp`
+替换运行中容器的文件。不要在服务器执行 `docker build`、`docker compose up --build`
+或会重建 MySQL/Redis/volume 的命令，也不要覆盖服务器上的 `deploy/.env.production`。
+
+本地需要准备的产物：
 
 ```powershell
-docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production up -d --build
+cd backend
+go test ./...
+$env:CGO_ENABLED='0'
+$env:GOOS='linux'
+$env:GOARCH='amd64'
+go build -o api ./cmd/api
+Remove-Item Env:CGO_ENABLED,Env:GOOS,Env:GOARCH
+
+cd ..\frontend
+npm.cmd run build
+
+cd ..
+tar -czf frontend-dist.tgz -C frontend\dist .
 ```
 
-如果服务器 CPU 较弱，不要在服务器 build。请在本地构建后上传产物，再替换容器内文件，具体以根目录 `部署.txt` 的轻量部署流程为准。
+上传后只替换 `deploy_backend_1:/app/api` 和 `deploy_web_1:/usr/share/nginx/html/`，
+MySQL、Redis、上传图片目录和 Docker volume 均保持不动。
 
 ## 常用检查
 

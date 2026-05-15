@@ -233,6 +233,50 @@ input[type="number"] {
   padding-right: clamp(12px, 3vw, 40px) !important;
 }
 
+.user-glass-shell .app-mobile-nav-btn {
+  display: inline-flex;
+  min-width: 0;
+  height: 42px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 14px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  transition: 0.15s ease;
+}
+
+.user-glass-shell .app-mobile-nav-btn svg {
+  color: #334155;
+}
+
+.user-glass-shell .app-mobile-nav-btn.is-active,
+.user-glass-shell .app-mobile-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--user-primary);
+  box-shadow: 0 8px 22px rgba(99, 102, 241, 0.09);
+}
+
+.user-glass-shell .app-mobile-nav-btn.is-active svg,
+.user-glass-shell .app-mobile-nav-btn:hover svg {
+  color: var(--user-primary);
+}
+
+@media (max-width: 1023px) {
+  .user-glass-shell .app-shell__topbar {
+    min-height: 88px;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+  }
+
+  .user-glass-shell .app-shell__main {
+    padding-top: 12px !important;
+  }
+}
+
 .user-glass-shell .app-shell__main {
   padding: clamp(18px, 3vw, 40px) !important;
 }
@@ -669,6 +713,58 @@ input[type="number"] {
   background: rgba(2, 6, 23, 0.78) !important;
   border-color: var(--user-line) !important;
   color: var(--user-text) !important;
+}
+
+.user-glass-shell[data-user-theme='dark'] .app-mobile-nav-btn {
+  color: #94a3b8;
+}
+
+.user-glass-shell[data-user-theme='dark'] .app-mobile-nav-btn svg {
+  color: #cbd5e1;
+}
+
+.user-glass-shell[data-user-theme='dark'] .app-mobile-nav-btn.is-active,
+.user-glass-shell[data-user-theme='dark'] .app-mobile-nav-btn:hover {
+  background: rgba(30, 41, 59, 0.78);
+  color: #ffffff;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+}
+
+@media (max-width: 640px) {
+  .admin-header {
+    padding: 0.75rem 0.85rem !important;
+  }
+
+  .admin-header > div {
+    display: grid !important;
+    grid-template-columns: auto 1fr;
+    align-items: start !important;
+    gap: 0.55rem !important;
+  }
+
+  .admin-header-actions {
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-end !important;
+    gap: 0.35rem !important;
+    margin-left: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    width: auto !important;
+  }
+
+  .admin-header-actions .btn,
+  .admin-header-actions .btn-primary,
+  .admin-header-actions .btn-danger {
+    width: 2.35rem;
+    height: 2.35rem;
+    padding: 0 !important;
+    border-radius: 999px;
+  }
+
+  .admin-header-actions .admin-btn-label {
+    display: none;
+  }
 }
 
 .user-glass-shell[data-user-theme='dark'] .app-shell__sidebar .bg-slate-950,
