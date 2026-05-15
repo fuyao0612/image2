@@ -48,4 +48,3 @@ frontend-dist*.tgz
 frontend-dist*/
 backend/api
 jh612.top_nginx/
-restart-project.bat
