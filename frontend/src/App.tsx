@@ -859,12 +859,12 @@ function App() {
             prompt: detail.prompt,
             elapsedSeconds,
             imageElapsedSeconds: buildImageElapsedSeconds(current.total, elapsedSeconds, current.imageElapsedSeconds),
-            total: Math.max(1, current.total),
-            completed: 0,
+            total: Math.max(detailCount, current.total, imageURLs.length || 1),
+            completed: imageURLs.length,
             success: 0,
-            running: Math.max(1, current.total),
+            running: Math.max(0, Math.max(detailCount, current.total, imageURLs.length || 1) - imageURLs.length),
             attempt,
-            message: '任务正在生成中',
+            message: imageURLs.length > 0 ? nextMessage : '任务正在生成中',
           }))
         } catch (error) {
           if (!pollingTaskIdsRef.current.has(taskId)) {
