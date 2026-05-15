@@ -346,23 +346,24 @@ func (s *Service) getImageTaskV2(ctx context.Context, userID uint64, taskID stri
 	imageURLs := imageURLsFromTask(task)
 
 	return dto.ImageTaskDetailResponse{
-		TaskID:          strconv.FormatUint(task.ID, 10),
-		RequestedCount:  task.RequestedCount,
-		Prompt:          task.Prompt,
-		ImageURL:        thumbnailURLFromList(imageURLs, 0),
-		ImageURLs:       imageURLs,
-		ThumbnailURL:    thumbnailURLFromList(thumbURLs, 0),
-		ThumbnailURLs:   thumbURLs,
-		CostPoints:      task.CostPoints,
-		CostCredits:     task.CostCredits,
-		FreeCreditsCost: task.FreeCreditsCost,
-		PaidCreditsCost: task.PaidCreditsCost,
-		CreditSource:    task.CreditSource,
-		Status:          string(task.Status),
-		RequestParams:   task.RequestParams,
-		ErrorMessage:    task.ErrorMessage,
-		CreatedAt:       task.CreatedAt,
-		UpdatedAt:       task.UpdatedAt,
+		TaskID:              strconv.FormatUint(task.ID, 10),
+		RequestedCount:      task.RequestedCount,
+		Prompt:              task.Prompt,
+		ImageURL:            thumbnailURLFromList(imageURLs, 0),
+		ImageURLs:           imageURLs,
+		ImageElapsedSeconds: imageElapsedSecondsFromTask(task),
+		ThumbnailURL:        thumbnailURLFromList(thumbURLs, 0),
+		ThumbnailURLs:       thumbURLs,
+		CostPoints:          task.CostPoints,
+		CostCredits:         task.CostCredits,
+		FreeCreditsCost:     task.FreeCreditsCost,
+		PaidCreditsCost:     task.PaidCreditsCost,
+		CreditSource:        task.CreditSource,
+		Status:              string(task.Status),
+		RequestParams:       task.RequestParams,
+		ErrorMessage:        task.ErrorMessage,
+		CreatedAt:           task.CreatedAt,
+		UpdatedAt:           task.UpdatedAt,
 	}, nil
 }
 
@@ -385,23 +386,24 @@ func (s *Service) listImageTasksV2(ctx context.Context, userID uint64, page, pag
 		thumbURLs := s.thumbnailURLsFromTask(ctx, task)
 		imageURLs := imageURLsFromTask(task)
 		items = append(items, dto.ImageTaskItem{
-			ID:              strconv.FormatUint(task.ID, 10),
-			RequestedCount:  task.RequestedCount,
-			Prompt:          task.Prompt,
-			ImageURL:        thumbnailURLFromList(imageURLs, 0),
-			ImageURLs:       imageURLs,
-			ThumbnailURL:    thumbnailURLFromList(thumbURLs, 0),
-			ThumbnailURLs:   thumbURLs,
-			CostPoints:      task.CostPoints,
-			CostCredits:     task.CostCredits,
-			FreeCreditsCost: task.FreeCreditsCost,
-			PaidCreditsCost: task.PaidCreditsCost,
-			CreditSource:    task.CreditSource,
-			Status:          string(task.Status),
-			RequestParams:   task.RequestParams,
-			ErrorMessage:    task.ErrorMessage,
-			CreatedAt:       task.CreatedAt,
-			UpdatedAt:       task.UpdatedAt,
+			ID:                  strconv.FormatUint(task.ID, 10),
+			RequestedCount:      task.RequestedCount,
+			Prompt:              task.Prompt,
+			ImageURL:            thumbnailURLFromList(imageURLs, 0),
+			ImageURLs:           imageURLs,
+			ImageElapsedSeconds: imageElapsedSecondsFromTask(task),
+			ThumbnailURL:        thumbnailURLFromList(thumbURLs, 0),
+			ThumbnailURLs:       thumbURLs,
+			CostPoints:          task.CostPoints,
+			CostCredits:         task.CostCredits,
+			FreeCreditsCost:     task.FreeCreditsCost,
+			PaidCreditsCost:     task.PaidCreditsCost,
+			CreditSource:        task.CreditSource,
+			Status:              string(task.Status),
+			RequestParams:       task.RequestParams,
+			ErrorMessage:        task.ErrorMessage,
+			CreatedAt:           task.CreatedAt,
+			UpdatedAt:           task.UpdatedAt,
 		})
 	}
 
@@ -414,12 +416,15 @@ func (s *Service) listImageTasksV2(ctx context.Context, userID uint64, page, pag
 }
 
 func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result provider.GenerateResult, message string) (int64, error) {
-	message = buildImageTaskFailureUserMessage(message)
+	rawMessage := strings.TrimSpace(message)
+	message = buildImageTaskFailureUserMessage(rawMessage)
 
 	var balance int64
 	var notice *imageTaskFailureNotice
 	var userNotifyTaskID uint64
 	var userNotifyUserID uint64
+	var successNotifyTaskID uint64
+	var successNotifyUserID uint64
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		task, err := s.lockImageTask(tx, taskID, userID)
 		if err != nil {
@@ -431,6 +436,150 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 				return err
 			}
 			balance = user.FreeCredits + user.PaidCredits
+			return nil
+		}
+
+		successfulURLs := successfulImageTaskURLs(task, result)
+		requestedCount := task.RequestedCount
+		if requestedCount <= 0 {
+			requestedCount = 1
+		}
+		if len(successfulURLs) > 0 {
+			imageURLsJSON, _ := json.Marshal(successfulURLs)
+			providerTaskID := strings.TrimSpace(result.ProviderTaskID)
+			if providerTaskID == "" {
+				providerTaskID = strings.TrimSpace(task.ProviderTaskID)
+			}
+
+			if len(successfulURLs) >= requestedCount {
+				updates := map[string]any{
+					"status":        model.ImageTaskStatusSuccess,
+					"image_url":     successfulURLs[0],
+					"image_urls":    string(imageURLsJSON),
+					"error_message": "",
+				}
+				if strings.TrimSpace(result.RawResponse) != "" {
+					updates["provider_response"] = result.RawResponse
+				}
+				if providerTaskID != "" {
+					updates["provider_task_id"] = providerTaskID
+				}
+				res := tx.Model(&model.ImageTask{}).
+					Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
+					Updates(updates)
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					user, err := s.lockUser(tx, userID)
+					if err != nil {
+						return err
+					}
+					balance = user.FreeCredits + user.PaidCredits
+					return nil
+				}
+				if err := incrementImagesGeneratedTotal(tx, int64(requestedCount)); err != nil {
+					return err
+				}
+				user, err := s.lockUser(tx, userID)
+				if err != nil {
+					return err
+				}
+				balance = user.FreeCredits + user.PaidCredits
+				successNotifyTaskID = task.ID
+				successNotifyUserID = task.UserID
+				return nil
+			}
+
+			settlement := settlePartialImageTaskCosts(task, len(successfulURLs))
+			partialMessage := buildImageTaskPartialSuccessUserMessage(rawMessage, settlement.Succeeded, settlement.Requested)
+			updates := map[string]any{
+				"status":            model.ImageTaskStatusSuccess,
+				"image_url":         successfulURLs[0],
+				"image_urls":        string(imageURLsJSON),
+				"cost_points":       settlement.ConsumedPoints,
+				"cost_credits":      settlement.ConsumedCredits,
+				"free_credits_cost": settlement.ConsumedFree,
+				"paid_credits_cost": settlement.ConsumedPaid,
+				"credit_source":     imageTaskCreditSource(settlement.ConsumedFree, settlement.ConsumedPaid, settlement.ConsumedPoints),
+				"error_message":     partialMessage,
+			}
+			if strings.TrimSpace(result.RawResponse) != "" {
+				updates["provider_response"] = result.RawResponse
+			}
+			if providerTaskID != "" {
+				updates["provider_task_id"] = providerTaskID
+			}
+			res := tx.Model(&model.ImageTask{}).
+				Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
+				Updates(updates)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				user, err := s.lockUser(tx, userID)
+				if err != nil {
+					return err
+				}
+				balance = user.FreeCredits + user.PaidCredits
+				return nil
+			}
+			if err := incrementImagesGeneratedTotal(tx, int64(settlement.Succeeded)); err != nil {
+				return err
+			}
+
+			notice = &imageTaskFailureNotice{
+				TaskID:         task.ID,
+				UserID:         task.UserID,
+				Prompt:         task.Prompt,
+				Message:        partialMessage,
+				Provider:       task.Provider,
+				ProviderTaskID: providerTaskID,
+				RawResponse:    truncateProviderMessage(result.RawResponse),
+				CreatedAt:      task.CreatedAt,
+			}
+			successNotifyTaskID = task.ID
+			successNotifyUserID = task.UserID
+
+			user, err := s.lockUser(tx, userID)
+			if err != nil {
+				return err
+			}
+
+			balance = user.FreeCredits + user.PaidCredits
+			if settlement.RefundCredits > 0 {
+				beforeCredits := creditBalance{Free: user.FreeCredits, Paid: user.PaidCredits}
+				afterCredits := creditBalance{
+					Free: beforeCredits.Free + settlement.RefundFree,
+					Paid: beforeCredits.Paid + settlement.RefundPaid,
+				}
+				if err := tx.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
+					"free_credits": afterCredits.Free,
+					"paid_credits": afterCredits.Paid,
+				}).Error; err != nil {
+					return err
+				}
+				if err := s.recordCreditLog(tx, userID, model.CreditChangeTypeRefund, settlement.RefundFree, settlement.RefundPaid, beforeCredits, afterCredits, "image_task", strconv.FormatUint(task.ID, 10), "生图部分失败退回福利次数"); err != nil {
+					return err
+				}
+				balance = afterCredits.Total()
+			}
+
+			currentPoints := user.PointsBalance
+			if settlement.RefundPoints > 0 {
+				beforePoints := currentPoints
+				afterPoints := beforePoints + settlement.RefundPoints
+				if err := tx.Model(&model.User{}).Where("id = ?", userID).Update("points_balance", afterPoints).Error; err != nil {
+					return err
+				}
+				if err := s.recordPointsLog(tx, userID, model.PointsChangeTypeRefund, settlement.RefundPoints, beforePoints, afterPoints, "image_task", strconv.FormatUint(task.ID, 10), "生图部分失败退回积分"); err != nil {
+					return err
+				}
+				currentPoints = afterPoints
+			}
+			if settlement.ConsumedCredits == 0 {
+				balance = currentPoints
+			}
 			return nil
 		}
 
@@ -523,8 +672,123 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 	if err == nil && notice != nil {
 		s.notifyImageTaskFailureAsync(*notice)
 	}
+	if err == nil && successNotifyTaskID > 0 {
+		s.notifyImageTaskSuccessAsync(successNotifyTaskID, successNotifyUserID)
+	}
 	if err == nil && userNotifyTaskID > 0 {
 		s.notifyUserImageTaskFailureAsync(userNotifyTaskID, userNotifyUserID)
 	}
 	return balance, err
+}
+
+type imageTaskPartialSettlement struct {
+	Requested       int
+	Succeeded       int
+	Failed          int
+	ConsumedFree    int64
+	ConsumedPaid    int64
+	ConsumedCredits int64
+	ConsumedPoints  int64
+	RefundFree      int64
+	RefundPaid      int64
+	RefundCredits   int64
+	RefundPoints    int64
+}
+
+func successfulImageTaskURLs(task model.ImageTask, result provider.GenerateResult) []string {
+	requestedCount := task.RequestedCount
+	if requestedCount <= 0 {
+		requestedCount = 1
+	}
+	referenceImageURL := referenceImageURLFromRequestParams(task.RequestParams)
+	urls := imageURLsFromTask(task)
+	urls = mergeStringURLs(urls, normalizeGeneratedImageURLs(result, requestedCount, referenceImageURL))
+	urls = filterUsableTaskImageURLs(urls)
+	urls = normalizeGeneratedImageURLs(provider.GenerateResult{ImageURLs: urls}, requestedCount, "")
+	if len(urls) > requestedCount {
+		return urls[:requestedCount]
+	}
+	return urls
+}
+
+func settlePartialImageTaskCosts(task model.ImageTask, succeeded int) imageTaskPartialSettlement {
+	requested := task.RequestedCount
+	if requested <= 0 {
+		requested = 1
+	}
+	if succeeded < 0 {
+		succeeded = 0
+	}
+	if succeeded > requested {
+		succeeded = requested
+	}
+
+	remainingSuccess := int64(succeeded)
+	freeCost := nonNegativeInt64(task.FreeCreditsCost)
+	paidCost := nonNegativeInt64(task.PaidCreditsCost)
+	pointCost := nonNegativeInt64(task.CostPoints)
+	totalCreditCost := freeCost + paidCost
+
+	consumedFree := min64(freeCost, remainingSuccess)
+	remainingSuccess -= consumedFree
+	consumedPaid := min64(paidCost, remainingSuccess)
+	remainingSuccess -= consumedPaid
+
+	consumedPoints := int64(0)
+	if pointCost > 0 && remainingSuccess > 0 {
+		pointFundedCount := int64(requested) - totalCreditCost
+		if pointFundedCount <= 0 {
+			pointFundedCount = int64(requested)
+		}
+		consumedPointImages := min64(pointFundedCount, remainingSuccess)
+		consumedPoints = pointCost * consumedPointImages / pointFundedCount
+		if consumedPoints == 0 && consumedPointImages > 0 {
+			consumedPoints = min64(pointCost, 1)
+		}
+	}
+	if consumedPoints > pointCost {
+		consumedPoints = pointCost
+	}
+
+	refundFree := freeCost - consumedFree
+	refundPaid := paidCost - consumedPaid
+	refundPoints := pointCost - consumedPoints
+	return imageTaskPartialSettlement{
+		Requested:       requested,
+		Succeeded:       succeeded,
+		Failed:          requested - succeeded,
+		ConsumedFree:    consumedFree,
+		ConsumedPaid:    consumedPaid,
+		ConsumedCredits: consumedFree + consumedPaid,
+		ConsumedPoints:  consumedPoints,
+		RefundFree:      refundFree,
+		RefundPaid:      refundPaid,
+		RefundCredits:   refundFree + refundPaid,
+		RefundPoints:    refundPoints,
+	}
+}
+
+func nonNegativeInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func imageTaskCreditSource(freeCost int64, paidCost int64, pointCost int64) string {
+	creditCost := freeCost + paidCost
+	switch {
+	case creditCost > 0 && pointCost > 0:
+		return "mixed"
+	case freeCost > 0 && paidCost > 0:
+		return "mixed"
+	case paidCost > 0:
+		return "paid"
+	case freeCost > 0:
+		return "free"
+	case pointCost > 0:
+		return "points"
+	default:
+		return "free"
+	}
 }

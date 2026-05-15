@@ -377,27 +377,22 @@ func TestSubmitBatchDoesNotRetryEOFAndUsesBrowserHeaders(t *testing.T) {
 	}
 }
 
-func TestFetchBatchRetriesTemporaryNetworkError(t *testing.T) {
+func TestFetchBatchReturnsTemporaryNetworkErrorWithoutImmediateRetry(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/batches/batch-test" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		if atomic.AddInt32(&attempts, 1) == 1 {
-			hijacker, ok := w.(http.Hijacker)
-			if !ok {
-				t.Fatalf("response writer does not support hijacking")
-			}
-			conn, _, err := hijacker.Hijack()
-			if err != nil {
-				t.Fatalf("hijack failed: %v", err)
-			}
-			_ = conn.Close()
-			return
+		atomic.AddInt32(&attempts, 1)
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatalf("response writer does not support hijacking")
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"batch-test","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-test/final.png"}]}`))
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatalf("hijack failed: %v", err)
+		}
+		_ = conn.Close()
 	}))
 	defer server.Close()
 
@@ -407,15 +402,12 @@ func TestFetchBatchRetriesTemporaryNetworkError(t *testing.T) {
 		APIKey:             "test-key",
 	})
 
-	result, err := provider.fetchBatch(context.Background(), "batch-test")
-	if err != nil {
-		t.Fatalf("fetch batch failed: %v", err)
+	_, err := provider.fetchBatch(context.Background(), "batch-test")
+	if err == nil {
+		t.Fatalf("expected fetch batch to return the first network error")
 	}
-	if atomic.LoadInt32(&attempts) != 2 {
-		t.Fatalf("expected 2 attempts, got %d", attempts)
-	}
-	if result.ImageURL != server.URL+"/results/batch-test/final.png" {
-		t.Fatalf("expected absolute image url, got %q", result.ImageURL)
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", attempts)
 	}
 }
 

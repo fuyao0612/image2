@@ -20,6 +20,7 @@ type CreateImageTaskResponse struct {
 	Status                string   `json:"status"`
 	ImageURL              string   `json:"imageUrl,omitempty"`
 	ImageURLs             []string `json:"imageUrls,omitempty"`
+	ImageElapsedSeconds   []int64  `json:"imageElapsedSeconds,omitempty"`
 	RequestedCount        int      `json:"requestedCount"`
 	CostPoints            int64    `json:"costPoints"`
 	CostCredits           int64    `json:"costCredits"`
@@ -38,44 +39,46 @@ type CreateImageTaskResponse struct {
 
 // ImageTaskItem 是任务列表项。
 type ImageTaskItem struct {
-	ID              string    `json:"id"`
-	RequestedCount  int       `json:"requestedCount"`
-	Prompt          string    `json:"prompt"`
-	ImageURL        string    `json:"imageUrl,omitempty"`
-	ImageURLs       []string  `json:"imageUrls,omitempty"`
-	ThumbnailURL    string    `json:"thumbnailUrl,omitempty"`
-	ThumbnailURLs   []string  `json:"thumbnailUrls,omitempty"`
-	CostPoints      int64     `json:"costPoints"`
-	CostCredits     int64     `json:"costCredits"`
-	FreeCreditsCost int64     `json:"freeCreditsCost"`
-	PaidCreditsCost int64     `json:"paidCreditsCost"`
-	CreditSource    string    `json:"creditSource"`
-	Status          string    `json:"status"`
-	RequestParams   string    `json:"requestParams,omitempty"`
-	ErrorMessage    string    `json:"errorMessage,omitempty"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID                  string    `json:"id"`
+	RequestedCount      int       `json:"requestedCount"`
+	Prompt              string    `json:"prompt"`
+	ImageURL            string    `json:"imageUrl,omitempty"`
+	ImageURLs           []string  `json:"imageUrls,omitempty"`
+	ImageElapsedSeconds []int64   `json:"imageElapsedSeconds,omitempty"`
+	ThumbnailURL        string    `json:"thumbnailUrl,omitempty"`
+	ThumbnailURLs       []string  `json:"thumbnailUrls,omitempty"`
+	CostPoints          int64     `json:"costPoints"`
+	CostCredits         int64     `json:"costCredits"`
+	FreeCreditsCost     int64     `json:"freeCreditsCost"`
+	PaidCreditsCost     int64     `json:"paidCreditsCost"`
+	CreditSource        string    `json:"creditSource"`
+	Status              string    `json:"status"`
+	RequestParams       string    `json:"requestParams,omitempty"`
+	ErrorMessage        string    `json:"errorMessage,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 // ImageTaskDetailResponse 是单个任务详情。
 type ImageTaskDetailResponse struct {
-	TaskID          string    `json:"taskId"`
-	RequestedCount  int       `json:"requestedCount"`
-	Prompt          string    `json:"prompt"`
-	ImageURL        string    `json:"imageUrl,omitempty"`
-	ImageURLs       []string  `json:"imageUrls,omitempty"`
-	ThumbnailURL    string    `json:"thumbnailUrl,omitempty"`
-	ThumbnailURLs   []string  `json:"thumbnailUrls,omitempty"`
-	CostPoints      int64     `json:"costPoints"`
-	CostCredits     int64     `json:"costCredits"`
-	FreeCreditsCost int64     `json:"freeCreditsCost"`
-	PaidCreditsCost int64     `json:"paidCreditsCost"`
-	CreditSource    string    `json:"creditSource"`
-	Status          string    `json:"status"`
-	RequestParams   string    `json:"requestParams,omitempty"`
-	ErrorMessage    string    `json:"errorMessage,omitempty"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	TaskID              string    `json:"taskId"`
+	RequestedCount      int       `json:"requestedCount"`
+	Prompt              string    `json:"prompt"`
+	ImageURL            string    `json:"imageUrl,omitempty"`
+	ImageURLs           []string  `json:"imageUrls,omitempty"`
+	ImageElapsedSeconds []int64   `json:"imageElapsedSeconds,omitempty"`
+	ThumbnailURL        string    `json:"thumbnailUrl,omitempty"`
+	ThumbnailURLs       []string  `json:"thumbnailUrls,omitempty"`
+	CostPoints          int64     `json:"costPoints"`
+	CostCredits         int64     `json:"costCredits"`
+	FreeCreditsCost     int64     `json:"freeCreditsCost"`
+	PaidCreditsCost     int64     `json:"paidCreditsCost"`
+	CreditSource        string    `json:"creditSource"`
+	Status              string    `json:"status"`
+	RequestParams       string    `json:"requestParams,omitempty"`
+	ErrorMessage        string    `json:"errorMessage,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 // ListImageTasksResponse 是任务列表分页返回体。

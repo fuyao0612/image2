@@ -27,6 +27,7 @@ type ImageTask struct {
 	RequestedCount        int             `gorm:"not null;default:1;comment:请求生成张数" json:"requestedCount"`
 	ImageURL              string          `gorm:"type:varchar(1024);comment:生成的图片URL" json:"imageUrl,omitempty"`
 	ImageURLs             string          `gorm:"type:text;comment:生成的图片URL列表JSON" json:"imageUrls,omitempty"`
+	ImageElapsedSeconds   string          `gorm:"type:text;comment:每张图片真实完成耗时JSON" json:"imageElapsedSeconds,omitempty"`
 	CostPoints            int64           `gorm:"not null;default:0;comment:生图消耗积分数" json:"costPoints"`
 	CostCredits           int64           `gorm:"not null;default:0;comment:生图消耗福利次数" json:"costCredits"`
 	FreeCreditsCost       int64           `gorm:"not null;default:0;comment:本任务消耗的免费福利次数" json:"freeCreditsCost"`

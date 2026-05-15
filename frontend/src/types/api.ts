@@ -255,6 +255,7 @@ export interface ImageTaskItem {
   prompt: string
   imageUrl?: string
   imageUrls?: string[]
+  imageElapsedSeconds?: number[]
   thumbnailUrl?: string
   thumbnailUrls?: string[]
   costPoints: number
@@ -275,6 +276,7 @@ export interface ImageTaskDetailResponse {
   prompt: string
   imageUrl?: string
   imageUrls?: string[]
+  imageElapsedSeconds?: number[]
   thumbnailUrl?: string
   thumbnailUrls?: string[]
   costPoints: number

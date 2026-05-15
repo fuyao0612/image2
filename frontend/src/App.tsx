@@ -336,6 +336,9 @@ const emptyGenerationProgress: GenerationProgress = {
   message: '等待提交',
 }
 
+const GENERATION_WAITING_NOTICE =
+  '请耐心等待，图片生成时间会随着尺寸、张数和质量档位提高而增长。高质量或 4K 图片对上游通道压力更大，可能偶发失败；如生成失败，本次消耗的积分或福利次数会原路退回，错误信息也会通知管理员，我们会尽快处理。'
+
 const emptyPreview: ImageTaskDetailResponse = {
   taskId: '-',
   requestedCount: 0,
@@ -704,7 +707,7 @@ function App() {
           return {
             ...item,
             elapsedSeconds,
-            imageElapsedSeconds: buildImageElapsedSeconds(item.total, elapsedSeconds, item.imageElapsedSeconds),
+            imageElapsedSeconds: buildImageElapsedSeconds(item.total, elapsedSeconds, item.imageElapsedSeconds, item.completed, item.status),
             running: Math.max(0, item.total - item.completed),
           }
         }),
@@ -769,6 +772,7 @@ function App() {
 
           const detailCount = getPreviewRequestedCount(detail, 1)
           const imageURLs = limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount || detailCount)
+          const persistedElapsedSeconds = normalizeElapsedSeconds(detail.imageElapsedSeconds)
           const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
           const isFinal = detail.status === 'success' || detail.status === 'failed'
           const finalCount = Math.max(1, imageURLs.length || detailCount)
@@ -787,6 +791,7 @@ function App() {
                   prompt: detail.prompt,
                   imageUrl: detail.imageUrl,
                   imageUrls: imageURLs,
+                  imageElapsedSeconds: persistedElapsedSeconds,
                   thumbnailUrl: detail.thumbnailUrl,
                   thumbnailUrls: detail.thumbnailUrls,
                   costPoints: detail.costPoints,
@@ -811,6 +816,7 @@ function App() {
                     prompt: detail.prompt,
                     imageUrl: detail.imageUrl,
                     imageUrls: imageURLs,
+                    imageElapsedSeconds: persistedElapsedSeconds,
                     thumbnailUrl: detail.thumbnailUrl,
                     thumbnailUrls: detail.thumbnailUrls,
                     costPoints: detail.costPoints,
@@ -839,7 +845,7 @@ function App() {
               prompt: detail.prompt,
               status: detail.status === 'failed' ? 'failed' : 'success',
               elapsedSeconds,
-              imageElapsedSeconds: buildImageElapsedSeconds(finalCount, elapsedSeconds, current.imageElapsedSeconds),
+              imageElapsedSeconds: buildImageElapsedSeconds(finalCount, elapsedSeconds, persistedElapsedSeconds.length > 0 ? persistedElapsedSeconds : current.imageElapsedSeconds, finalCount, detail.status === 'failed' ? 'failed' : 'success'),
               total: finalCount,
               completed: finalCount,
               success: detail.status === 'failed' ? 0 : finalCount,
@@ -858,7 +864,7 @@ function App() {
             ...current,
             prompt: detail.prompt,
             elapsedSeconds,
-            imageElapsedSeconds: buildImageElapsedSeconds(current.total, elapsedSeconds, current.imageElapsedSeconds),
+            imageElapsedSeconds: buildImageElapsedSeconds(Math.max(detailCount, current.total, imageURLs.length || 1), elapsedSeconds, persistedElapsedSeconds.length > 0 ? persistedElapsedSeconds : current.imageElapsedSeconds, imageURLs.length, 'running'),
             total: Math.max(detailCount, current.total, imageURLs.length || 1),
             completed: imageURLs.length,
             success: 0,
@@ -878,7 +884,7 @@ function App() {
           updateGenerationProgress(taskId, (current) => ({
             ...current,
             elapsedSeconds: Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
-            imageElapsedSeconds: buildImageElapsedSeconds(current.total, Math.max(0, Math.floor((Date.now() - startedAt) / 1000)), current.imageElapsedSeconds),
+            imageElapsedSeconds: buildImageElapsedSeconds(current.total, Math.max(0, Math.floor((Date.now() - startedAt) / 1000)), current.imageElapsedSeconds, current.completed, current.status),
             attempt,
             message: `轮询状态失败：${errorMessage}`,
           }))
@@ -1729,9 +1735,8 @@ function App() {
   }
 
   async function handleOpenPreviewDetail() {
-    const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
-    if (!preview.taskId || preview.taskId === '-' || imageURLs.length === 0) {
-      setMessage('当前展示区还没有图片详情。')
+    if (!preview.taskId || preview.taskId === '-') {
+      setMessage('当前展示区还没有提示词详情。')
       return
     }
 
@@ -3360,6 +3365,8 @@ function PreviewDetailDialog({
   onClose: () => void
 }) {
   const requestOptions = buildPreviewRequestOptions(preview)
+  const parsed = parseTaskRequestParams(preview.requestParams)
+  const promptText = parsed?.prompt?.trim() || preview.prompt || '未填写'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
@@ -3385,7 +3392,7 @@ function PreviewDetailDialog({
             <div className="rounded-md border border-slate-800 bg-slate-900/70 px-3 py-3">
               <div className="text-xs text-slate-500">提示词</div>
               <div className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">
-                {preview.prompt || '未填写'}
+                {promptText}
               </div>
             </div>
 
@@ -4014,6 +4021,9 @@ function TaskHistoryPanel({
           items.map((item) => {
             const imageURLs = limitImageURLs(normalizeImageURLs(item.imageUrls, item.imageUrl), item.requestedCount)
             const cover = item.thumbnailUrl || item.thumbnailUrls?.[0] || imageURLs[0] || ''
+            const requestedCount = getPreviewRequestedCount(item, imageURLs.length || 1)
+            const isPartialSuccess = isPartialImageTaskStatus(item.status, imageURLs.length, requestedCount)
+            const displayStatus = isPartialSuccess ? 'partial_success' : item.status
             return (
               <button
                 key={item.id}
@@ -4025,20 +4035,20 @@ function TaskHistoryPanel({
                   {cover ? (
                     <img src={cover} alt={item.prompt} className="h-full w-full object-cover" />
                   ) : (
-                    <span>{getImageTaskStatusLabel(item.status)}</span>
+                    <span>{getImageTaskStatusLabel(displayStatus)}</span>
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium text-slate-200">{item.prompt}</span>
-                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs ${getTaskStatusBadgeClass(item.status)}`}>
-                      {getImageTaskStatusLabel(item.status)}
+                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs ${getTaskStatusBadgeClass(displayStatus)}`}>
+                      {getImageTaskStatusLabel(displayStatus)}
                     </span>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>{formatDateTime(item.createdAt)}</span>
                     <span>消耗 {formatTaskCost(item, getTaskCreditCost(item))}</span>
-                    {imageURLs.length > 1 ? <span>{imageURLs.length} 张图</span> : null}
+                    {isPartialSuccess ? <span>{imageURLs.length}/{requestedCount} 张图</span> : imageURLs.length > 1 ? <span>{imageURLs.length} 张图</span> : null}
                   </div>
                 </div>
               </button>
@@ -4221,12 +4231,17 @@ function TaskDetailPanel({
   preview: ImageTaskDetailResponse
   progress: GenerationProgress | null
 }) {
-  const imageCount = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
+  const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+  const imageCount = imageURLs.length
   const rawStatus = progress?.status ?? preview.status
   const totalCount = Math.max(1, progress?.total ?? getPreviewRequestedCount(preview, imageCount || 1))
-  const completedCount = Math.min(totalCount, Math.max(0, progress?.completed ?? (rawStatus === 'success' ? totalCount : 0)))
+  const isPartialSuccess = isPartialImageTaskStatus(rawStatus, imageCount, totalCount)
+  const displayStatus = isPartialSuccess ? 'partial_success' : rawStatus
+  const completedFallback = rawStatus === 'success' ? (isPartialSuccess ? imageCount : totalCount) : imageCount
+  const completedCount = Math.min(totalCount, Math.max(0, progress?.completed ?? completedFallback))
   const elapsedSeconds = progress?.elapsedSeconds ?? getPreviewElapsedSeconds(preview)
-  const elapsedText = formatElapsedTriplet(totalCount, elapsedSeconds, progress?.imageElapsedSeconds)
+  const elapsedText = formatElapsedTriplet(totalCount, elapsedSeconds, progress?.imageElapsedSeconds ?? preview.imageElapsedSeconds)
+  const visibleErrorMessage = rawStatus === 'failed' || isPartialSuccess ? preview.errorMessage : ''
 
   return (
     <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
@@ -4235,8 +4250,8 @@ function TaskDetailPanel({
           <Copy className="h-4 w-4 text-slate-400" />
           任务状态
         </div>
-        <span className={`rounded-md px-2 py-1 text-xs ${getTaskStatusBadgeClass(rawStatus)}`}>
-          {getImageTaskStatusLabel(rawStatus)}
+        <span className={`rounded-md px-2 py-1 text-xs ${getTaskStatusBadgeClass(displayStatus)}`}>
+          {getImageTaskStatusLabel(displayStatus)}
         </span>
       </div>
 
@@ -4246,9 +4261,9 @@ function TaskDetailPanel({
         <MiniStat label="消耗" value={formatTaskCost(preview, totalCount)} />
       </div>
 
-      {preview.errorMessage ? (
-        <div className="mt-3 rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          {preview.errorMessage}
+      {visibleErrorMessage ? (
+        <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${isPartialSuccess ? 'border-amber-500/20 bg-amber-500/10 text-amber-100' : 'border-rose-500/20 bg-rose-500/10 text-rose-200'}`}>
+          {visibleErrorMessage}
         </div>
       ) : null}
     </div>
@@ -5596,7 +5611,7 @@ function GenerationProgressCard({ progress }: { progress: GenerationProgress }) 
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <ProgressStat label="服务地址" value={progress.backendUrl} />
-        <ProgressStat label="提示词" value={progress.prompt || '未填写'} />
+        <ProgressStat label="温馨提示" value={isRunning ? GENERATION_WAITING_NOTICE : progress.prompt || '未填写'} />
         <ProgressStat label="完成数量" value={`${progress.completed}/${progress.total}`} />
         <ProgressStat
           label="耗时·s"
@@ -5692,6 +5707,8 @@ function getTaskStatusLabel(status: string): string {
       return '正在生成'
     case 'success':
       return '成功'
+    case 'partial_success':
+      return '部分成功'
     case 'failed':
       return '失败'
     default:
@@ -5703,6 +5720,8 @@ function getTaskStatusBadgeClass(status: string): string {
   switch (status) {
     case 'success':
       return 'bg-emerald-500/15 text-emerald-200'
+    case 'partial_success':
+      return 'bg-amber-500/15 text-amber-100'
     case 'failed':
       return 'bg-rose-500/15 text-rose-200'
     case 'running':
@@ -5711,6 +5730,14 @@ function getTaskStatusBadgeClass(status: string): string {
     default:
       return 'bg-slate-800 text-slate-300'
   }
+}
+
+function isPartialImageTaskStatus(status: string, imageCount: number, requestedCount?: number): boolean {
+  const requested = Math.max(1, Math.floor(Number(requestedCount || 0)))
+  if (!Number.isFinite(requested) || requested <= 1) {
+    return false
+  }
+  return status === 'success' && imageCount > 0 && imageCount < requested
 }
 
 function getActivityRecordLabel(recordType: UserActivityItem['recordType']): string {
@@ -5903,10 +5930,33 @@ function formatTaskCost(task: Pick<ImageTaskDetailResponse, 'costPoints' | 'cost
   return fallback > 0 ? `${fallback}福利次数` : '-'
 }
 
-function buildImageElapsedSeconds(total: number, elapsedSeconds: number, existing: number[] = []): number[] {
+function normalizeElapsedSeconds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) {
+    return []
+  }
+  return values
+    .map((value) => Math.max(0, Math.floor(Number(value || 0))))
+    .filter((value) => Number.isFinite(value))
+}
+
+function buildImageElapsedSeconds(
+  total: number,
+  elapsedSeconds: number,
+  existing: number[] = [],
+  completed = 0,
+  status: GenerationStatus | string = 'running',
+): number[] {
   const count = Math.max(1, Math.floor(Number(total || 0)))
   const safeElapsed = Math.max(0, Math.floor(Number(elapsedSeconds || 0)))
-  const result = Array.from({ length: count }, (_, index) => Math.max(safeElapsed, Math.floor(Number(existing[index] ?? 0))))
+  const persisted = normalizeElapsedSeconds(existing).slice(0, count)
+  if (status !== 'running') {
+    return persisted.length > 0 ? persisted : Array.from({ length: count }, () => safeElapsed)
+  }
+  const completedCount = Math.min(count, Math.max(0, Math.floor(Number(completed || 0))))
+  const result = persisted.slice(0, completedCount)
+  if (result.length < count) {
+    result.push(safeElapsed)
+  }
   return result
 }
 
@@ -6073,7 +6123,7 @@ function progressFromImageTaskItem(item: ImageTaskItem): GenerationProgress {
     status,
     startedAt: new Date(item.createdAt).getTime() || Date.now(),
     elapsedSeconds: 0,
-    imageElapsedSeconds: buildImageElapsedSeconds(taskCount, 0),
+    imageElapsedSeconds: buildImageElapsedSeconds(taskCount, 0, item.imageElapsedSeconds, status === 'running' ? normalizeImageURLs(item.imageUrls, item.imageUrl).length : taskCount, status),
     total: taskCount,
     completed: status === 'running' ? 0 : taskCount,
     success: status === 'success' ? taskCount : 0,
@@ -6395,6 +6445,7 @@ function toPreview(item: ImageTaskItem): ImageTaskDetailResponse {
     prompt: item.prompt,
     imageUrl: item.imageUrl,
     imageUrls: limitImageURLs(normalizeImageURLs(item.imageUrls, item.imageUrl), item.requestedCount),
+    imageElapsedSeconds: normalizeElapsedSeconds(item.imageElapsedSeconds),
     thumbnailUrl: item.thumbnailUrl,
     thumbnailUrls: limitImageURLs(normalizeImageURLs(item.thumbnailUrls, item.thumbnailUrl), item.requestedCount),
     costPoints: item.costPoints,
@@ -6417,6 +6468,7 @@ function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailRespon
     prompt: detail.prompt,
     imageUrl: detail.imageUrl,
     imageUrls: limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount),
+    imageElapsedSeconds: normalizeElapsedSeconds(detail.imageElapsedSeconds),
     thumbnailUrl: detail.thumbnailUrl,
     thumbnailUrls: limitImageURLs(normalizeImageURLs(detail.thumbnailUrls, detail.thumbnailUrl), detail.requestedCount),
     costPoints: detail.costPoints,

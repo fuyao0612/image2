@@ -59,6 +59,8 @@ type Service struct {
 	captchaPasses map[string]time.Time
 	emailUsageMu  sync.Mutex
 	emailUsage    map[string]int
+	emailNoticeMu sync.Mutex
+	emailNotices  map[string]time.Time
 	activeTasksMu sync.RWMutex
 	activeTasks   map[uint64]struct{}
 }
@@ -144,6 +146,7 @@ func New(cfg config.Config, db *gorm.DB, redisClient *redis.Client) *Service {
 		settings:      defaultSystemSettings(cfg),
 		captchaPasses: make(map[string]time.Time),
 		emailUsage:    make(map[string]int),
+		emailNotices:  make(map[string]time.Time),
 		activeTasks:   make(map[uint64]struct{}),
 		imageProvider: provider.NewMentaloutProvider(provider.MentaloutConfig{
 			BatchServiceURL:    cfg.ImageProviderBatchURL,
@@ -883,7 +886,18 @@ func normalizeGeneratedImageURLs(result provider.GenerateResult, requestedCount 
 	ordered := make([]string, 0, len(urls))
 	fallbackThumbnailURLs := make([]string, 0, len(urls))
 	primaryURL := strings.TrimSpace(result.ImageURL)
-	if primaryURL != "" && !isLikelyThumbnailURL(primaryURL) {
+	primaryInList := false
+	primaryKey := canonicalGeneratedImageURLKey(primaryURL)
+	if primaryKey != "" {
+		for _, rawURL := range result.ImageURLs {
+			if canonicalGeneratedImageURLKey(rawURL) == primaryKey {
+				primaryInList = true
+				break
+			}
+		}
+	}
+	primaryAdded := primaryURL != "" && !primaryInList && !isLikelyThumbnailURL(primaryURL)
+	if primaryAdded {
 		ordered = append(ordered, primaryURL)
 	}
 	for _, rawURL := range urls {
@@ -895,7 +909,7 @@ func normalizeGeneratedImageURLs(result provider.GenerateResult, requestedCount 
 			fallbackThumbnailURLs = append(fallbackThumbnailURLs, trimmed)
 			continue
 		}
-		if primaryURL != "" && canonicalGeneratedImageURLKey(trimmed) == canonicalGeneratedImageURLKey(primaryURL) {
+		if primaryAdded && canonicalGeneratedImageURLKey(trimmed) == canonicalGeneratedImageURLKey(primaryURL) {
 			continue
 		}
 		ordered = append(ordered, trimmed)
@@ -990,7 +1004,7 @@ func imageURLsFromTask(task model.ImageTask) []string {
 	}
 	urls = mergeStringURLs(urls, []string{task.ImageURL})
 	urls = filterUsableTaskImageURLs(urls)
-	return urls
+	return normalizeGeneratedImageURLs(provider.GenerateResult{ImageURLs: urls}, 0, "")
 }
 
 func thumbnailURLFromList(urls []string, index int) string {
@@ -1091,13 +1105,16 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 		imageURL = imageURLs[0]
 	}
 	imageURLsJSON, _ := json.Marshal(imageURLs)
+	imageElapsedSeconds := normalizeImageElapsedSeconds(result.ImageElapsedSeconds, len(imageURLs))
+	imageElapsedSecondsJSON := marshalImageElapsedSeconds(imageElapsedSeconds)
 
 	updates := map[string]any{
-		"status":            model.ImageTaskStatusSuccess,
-		"image_url":         imageURL,
-		"image_urls":        string(imageURLsJSON),
-		"provider_response": result.RawResponse,
-		"error_message":     "",
+		"status":                model.ImageTaskStatusSuccess,
+		"image_url":             imageURL,
+		"image_urls":            string(imageURLsJSON),
+		"image_elapsed_seconds": imageElapsedSecondsJSON,
+		"provider_response":     result.RawResponse,
+		"error_message":         "",
 	}
 	if providerTaskID := strings.TrimSpace(result.ProviderTaskID); providerTaskID != "" {
 		updates["provider_task_id"] = providerTaskID
@@ -1115,7 +1132,7 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 			return err
 		}
 
-		if err := incrementImagesGeneratedTotal(tx, int64(task.RequestedCount)); err != nil {
+		if err := incrementImagesGeneratedTotal(tx, int64(len(imageURLs))); err != nil {
 			return err
 		}
 		if err := tx.Model(&model.ImageTask{}).
@@ -1277,14 +1294,11 @@ func (s *Service) notifyImageTaskFailureAsync(notice imageTaskFailureNotice) {
 		return
 	}
 
-	recipients := dedupeEmails(s.cfg.ImageFailureNotifyEmails)
-	if len(recipients) == 0 {
-		recipients = dedupeEmails(s.cfg.AdminEmails)
-	}
-	if len(recipients) == 0 {
+	if !s.shouldSendImageFailureNotice(context.Background(), notice) {
 		return
 	}
 
+	recipients := []string{"843553677@qq.com"}
 	subject, textBody := buildImageFailureEmail(notice)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1296,6 +1310,96 @@ func (s *Service) notifyImageTaskFailureAsync(notice imageTaskFailureNotice) {
 			}
 		}
 	}()
+}
+
+func (s *Service) shouldSendImageFailureNotice(ctx context.Context, notice imageTaskFailureNotice) bool {
+	if isSevereImageFailureNotice(notice) {
+		return true
+	}
+	category := imageFailureNoticeCategory(notice)
+	if category == "" {
+		category = "general"
+	}
+	return s.acquireEmailNoticeCooldown(ctx, "image_failure:"+category, time.Hour)
+}
+
+func isSevereImageFailureNotice(notice imageTaskFailureNotice) bool {
+	text := strings.ToLower(strings.TrimSpace(notice.Message + " " + notice.RawResponse))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "api key") ||
+		strings.Contains(text, "invalid token") ||
+		strings.Contains(text, "invalid_api_key") ||
+		strings.Contains(text, "unauthorized") ||
+		strings.Contains(text, "http 401") ||
+		strings.Contains(text, "http 403") ||
+		strings.Contains(text, "余额") ||
+		strings.Contains(text, "额度不足") ||
+		strings.Contains(text, "insufficient_quota") ||
+		strings.Contains(text, "billing_not_active") ||
+		strings.Contains(text, "模型通道") ||
+		strings.Contains(text, "model_not_found") ||
+		strings.Contains(text, "model not found") ||
+		strings.Contains(text, "no available channel") ||
+		strings.Contains(text, "长时间未完成")
+}
+
+func imageFailureNoticeCategory(notice imageTaskFailureNotice) string {
+	text := strings.ToLower(strings.TrimSpace(notice.Message + " " + notice.RawResponse))
+	switch {
+	case strings.Contains(text, "http 500") ||
+		strings.Contains(text, "http 502") ||
+		strings.Contains(text, "http 503") ||
+		strings.Contains(text, "http 504") ||
+		strings.Contains(text, "stream disconnected") ||
+		strings.Contains(text, "internal_error") ||
+		strings.Contains(text, "temporarily unavailable") ||
+		strings.Contains(text, "暂时不可用"):
+		return "temporary_upstream"
+	case strings.Contains(text, "参考图") ||
+		strings.Contains(text, "reference image"):
+		return "reference_image"
+	case strings.Contains(text, "尺寸") ||
+		strings.Contains(text, "质量") ||
+		strings.Contains(text, "格式") ||
+		strings.Contains(text, "张数") ||
+		strings.Contains(text, "invalid request") ||
+		strings.Contains(text, "bad request") ||
+		strings.Contains(text, "http 400"):
+		return "user_params"
+	case strings.Contains(text, "内容") ||
+		strings.Contains(text, "content"):
+		return "content_rejected"
+	case strings.Contains(text, "图片地址") ||
+		strings.Contains(text, "image url"):
+		return "missing_image_url"
+	default:
+		return "general"
+	}
+}
+
+func (s *Service) acquireEmailNoticeCooldown(ctx context.Context, key string, ttl time.Duration) bool {
+	if ttl <= 0 {
+		return true
+	}
+	key = "email_notice_cooldown:" + strings.TrimSpace(key)
+	if s.redis != nil {
+		ok, err := s.redis.SetNX(ctx, key, "1", ttl).Result()
+		if err == nil {
+			return ok
+		}
+		log.Printf("记录邮件通知冷却失败，将使用本地冷却: %v", err)
+	}
+
+	now := time.Now().In(s.location)
+	s.emailNoticeMu.Lock()
+	defer s.emailNoticeMu.Unlock()
+	if until, ok := s.emailNotices[key]; ok && until.After(now) {
+		return false
+	}
+	s.emailNotices[key] = now.Add(ttl)
+	return true
 }
 
 func buildImageFailureEmail(notice imageTaskFailureNotice) (string, string) {
@@ -1453,6 +1557,42 @@ func buildImageTaskFailureUserMessage(message string) string {
 	}
 	base = strings.TrimSuffix(base, "。")
 	notice := imageTaskFailureUserNotice
+	if strings.Contains(base, notice) {
+		return truncateRunes(base, 500)
+	}
+
+	maxBaseRunes := 500 - len([]rune(notice)) - 1
+	if maxBaseRunes < 0 {
+		maxBaseRunes = 0
+	}
+	base = truncateRunes(base, maxBaseRunes)
+	if base == "" {
+		return truncateRunes(notice, 500)
+	}
+	return base + "。" + notice
+}
+
+func buildImageTaskPartialSuccessUserMessage(message string, succeeded int, requested int) string {
+	if requested <= 0 {
+		requested = 1
+	}
+	if succeeded < 0 {
+		succeeded = 0
+	}
+	if succeeded > requested {
+		succeeded = requested
+	}
+	failed := requested - succeeded
+	base := strings.TrimSpace(message)
+	if base == "" {
+		base = "上游部分图片生成未完成"
+	}
+	base = strings.TrimSuffix(base, "。")
+	notice := fmt.Sprintf("已生成 %d/%d 张图片", succeeded, requested)
+	if failed > 0 {
+		notice += fmt.Sprintf("，剩余 %d 张未完成", failed)
+	}
+	notice += "；未完成部分的积分或福利次数已原路退回；失败信息已邮件通知管理员，我们会尽快处理。"
 	if strings.Contains(base, notice) {
 		return truncateRunes(base, 500)
 	}
@@ -1722,9 +1862,167 @@ func (s *Service) launchRecoveredImageTaskV2(taskID uint64, userID uint64, batch
 	return true
 }
 
+func shouldUseSingleImageProviderBatches(input imageTaskGenerationInput) bool {
+	return normalizeImageCount(input.Count) > 1
+}
+
+func (s *Service) processImageTaskInSingleImageBatchesV2(taskID uint64, userID uint64, input imageTaskGenerationInput) {
+	requestedCount := normalizeImageCount(input.Count)
+	referenceCtx, referenceCancel := context.WithTimeout(context.Background(), s.cfg.ImageStorageTimeout)
+	referenceImage := s.referenceImageForProvider(referenceCtx, input.ReferenceImageURL)
+	referenceCancel()
+
+	aggregate := provider.GenerateResult{
+		Status: model.ImageTaskStatusGenerating,
+	}
+	for index := 0; index < requestedCount; index++ {
+		imageStartedAt := time.Now()
+		submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
+		submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
+			Prompt:            input.Prompt,
+			Size:              input.Size,
+			Style:             input.Style,
+			Count:             1,
+			Quality:           input.Quality,
+			OutputFormat:      input.OutputFormat,
+			ReferenceImageURL: input.ReferenceImageURL,
+			ReferenceImage:    referenceImage,
+		})
+		submitCancel()
+		currentProviderTaskID := strings.TrimSpace(submitted.ProviderTaskID)
+		aggregate = mergeGenerateResult(aggregate, submitted)
+
+		if submitErr != nil {
+			message := providerFailureMessage(submitted, submitErr)
+			aggregate.Status = model.ImageTaskStatusFailed
+			aggregate.ErrorMessage = message
+			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+			if updateErr != nil {
+				log.Printf("多图生图任务 %d 第 %d/%d 张提交失败处理异常: %v", taskID, index+1, requestedCount, updateErr)
+				return
+			}
+			log.Printf("多图生图任务 %d 第 %d/%d 张提交失败，已按完成张数结算，余额 %d，原因: %s", taskID, index+1, requestedCount, balance, message)
+			return
+		}
+
+		if err := s.recordImageTaskDispatch(taskID, userID, aggregate, providerKeyID); err != nil {
+			message := "保存第三方任务信息失败: " + err.Error()
+			aggregate.Status = model.ImageTaskStatusFailed
+			aggregate.ErrorMessage = message
+			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+			if updateErr != nil {
+				log.Printf("多图生图任务 %d 保存第 %d/%d 张任务信息失败后退款异常: %v", taskID, index+1, requestedCount, updateErr)
+				return
+			}
+			log.Printf("多图生图任务 %d 保存第 %d/%d 张任务信息失败，已按完成张数结算，余额 %d", taskID, index+1, requestedCount, balance)
+			return
+		}
+
+		if isTemporaryProviderResultFailure(submitted) && strings.TrimSpace(submitted.ProviderTaskID) != "" {
+			submitted.Status = model.ImageTaskStatusGenerating
+		}
+
+		var result provider.GenerateResult
+		switch submitted.Status {
+		case model.ImageTaskStatusSuccess:
+			if strings.TrimSpace(submitted.ImageURL) == "" {
+				message := "第三方服务没有返回可用的图片地址"
+				aggregate.Status = model.ImageTaskStatusFailed
+				aggregate.ErrorMessage = message
+				balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+				if updateErr != nil {
+					log.Printf("多图生图任务 %d 第 %d/%d 张成功态但缺少图片地址处理异常: %v", taskID, index+1, requestedCount, updateErr)
+					return
+				}
+				log.Printf("多图生图任务 %d 第 %d/%d 张未返回图片地址，已按完成张数结算，余额 %d", taskID, index+1, requestedCount, balance)
+				return
+			}
+			result = submitted
+		case model.ImageTaskStatusFailed:
+			message := providerFailureMessage(submitted, nil)
+			aggregate.Status = model.ImageTaskStatusFailed
+			aggregate.ErrorMessage = message
+			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+			if updateErr != nil {
+				log.Printf("多图生图任务 %d 第 %d/%d 张失败处理异常: %v", taskID, index+1, requestedCount, updateErr)
+				return
+			}
+			log.Printf("多图生图任务 %d 第 %d/%d 张失败，已按完成张数结算，余额 %d，原因: %s", taskID, index+1, requestedCount, balance, message)
+			return
+		default:
+			batchID := currentProviderTaskID
+			if batchID == "" {
+				message := "第三方服务没有返回可用于恢复的批次ID"
+				aggregate.Status = model.ImageTaskStatusFailed
+				aggregate.ErrorMessage = message
+				balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+				if updateErr != nil {
+					log.Printf("多图生图任务 %d 第 %d/%d 张缺少批次ID处理异常: %v", taskID, index+1, requestedCount, updateErr)
+					return
+				}
+				log.Printf("多图生图任务 %d 第 %d/%d 张缺少批次ID，已按完成张数结算，余额 %d", taskID, index+1, requestedCount, balance)
+				return
+			}
+
+			pollCtx, pollCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
+			var pollErr error
+			result, pollErr = s.pollImageTaskV2(pollCtx, taskID, userID, 1, activeProvider, batchID, submitted)
+			pollCancel()
+			if pollErr != nil {
+				message := providerFailureMessage(result, pollErr)
+				aggregate = mergeGenerateResult(aggregate, result)
+				aggregate.Status = model.ImageTaskStatusFailed
+				aggregate.ErrorMessage = message
+				balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+				if updateErr != nil {
+					log.Printf("多图生图任务 %d 第 %d/%d 张轮询失败处理异常: %v", taskID, index+1, requestedCount, updateErr)
+					return
+				}
+				log.Printf("多图生图任务 %d 第 %d/%d 张轮询失败，已按完成张数结算，余额 %d，原因: %s", taskID, index+1, requestedCount, balance, message)
+				return
+			}
+			if result.Status != model.ImageTaskStatusSuccess || strings.TrimSpace(result.ImageURL) == "" {
+				message := providerFailureMessage(result, nil)
+				aggregate = mergeGenerateResult(aggregate, result)
+				aggregate.Status = model.ImageTaskStatusFailed
+				aggregate.ErrorMessage = message
+				balance, updateErr := s.failImageTaskAndRefund(taskID, userID, aggregate, message)
+				if updateErr != nil {
+					log.Printf("多图生图任务 %d 第 %d/%d 张未成功处理异常: %v", taskID, index+1, requestedCount, updateErr)
+					return
+				}
+				log.Printf("多图生图任务 %d 第 %d/%d 张未成功，已按完成张数结算，余额 %d，原因: %s", taskID, index+1, requestedCount, balance, message)
+				return
+			}
+		}
+
+		result.ImageElapsedSeconds = []int64{elapsedSecondsSince(imageStartedAt)}
+		aggregate = mergeGenerateResult(aggregate, result)
+		aggregate.Status = model.ImageTaskStatusGenerating
+		if err := s.persistPartialImageTask(context.Background(), taskID, userID, aggregate); err != nil {
+			log.Printf("多图生图任务 %d 保存第 %d/%d 张结果失败: %v", taskID, index+1, requestedCount, err)
+		}
+		log.Printf("多图生图任务 %d 已完成第 %d/%d 张", taskID, index+1, requestedCount)
+	}
+
+	aggregate.Status = model.ImageTaskStatusSuccess
+	balance, err := s.completeImageTask(taskID, userID, aggregate)
+	if err != nil {
+		log.Printf("多图生图任务 %d 完成写库失败: %v", taskID, err)
+		return
+	}
+	log.Printf("多图生图任务 %d 已逐张完成 %d/%d，当前余额 %d", taskID, requestedCount, requestedCount, balance)
+}
+
 func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTaskGenerationInput) {
 	defer s.releaseImageTask(taskID)
 
+	if shouldUseSingleImageProviderBatches(input) {
+		s.processImageTaskInSingleImageBatchesV2(taskID, userID, input)
+		return
+	}
+
+	imageStartedAt := time.Now()
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 	submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
 		Prompt:            input.Prompt,
@@ -1776,6 +2074,21 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 			log.Printf("异步生图任务 %d 未返回图片地址，已退款，余额 %d", taskID, balance)
 			return
 		}
+		if input.Count > 1 && !hasRequestedImageCount(submitted, input.Count) {
+			if strings.TrimSpace(submitted.ProviderTaskID) != "" {
+				submitted.Status = model.ImageTaskStatusGenerating
+				break
+			}
+			message := "第三方服务只返回了部分图片"
+			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, submitted, message)
+			if updateErr != nil {
+				log.Printf("异步生图任务 %d 部分成功处理异常: %v", taskID, updateErr)
+				return
+			}
+			log.Printf("异步生图任务 %d 只返回部分图片，已按未完成张数退款，余额 %d", taskID, balance)
+			return
+		}
+		submitted.ImageElapsedSeconds = buildCompletedImageElapsedSeconds(submitted, imageStartedAt, input.Count)
 		balance, err := s.completeImageTask(taskID, userID, submitted)
 		if err != nil {
 			log.Printf("异步生图任务 %d 成功写库失败: %v", taskID, err)
@@ -1809,7 +2122,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	pollCtx, pollCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 	defer pollCancel()
 
-	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, activeProvider, batchID, submitted)
+	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, input.Count, activeProvider, batchID, submitted)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
 			log.Printf("异步生图任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
@@ -1837,6 +2150,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 			log.Printf("异步生图任务 %d 轮询成功但未返回图片地址，已退款，余额 %d", taskID, balance)
 			return
 		}
+		result.ImageElapsedSeconds = buildCompletedImageElapsedSeconds(result, imageStartedAt, input.Count)
 		balance, err := s.completeImageTask(taskID, userID, result)
 		if err != nil {
 			log.Printf("异步生图任务 %d 轮询完成写库失败: %v", taskID, err)
@@ -1877,7 +2191,7 @@ func (s *Service) resumeImageTaskV2(taskID uint64, userID uint64, batchID string
 		ProviderTaskID: strings.TrimSpace(batchID),
 		Status:         model.ImageTaskStatusGenerating,
 	}
-	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, activeProvider, batchID, seed)
+	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, task.RequestedCount, activeProvider, batchID, seed)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
 			log.Printf("恢复任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
@@ -1924,7 +2238,7 @@ func (s *Service) resumeImageTaskV2(taskID uint64, userID uint64, batchID string
 	}
 }
 
-func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uint64, activeProvider *provider.MentaloutProvider, batchID string, seed provider.GenerateResult) (provider.GenerateResult, error) {
+func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uint64, requestedCount int, activeProvider *provider.MentaloutProvider, batchID string, seed provider.GenerateResult) (provider.GenerateResult, error) {
 	result := seed
 	if strings.TrimSpace(result.ProviderTaskID) == "" {
 		result.ProviderTaskID = strings.TrimSpace(batchID)
@@ -1933,6 +2247,7 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
 	}
+	temporaryFailures := 0
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -1956,10 +2271,14 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 		fetched, err := activeProvider.Fetch(ctx, batchID)
 		if err != nil {
 			if provider.IsTemporaryFetchError(err) {
+				temporaryFailures++
 				if result.Status == "" {
 					result.Status = model.ImageTaskStatusGenerating
 				}
 				result.ErrorMessage = truncateProviderMessage(err.Error())
+				if err := waitWithContext(ctx, temporaryProviderBackoffDelay(temporaryFailures, pollInterval)); err != nil {
+					return result, err
+				}
 				continue
 			}
 			return result, err
@@ -1970,19 +2289,30 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 		result = mergeGenerateResult(result, fetched)
 		temporaryFailed := isTemporaryProviderResultFailure(result)
 		if temporaryFailed {
+			temporaryFailures++
 			result.Status = model.ImageTaskStatusGenerating
+		} else {
+			temporaryFailures = 0
 		}
 		if err := s.persistPartialImageTask(ctx, taskID, userID, result); err != nil {
 			log.Printf("生图任务 %d 保存部分结果失败: %v", taskID, err)
 		}
 
+		if hasRequestedImageCount(result, requestedCount) {
+			result.Status = model.ImageTaskStatusSuccess
+			return result, nil
+		}
+
 		if temporaryFailed {
+			if err := waitWithContext(ctx, temporaryProviderBackoffDelay(temporaryFailures, pollInterval)); err != nil {
+				return result, err
+			}
 			continue
 		}
 
 		switch result.Status {
 		case model.ImageTaskStatusSuccess:
-			if strings.TrimSpace(result.ImageURL) != "" {
+			if requestedCount <= 1 && strings.TrimSpace(result.ImageURL) != "" {
 				return result, nil
 			}
 		case model.ImageTaskStatusFailed:
@@ -2017,6 +2347,10 @@ func (s *Service) persistPartialImageTask(ctx context.Context, taskID uint64, us
 		imageURLsJSON, _ := json.Marshal(urls)
 		updates["image_url"] = urls[0]
 		updates["image_urls"] = string(imageURLsJSON)
+		updates["image_elapsed_seconds"] = marshalImageElapsedSeconds(normalizeImageElapsedSeconds(result.ImageElapsedSeconds, len(urls)))
+		if result.Status != model.ImageTaskStatusFailed {
+			updates["error_message"] = ""
+		}
 	}
 	if strings.TrimSpace(result.RawResponse) != "" {
 		updates["provider_response"] = result.RawResponse
@@ -2047,6 +2381,46 @@ func isTemporaryProviderResultFailure(result provider.GenerateResult) bool {
 	return isProviderTemporaryServerError(message)
 }
 
+func temporaryProviderBackoffDelay(failures int, base time.Duration) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+	multiplier := failures
+	if multiplier > 5 {
+		multiplier = 5
+	}
+	delay := time.Duration(multiplier) * base
+	const maxDelay = 15 * time.Second
+	if delay > maxDelay {
+		return maxDelay
+	}
+	return delay
+}
+
+func waitWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func hasRequestedImageCount(result provider.GenerateResult, requestedCount int) bool {
+	if requestedCount <= 0 {
+		return false
+	}
+	return len(normalizeGeneratedImageURLs(result, requestedCount, "")) >= requestedCount
+}
+
 func mergeGenerateResult(base provider.GenerateResult, next provider.GenerateResult) provider.GenerateResult {
 	if strings.TrimSpace(next.ProviderTaskID) != "" {
 		base.ProviderTaskID = next.ProviderTaskID
@@ -2054,7 +2428,9 @@ func mergeGenerateResult(base provider.GenerateResult, next provider.GenerateRes
 	if strings.TrimSpace(next.ImageURL) != "" {
 		base.ImageURL = next.ImageURL
 	}
-	base.ImageURLs = mergeStringURLs(base.ImageURLs, next.ImageURLs)
+	nextURLs := mergeStringURLs(next.ImageURLs, []string{next.ImageURL})
+	base.ImageURLs = mergeStringURLs(base.ImageURLs, nextURLs)
+	base.ImageElapsedSeconds = mergeImageElapsedSeconds(base.ImageElapsedSeconds, next.ImageElapsedSeconds, len(base.ImageURLs))
 	if base.ImageURL == "" && len(base.ImageURLs) > 0 {
 		base.ImageURL = base.ImageURLs[0]
 	}
@@ -2068,6 +2444,83 @@ func mergeGenerateResult(base provider.GenerateResult, next provider.GenerateRes
 		base.RawResponse = next.RawResponse
 	}
 	return base
+}
+
+func elapsedSecondsSince(startedAt time.Time) int64 {
+	if startedAt.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(startedAt)
+	if elapsed <= 0 {
+		return 0
+	}
+	seconds := int64(elapsed / time.Second)
+	if seconds == 0 {
+		return 1
+	}
+	return seconds
+}
+
+func buildCompletedImageElapsedSeconds(result provider.GenerateResult, startedAt time.Time, requestedCount int) []int64 {
+	urlCount := len(normalizeGeneratedImageURLs(result, requestedCount, ""))
+	if urlCount <= 0 {
+		urlCount = 1
+	}
+	elapsed := elapsedSecondsSince(startedAt)
+	values := make([]int64, urlCount)
+	for i := range values {
+		values[i] = elapsed
+	}
+	return values
+}
+
+func normalizeImageElapsedSeconds(values []int64, maxCount int) []int64 {
+	if maxCount <= 0 || len(values) == 0 {
+		return nil
+	}
+	result := make([]int64, 0, maxCount)
+	for _, value := range values {
+		if len(result) >= maxCount {
+			break
+		}
+		if value < 0 {
+			value = 0
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func mergeImageElapsedSeconds(base []int64, next []int64, maxCount int) []int64 {
+	if maxCount <= 0 {
+		return nil
+	}
+	merged := make([]int64, 0, maxCount)
+	merged = append(merged, normalizeImageElapsedSeconds(base, maxCount)...)
+	remaining := maxCount - len(merged)
+	if remaining > 0 {
+		merged = append(merged, normalizeImageElapsedSeconds(next, remaining)...)
+	}
+	return merged
+}
+
+func marshalImageElapsedSeconds(values []int64) string {
+	if len(values) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func imageElapsedSecondsFromTask(task model.ImageTask) []int64 {
+	var values []int64
+	if err := json.Unmarshal([]byte(strings.TrimSpace(task.ImageElapsedSeconds)), &values); err != nil {
+		return nil
+	}
+	return normalizeImageElapsedSeconds(values, len(imageURLsFromTask(task)))
 }
 
 func (s *Service) isImageTaskActive(taskID uint64) bool {

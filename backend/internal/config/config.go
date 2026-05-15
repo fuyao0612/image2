@@ -121,7 +121,7 @@ func Load() Config {
 		EmailCodeSendWindow:          getEnvDuration("EMAIL_CODE_SEND_WINDOW", time.Hour),
 		EmailCodeMaxPerWindow:        getEnvInt("EMAIL_CODE_MAX_PER_WINDOW", 5),
 		EmailCodeMaxAttempts:         getEnvInt("EMAIL_CODE_MAX_ATTEMPTS", 5),
-		EmailDailySendLimit:          getEnvInt("EMAIL_DAILY_SEND_LIMIT", 95),
+		EmailDailySendLimit:          getEnvInt("EMAIL_DAILY_SEND_LIMIT", 80),
 		AccessTokenTTL:               24 * time.Hour,
 		EmailDelivery:                getEnv("EMAIL_DELIVERY", "debug"),
 		SMTPHost:                     getEnv("SMTP_HOST", ""),

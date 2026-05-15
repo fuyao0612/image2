@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"mime/multipart"
 	"net/http"
@@ -644,6 +645,113 @@ func TestFailImageTaskAndRefundRestoresMixedPointsAndCredits(t *testing.T) {
 	}
 }
 
+func TestFailImageTaskAndRefundKeepsPartialSuccessAndRefundsMissingPoints(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUser(t, db, 0)
+	task := createTestTask(t, db, user.ID, model.ImageTaskStatusGenerating, 4)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"requested_count": 2,
+		"image_url":       "https://cdn.example.com/results/batch-partial/one.png",
+		"image_urls":      `["https://cdn.example.com/results/batch-partial/one.png"]`,
+		"request_params":  `{"prompt":"test prompt","count":2}`,
+	}).Error; err != nil {
+		t.Fatalf("set partial task: %v", err)
+	}
+
+	balance, err := svc.failImageTaskAndRefund(task.ID, user.ID, provider.GenerateResult{
+		ProviderTaskID: "batch-partial",
+		Status:         model.ImageTaskStatusFailed,
+		ErrorMessage:   "status_code=502, stream disconnected before completion",
+	}, "上游生图服务暂时不可用")
+	if err != nil {
+		t.Fatalf("partial refund: %v", err)
+	}
+	if balance != 2 {
+		t.Fatalf("expected points balance 2 after partial refund, got %d", balance)
+	}
+
+	var reloadedTask model.ImageTask
+	if err := db.First(&reloadedTask, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected partial task to be stored as success, got %s", reloadedTask.Status)
+	}
+	if reloadedTask.CostPoints != 2 || reloadedTask.CostCredits != 0 {
+		t.Fatalf("expected only one image cost to remain, points=%d credits=%d", reloadedTask.CostPoints, reloadedTask.CostCredits)
+	}
+	urls := imageURLsFromTask(reloadedTask)
+	if len(urls) != 1 || urls[0] != "https://cdn.example.com/results/batch-partial/one.png" {
+		t.Fatalf("expected one successful image url, got %#v", urls)
+	}
+	for _, part := range []string{"已生成 1/2 张图片", "未完成部分", "已邮件通知管理员"} {
+		if !strings.Contains(reloadedTask.ErrorMessage, part) {
+			t.Fatalf("expected partial message to contain %q, got %q", part, reloadedTask.ErrorMessage)
+		}
+	}
+
+	var reloadedUser model.User
+	if err := db.First(&reloadedUser, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if reloadedUser.PointsBalance != 2 {
+		t.Fatalf("expected user to get one image worth of points back, got %d", reloadedUser.PointsBalance)
+	}
+
+	var pointRefund model.PointsLog
+	if err := db.Where("user_id = ? AND change_type = ? AND biz_id = ?", user.ID, model.PointsChangeTypeRefund, strconv.FormatUint(task.ID, 10)).First(&pointRefund).Error; err != nil {
+		t.Fatalf("load point refund log: %v", err)
+	}
+	if pointRefund.Delta != 2 {
+		t.Fatalf("expected refund delta 2, got %d", pointRefund.Delta)
+	}
+}
+
+func TestFailImageTaskAndRefundKeepsPartialSuccessAndRefundsMissingCredits(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 2, 0)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"requested_count": 2,
+		"image_url":       "https://cdn.example.com/results/batch-partial/one.png",
+		"image_urls":      `["https://cdn.example.com/results/batch-partial/one.png"]`,
+		"request_params":  `{"prompt":"test prompt","count":2}`,
+	}).Error; err != nil {
+		t.Fatalf("set partial credit task: %v", err)
+	}
+
+	balance, err := svc.failImageTaskAndRefund(task.ID, user.ID, provider.GenerateResult{
+		ProviderTaskID: "batch-partial",
+		Status:         model.ImageTaskStatusFailed,
+		ErrorMessage:   "status_code=502",
+	}, "上游生图服务暂时不可用")
+	if err != nil {
+		t.Fatalf("partial credit refund: %v", err)
+	}
+	if balance != 9 {
+		t.Fatalf("expected credits balance 9 after one credit refund, got %d", balance)
+	}
+
+	var reloadedTask model.ImageTask
+	if err := db.First(&reloadedTask, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected partial credit task to be stored as success, got %s", reloadedTask.Status)
+	}
+	if reloadedTask.CostCredits != 1 || reloadedTask.FreeCreditsCost != 1 || reloadedTask.PaidCreditsCost != 0 {
+		t.Fatalf("expected one credit cost to remain, credits=%d free=%d paid=%d", reloadedTask.CostCredits, reloadedTask.FreeCreditsCost, reloadedTask.PaidCreditsCost)
+	}
+
+	var reloadedUser model.User
+	if err := db.First(&reloadedUser, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if reloadedUser.FreeCredits != 9 {
+		t.Fatalf("expected user to get one free credit back, got %d", reloadedUser.FreeCredits)
+	}
+}
+
 func TestFailedTaskCannotBeCompletedLater(t *testing.T) {
 	svc, db := newTestService(t)
 	user := createTestUserWithCredits(t, db, 0, 8, 0)
@@ -739,7 +847,7 @@ func TestPollImageTaskV2ContinuesAfterTemporaryFailedStatus(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	result, err := svc.pollImageTaskV2(ctx, task.ID, user.ID, activeProvider, "batch-temp", provider.GenerateResult{
+	result, err := svc.pollImageTaskV2(ctx, task.ID, user.ID, 1, activeProvider, "batch-temp", provider.GenerateResult{
 		ProviderTaskID: "batch-temp",
 		Status:         model.ImageTaskStatusGenerating,
 	})
@@ -763,6 +871,138 @@ func TestPollImageTaskV2ContinuesAfterTemporaryFailedStatus(t *testing.T) {
 	urls := imageURLsFromTask(reloaded)
 	if len(urls) != 1 || urls[0] != server.URL+"/results/batch-temp/final.png" {
 		t.Fatalf("expected persisted partial url, got %#v", urls)
+	}
+}
+
+func TestPollImageTaskV2WaitsForRequestedImageCount(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageProviderPollInterval = time.Millisecond
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 2, 0)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Update("requested_count", 2).Error; err != nil {
+		t.Fatalf("set requested count: %v", err)
+	}
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/batches/batch-two" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			_, _ = w.Write([]byte(`{"id":"batch-two","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-two/one.png"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"batch-two","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-two/one.png"},{"status":"succeeded","imageUrl":"/results/batch-two/two.png"}]}`))
+	}))
+	defer server.Close()
+
+	activeProvider := provider.NewMentaloutProvider(provider.MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+		PollInterval:       time.Millisecond,
+		Timeout:            time.Second,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := svc.pollImageTaskV2(ctx, task.ID, user.ID, 2, activeProvider, "batch-two", provider.GenerateResult{
+		ProviderTaskID: "batch-two",
+		Status:         model.ImageTaskStatusGenerating,
+	})
+	if err != nil {
+		t.Fatalf("poll image task: %v", err)
+	}
+	if result.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected success after both images, got %s", result.Status)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Fatalf("expected polling to wait for second image, got %d attempts", attempts)
+	}
+	urls := normalizeGeneratedImageURLs(result, 2, "")
+	if len(urls) != 2 {
+		t.Fatalf("expected two result urls, got %#v", urls)
+	}
+}
+
+func TestProcessImageTaskV2SubmitsMultipleImagesAsSingleImageBatches(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageProviderPollInterval = time.Millisecond
+	svc.cfg.ImageProviderTimeout = time.Second
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 2, 0)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"requested_count": 2,
+		"request_params":  `{"prompt":"test prompt","count":2}`,
+	}).Error; err != nil {
+		t.Fatalf("set task requested count: %v", err)
+	}
+
+	var postAttempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/batches":
+			var payload struct {
+				Count int `json:"count"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode submit payload: %v", err)
+			}
+			if payload.Count != 1 {
+				t.Fatalf("expected each upstream batch to request 1 image, got %d", payload.Count)
+			}
+			attempt := atomic.AddInt32(&postAttempts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-serial-` + strconv.FormatInt(int64(attempt), 10) + `","status":"running"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/batches/batch-serial-1":
+			_, _ = w.Write([]byte(`{"id":"batch-serial-1","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-serial-1/one.png"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/batches/batch-serial-2":
+			_, _ = w.Write([]byte(`{"id":"batch-serial-2","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-serial-2/two.png"}]}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	key := model.ImageProviderKey{
+		Name:              "serial test key",
+		Provider:          "mentalout",
+		BatchServiceURL:   server.URL,
+		APIBaseURL:        "https://chunfeng.mentalout.top",
+		APIKey:            "test-key",
+		Status:            model.ImageProviderKeyStatusActive,
+		IsUsing:           true,
+		Priority:          1,
+		AutoSwitchEnabled: true,
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("create provider key: %v", err)
+	}
+
+	svc.processImageTaskInSingleImageBatchesV2(task.ID, user.ID, imageTaskGenerationInput{
+		Prompt:  "test prompt",
+		Size:    "1024x1024",
+		Count:   2,
+		Quality: "auto",
+	})
+
+	if atomic.LoadInt32(&postAttempts) != 2 {
+		t.Fatalf("expected two single-image submit attempts, got %d", postAttempts)
+	}
+	var reloaded model.ImageTask
+	if err := db.First(&reloaded, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected task success, got %s", reloaded.Status)
+	}
+	urls := imageURLsFromTask(reloaded)
+	if len(urls) != 2 {
+		t.Fatalf("expected two generated images, got %#v; image_url=%q image_urls=%q response=%q", urls, reloaded.ImageURL, reloaded.ImageURLs, reloaded.ProviderResponse)
+	}
+	if urls[0] != server.URL+"/results/batch-serial-1/one.png" || urls[1] != server.URL+"/results/batch-serial-2/two.png" {
+		t.Fatalf("unexpected generated urls: %#v", urls)
 	}
 }
 
@@ -834,6 +1074,21 @@ func TestNormalizeGeneratedImageURLsPrefersOriginalOverThumbnail(t *testing.T) {
 	}
 	if urls[1] != "https://cdn.example.com/results/batch-abc123/two.png" {
 		t.Fatalf("expected second original url, got %#v", urls)
+	}
+}
+
+func TestImageURLsFromTaskDedupesThumbnailCopies(t *testing.T) {
+	task := model.ImageTask{
+		ImageURL:  "https://cdn.example.com/results/batch-abc123/thumbs/one.jpg",
+		ImageURLs: `["https://cdn.example.com/results/batch-abc123/one.png","https://cdn.example.com/results/batch-abc123/thumbs/one.jpg"]`,
+	}
+
+	urls := imageURLsFromTask(task)
+	if len(urls) != 1 {
+		t.Fatalf("expected thumbnail duplicate to be removed, got %#v", urls)
+	}
+	if urls[0] != "https://cdn.example.com/results/batch-abc123/one.png" {
+		t.Fatalf("expected original image url, got %#v", urls)
 	}
 }
 
@@ -1254,6 +1509,75 @@ func TestAdminUseProviderKeyMarksSingleCurrentKey(t *testing.T) {
 	}
 	if len(activeKeys) == 0 || strconv.FormatUint(activeKeys[0].ID, 10) != second.ID {
 		t.Fatalf("expected using key first in provider selection, got %+v", activeKeys)
+	}
+}
+
+func TestSubmitImageTaskWithProviderPoolStopsFailoverOnTemporarySubmitError(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var firstPosts int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&firstPosts, 1)
+			http.Error(w, "status_code=502, stream disconnected before completion", http.StatusBadGateway)
+			return
+		}
+		t.Fatalf("unexpected first server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer firstServer.Close()
+
+	var secondPosts int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&secondPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-second","status":"running"}`))
+			return
+		}
+		t.Fatalf("unexpected second server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer secondServer.Close()
+
+	keys := []model.ImageProviderKey{
+		{
+			Name:              "temporary failing key",
+			Provider:          "mentalout",
+			BatchServiceURL:   firstServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-first",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          1,
+			AutoSwitchEnabled: true,
+		},
+		{
+			Name:              "second key",
+			Provider:          "mentalout",
+			BatchServiceURL:   secondServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-second",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          2,
+			AutoSwitchEnabled: true,
+		},
+	}
+	if err := db.Create(&keys).Error; err != nil {
+		t.Fatalf("create provider keys: %v", err)
+	}
+
+	_, _, _, err := svc.submitImageTaskWithProviderPool(context.Background(), task.ID, user.ID, provider.GenerateRequest{
+		Prompt: "test prompt",
+		Size:   "1024x1024",
+		Count:  1,
+	})
+	if err == nil {
+		t.Fatalf("expected temporary submit error")
+	}
+	if atomic.LoadInt32(&firstPosts) != 1 {
+		t.Fatalf("expected first key to be tried once, got %d", firstPosts)
+	}
+	if atomic.LoadInt32(&secondPosts) != 0 {
+		t.Fatalf("temporary submit error should not fail over to second key, got %d posts", secondPosts)
 	}
 }
 

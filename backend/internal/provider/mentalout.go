@@ -53,12 +53,13 @@ type ReferenceImage struct {
 
 // GenerateResult 是第三方图片服务返回的统一结果。
 type GenerateResult struct {
-	ProviderTaskID string
-	Status         model.ImageTaskStatus
-	ImageURL       string
-	ImageURLs      []string
-	ErrorMessage   string
-	RawResponse    string
+	ProviderTaskID      string
+	Status              model.ImageTaskStatus
+	ImageURL            string
+	ImageURLs           []string
+	ImageElapsedSeconds []int64
+	ErrorMessage        string
+	RawResponse         string
 }
 
 // MentaloutConfig 保存第三方图片服务配置。
@@ -433,10 +434,6 @@ func (p *MentaloutProvider) doJSONRequest(ctx context.Context, method string, ta
 	}
 
 	attempts := 1
-	if method == http.MethodGet {
-		attempts = 3
-	}
-
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		body, status, err := p.doJSONRequestOnce(ctx, method, targetURL, raw)

@@ -325,6 +325,9 @@ func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID ui
 		lastErr = err
 		message := providerFailureMessage(result, err)
 		s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
+		if shouldStopProviderSubmitFailover(result, err) {
+			return result, currentProvider, key.ID, err
+		}
 	}
 
 	if s.imageProvider != nil && s.imageProvider.Configured() {
@@ -339,6 +342,18 @@ func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID ui
 		return lastResult, nil, 0, lastErr
 	}
 	return provider.GenerateResult{}, nil, 0, ErrProviderNotConfigured
+}
+
+func shouldStopProviderSubmitFailover(result provider.GenerateResult, err error) bool {
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	raw := strings.ToLower(strings.TrimSpace(result.ErrorMessage + " " + result.RawResponse + " " + errText))
+	if raw == "" {
+		return false
+	}
+	return isProviderTemporaryServerError(raw) || isProviderNetworkError(raw) || isProviderTimeoutError(raw)
 }
 
 func isProviderBalanceError(message string) bool {

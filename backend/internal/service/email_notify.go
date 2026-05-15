@@ -121,6 +121,9 @@ func (s *Service) buildUserImageTaskEmail(task model.ImageTask, success bool) (s
 		} else {
 			b.WriteString(" 请登录平台查看完整任务。")
 		}
+		if note := strings.TrimSpace(task.ErrorMessage); note != "" {
+			fmt.Fprintf(&b, " 任务备注：%s", note)
+		}
 
 		return "image2 生图任务已完成：" + taskID, mailer.TaskNotification{
 			TaskID:     taskID,
