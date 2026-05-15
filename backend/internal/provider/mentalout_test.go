@@ -57,6 +57,19 @@ func TestExtractGenerateResultSkipsAPIEndpointURLs(t *testing.T) {
 	}
 }
 
+func TestExtractGenerateResultSkipsImagesEditsEndpoint(t *testing.T) {
+	body := []byte(`{"status":"success","url":"https://image.mentalout.top/images/edits","message":"ok"}`)
+
+	result := extractGenerateResult(body, "https://image.mentalout.top", "https://chunfeng.mentalout.top")
+
+	if result.ImageURL != "" {
+		t.Fatalf("expected images edits endpoint to be skipped, got %q", result.ImageURL)
+	}
+	if len(result.ImageURLs) != 0 {
+		t.Fatalf("expected no image urls, got %#v", result.ImageURLs)
+	}
+}
+
 func TestExtractGenerateResultFromSucceededResponseWithRelativeImageURL(t *testing.T) {
 	body := []byte(`{"id":"batch-abc123","status":"succeeded","tasks":[{"status":"succeeded","imageUrl":"/results/batch-abc123/task-result.png"}]}`)
 

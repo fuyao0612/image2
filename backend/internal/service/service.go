@@ -1045,6 +1045,9 @@ func isUsableTaskImageURL(rawURL string) bool {
 	if candidate == "." {
 		return false
 	}
+	if isKnownTaskImageAPIEndpoint(candidate) {
+		return false
+	}
 
 	if isLikelyTaskImageFile(candidate) {
 		return true
@@ -1059,6 +1062,17 @@ func isUsableTaskImageURL(rawURL string) bool {
 func isLikelyTaskImageFile(value string) bool {
 	switch strings.ToLower(path.Ext(strings.TrimSpace(value))) {
 	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif":
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownTaskImageAPIEndpoint(value string) bool {
+	candidate := path.Clean("/" + strings.TrimLeft(strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")), "/"))
+	switch candidate {
+	case "/images/edits", "/images/generations", "/images/variations",
+		"/v1/images/edits", "/v1/images/generations", "/v1/images/variations":
 		return true
 	default:
 		return false
@@ -1417,10 +1431,15 @@ func isProviderTemporaryServerError(lower string) bool {
 		strings.Contains(lower, "http 502") ||
 		strings.Contains(lower, "http 503") ||
 		strings.Contains(lower, "http 504") ||
+		strings.Contains(lower, "status_code=500") ||
+		strings.Contains(lower, "status_code=502") ||
+		strings.Contains(lower, "status_code=503") ||
+		strings.Contains(lower, "status_code=504") ||
 		strings.Contains(lower, "internal_server_error") ||
 		strings.Contains(lower, "internal_error") ||
 		strings.Contains(lower, "server_error") ||
 		strings.Contains(lower, "stream error") ||
+		strings.Contains(lower, "stream disconnected") ||
 		strings.Contains(lower, "bad gateway") ||
 		strings.Contains(lower, "service unavailable")
 }
@@ -1741,6 +1760,10 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 		return
 	}
 
+	if isTemporaryProviderResultFailure(submitted) && strings.TrimSpace(submitted.ProviderTaskID) != "" {
+		submitted.Status = model.ImageTaskStatusGenerating
+	}
+
 	switch submitted.Status {
 	case model.ImageTaskStatusSuccess:
 		if strings.TrimSpace(submitted.ImageURL) == "" {
@@ -1945,8 +1968,16 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 			fetched.ProviderTaskID = batchID
 		}
 		result = mergeGenerateResult(result, fetched)
+		temporaryFailed := isTemporaryProviderResultFailure(result)
+		if temporaryFailed {
+			result.Status = model.ImageTaskStatusGenerating
+		}
 		if err := s.persistPartialImageTask(ctx, taskID, userID, result); err != nil {
 			log.Printf("生图任务 %d 保存部分结果失败: %v", taskID, err)
+		}
+
+		if temporaryFailed {
+			continue
 		}
 
 		switch result.Status {
@@ -1993,7 +2024,7 @@ func (s *Service) persistPartialImageTask(ctx context.Context, taskID uint64, us
 	if providerTaskID := strings.TrimSpace(result.ProviderTaskID); providerTaskID != "" {
 		updates["provider_task_id"] = providerTaskID
 	}
-	if strings.TrimSpace(result.ErrorMessage) != "" && result.Status != model.ImageTaskStatusSuccess {
+	if strings.TrimSpace(result.ErrorMessage) != "" && result.Status == model.ImageTaskStatusFailed {
 		updates["error_message"] = truncateProviderMessage(result.ErrorMessage)
 	}
 	if len(updates) == 0 {
@@ -2003,6 +2034,17 @@ func (s *Service) persistPartialImageTask(ctx context.Context, taskID uint64, us
 	return s.db.WithContext(ctx).Model(&model.ImageTask{}).
 		Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
 		Updates(updates).Error
+}
+
+func isTemporaryProviderResultFailure(result provider.GenerateResult) bool {
+	if result.Status != model.ImageTaskStatusFailed {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(result.ErrorMessage + " " + result.RawResponse))
+	if message == "" {
+		return false
+	}
+	return isProviderTemporaryServerError(message)
 }
 
 func mergeGenerateResult(base provider.GenerateResult, next provider.GenerateResult) provider.GenerateResult {

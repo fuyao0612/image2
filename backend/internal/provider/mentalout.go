@@ -962,11 +962,13 @@ func findAnyURL(rawText string, batchServiceURL string, providerAPIBaseURL strin
 }
 
 func findRelativeImageURL(rawText string, batchServiceURL string) string {
-	candidate := relativeImagePattern.FindString(rawText)
-	if candidate == "" {
-		return ""
+	candidates := relativeImagePattern.FindAllString(rawText, -1)
+	for _, candidate := range candidates {
+		if isRelativeImageURL(candidate) {
+			return absolutizeImageURL(candidate, batchServiceURL)
+		}
 	}
-	return absolutizeImageURL(candidate, batchServiceURL)
+	return ""
 }
 
 func findURLCandidate(rawText string) string {
@@ -987,7 +989,7 @@ func isRelativeImageURL(value string) bool {
 	if trimmed == "" {
 		return false
 	}
-	return relativeImagePattern.MatchString(trimmed)
+	return relativeImagePattern.MatchString(trimmed) && !isKnownImageAPIEndpoint(trimmed)
 }
 
 func absolutizeImageURL(value string, batchServiceURL string) string {
@@ -1080,7 +1082,7 @@ func isTrivialMessage(value string) bool {
 
 func isLikelyGeneratedImageURL(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || isKnownServiceURL(trimmed) || isLikelyGeneratedThumbnailURL(trimmed) {
+	if trimmed == "" || isKnownServiceURL(trimmed) || isKnownImageAPIEndpoint(trimmed) || isLikelyGeneratedThumbnailURL(trimmed) {
 		return false
 	}
 
@@ -1105,6 +1107,25 @@ func isLikelyGeneratedImageURL(value string) bool {
 		strings.HasPrefix(candidate, "/images/") ||
 		strings.HasPrefix(candidate, "/uploads/") ||
 		strings.HasPrefix(candidate, "/outputs/")
+}
+
+func isKnownImageAPIEndpoint(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	candidate := trimmed
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
+		candidate = parsed.Path
+	}
+	candidate = path.Clean("/" + strings.TrimLeft(strings.ToLower(strings.ReplaceAll(candidate, "\\", "/")), "/"))
+	switch candidate {
+	case "/images/edits", "/images/generations", "/images/variations",
+		"/v1/images/edits", "/v1/images/generations", "/v1/images/variations":
+		return true
+	default:
+		return false
+	}
 }
 
 func isLikelyGeneratedThumbnailURL(value string) bool {

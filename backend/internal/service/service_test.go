@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -707,6 +709,63 @@ func TestPersistPartialImageTaskKeepsGeneratingStatus(t *testing.T) {
 	}
 }
 
+func TestPollImageTaskV2ContinuesAfterTemporaryFailedStatus(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageProviderPollInterval = time.Millisecond
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 2, 0)
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/batches/batch-temp" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			_, _ = w.Write([]byte(`{"id":"batch-temp","status":"failed","errorMessage":"status_code=502, stream disconnected before completion"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"batch-temp","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-temp/final.png"}]}`))
+	}))
+	defer server.Close()
+
+	activeProvider := provider.NewMentaloutProvider(provider.MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+		PollInterval:       time.Millisecond,
+		Timeout:            time.Second,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := svc.pollImageTaskV2(ctx, task.ID, user.ID, activeProvider, "batch-temp", provider.GenerateResult{
+		ProviderTaskID: "batch-temp",
+		Status:         model.ImageTaskStatusGenerating,
+	})
+	if err != nil {
+		t.Fatalf("poll image task: %v", err)
+	}
+	if result.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected success after temporary failure, got %s", result.Status)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Fatalf("expected 2 fetch attempts, got %d", attempts)
+	}
+
+	var reloaded model.ImageTask
+	if err := db.First(&reloaded, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.Status != model.ImageTaskStatusGenerating {
+		t.Fatalf("partial polling should keep task generating before completion, got %s", reloaded.Status)
+	}
+	urls := imageURLsFromTask(reloaded)
+	if len(urls) != 1 || urls[0] != server.URL+"/results/batch-temp/final.png" {
+		t.Fatalf("expected persisted partial url, got %#v", urls)
+	}
+}
+
 func TestSuccessfulTaskIsNotRefundedLater(t *testing.T) {
 	svc, db := newTestService(t)
 	user := createTestUserWithCredits(t, db, 0, 8, 0)
@@ -744,8 +803,8 @@ func TestSuccessfulTaskIsNotRefundedLater(t *testing.T) {
 
 func TestImageURLsFromTaskSkipsAPIEndpoints(t *testing.T) {
 	task := model.ImageTask{
-		ImageURL:  "http://chunfeng.mentalout.top/v1/images/edits",
-		ImageURLs: `["http://chunfeng.mentalout.top/v1/images/edits","https://cdn.example.com/results/batch-abc123/final.png"]`,
+		ImageURL:  "https://image.mentalout.top/images/edits",
+		ImageURLs: `["http://chunfeng.mentalout.top/v1/images/edits","https://image.mentalout.top/images/edits","https://cdn.example.com/results/batch-abc123/final.png"]`,
 	}
 
 	urls := imageURLsFromTask(task)
