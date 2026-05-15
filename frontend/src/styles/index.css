@@ -266,14 +266,65 @@ input[type="number"] {
 }
 
 @media (max-width: 1023px) {
+  .app-shell {
+    grid-template-rows: 64px minmax(0, 1fr);
+  }
+
   .user-glass-shell .app-shell__topbar {
-    min-height: 88px;
-    padding-top: 6px !important;
-    padding-bottom: 6px !important;
+    min-height: 64px;
+    padding-top: 7px !important;
+    padding-bottom: 7px !important;
   }
 
   .user-glass-shell .app-shell__main {
-    padding-top: 12px !important;
+    padding-top: 8px !important;
+  }
+
+  .user-glass-shell .app-mobile-topbar {
+    width: 100%;
+    gap: 6px !important;
+  }
+
+  .user-glass-shell .app-user-menu-name {
+    display: none !important;
+  }
+
+  .user-glass-shell .app-mobile-user-slot {
+    width: 50px;
+  }
+
+  .user-glass-shell .app-mobile-user-slot .relative > button {
+    height: 36px !important;
+    max-width: none !important;
+    padding-left: 7px !important;
+    padding-right: 7px !important;
+    border-radius: 999px !important;
+  }
+
+  .user-glass-shell .app-mobile-user-slot .relative > button > span:first-child {
+    height: 24px !important;
+    width: 24px !important;
+    font-size: 12px !important;
+  }
+
+  .user-glass-shell .app-mobile-user-slot .relative > button svg {
+    height: 13px !important;
+    width: 13px !important;
+  }
+
+  .user-glass-shell .app-mobile-topbar nav {
+    align-items: center;
+  }
+
+  .user-glass-shell .app-mobile-nav-btn {
+    height: 50px;
+    border-radius: 12px;
+    font-size: 10.5px;
+  }
+
+  .user-glass-shell .app-mobile-nav-btn svg {
+    height: 17px;
+    width: 17px;
   }
 }
 

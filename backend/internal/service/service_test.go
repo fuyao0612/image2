@@ -33,7 +33,7 @@ func newTestService(t *testing.T) (*Service, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.PointsLog{}, &model.CreditLog{}, &model.ImageTask{}, &model.ImageProviderKey{}, &model.BillingPackage{}, &model.RedeemCode{}, &model.ContentAuditLog{}, &model.AdminActionLog{}, &model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.PointsLog{}, &model.CreditLog{}, &model.ImageTask{}, &model.ImageProviderKey{}, &model.BillingPackage{}, &model.RedeemCode{}, &model.ContentAuditLog{}, &model.AdminActionLog{}, &model.SystemSetting{}, &model.Invitation{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -1778,6 +1778,64 @@ func TestRedeemCodeRejectsExpiredCode(t *testing.T) {
 	}
 	if unchanged.Status != model.RedeemCodeStatusActive || unchanged.UsedBy != 0 || unchanged.UsedAt != nil {
 		t.Fatalf("expired code should not be consumed: %+v", unchanged)
+	}
+}
+
+func TestInviteRewardGrantedAfterInviteeFirstRedeemCode(t *testing.T) {
+	svc, db := newTestService(t)
+	inviter := createTestUser(t, db, 5)
+	invitee := createTestUser(t, db, 0)
+	inviteCode := "INVITE01"
+
+	rewardPoints := int64(7)
+	rewardCredits := int64(2)
+	if err := upsertSystemSetting(db, systemSettingKeyInviteRewardPoints, strconv.FormatInt(rewardPoints, 10), ""); err != nil {
+		t.Fatalf("set invite reward points: %v", err)
+	}
+	if err := upsertSystemSetting(db, systemSettingKeyInviteRewardCredits, strconv.FormatInt(rewardCredits, 10), ""); err != nil {
+		t.Fatalf("set invite reward credits: %v", err)
+	}
+	if err := svc.reloadSystemSettings(db); err != nil {
+		t.Fatalf("reload settings: %v", err)
+	}
+	if err := svc.createPendingInvitation(db, inviter.ID, invitee.ID, inviteCode); err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	firstCode := model.RedeemCode{Code: "INVITEREDEEM001", PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	secondCode := model.RedeemCode{Code: "INVITEREDEEM002", PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	if err := db.Create(&[]model.RedeemCode{firstCode, secondCode}).Error; err != nil {
+		t.Fatalf("create redeem codes: %v", err)
+	}
+
+	var before model.User
+	if err := db.First(&before, inviter.ID).Error; err != nil {
+		t.Fatalf("load inviter before redeem: %v", err)
+	}
+	if before.PointsBalance != 5 || before.FreeCredits != 0 {
+		t.Fatalf("invite reward should not be granted before redeem: %+v", before)
+	}
+
+	if _, err := svc.RedeemCode(context.Background(), invitee.ID, dto.RedeemCodeRequest{Code: firstCode.Code}); err != nil {
+		t.Fatalf("first redeem: %v", err)
+	}
+	var afterFirst model.User
+	if err := db.First(&afterFirst, inviter.ID).Error; err != nil {
+		t.Fatalf("load inviter after first redeem: %v", err)
+	}
+	if afterFirst.PointsBalance != 5+rewardPoints || afterFirst.FreeCredits != rewardCredits {
+		t.Fatalf("expected invite reward after first redeem, got %+v", afterFirst)
+	}
+
+	if _, err := svc.RedeemCode(context.Background(), invitee.ID, dto.RedeemCodeRequest{Code: secondCode.Code}); err != nil {
+		t.Fatalf("second redeem: %v", err)
+	}
+	var afterSecond model.User
+	if err := db.First(&afterSecond, inviter.ID).Error; err != nil {
+		t.Fatalf("load inviter after second redeem: %v", err)
+	}
+	if afterSecond.PointsBalance != afterFirst.PointsBalance || afterSecond.FreeCredits != afterFirst.FreeCredits {
+		t.Fatalf("invite reward should only be granted once, first=%+v second=%+v", afterFirst, afterSecond)
 	}
 }
 

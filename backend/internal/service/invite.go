@@ -12,6 +12,7 @@ import (
 	"image2/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const inviteCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -27,7 +28,7 @@ func maxSetting(value int64) int64 {
 	return value
 }
 
-// Register creates a user, applies the configured signup gift, and grants invite rewards.
+// Register creates a user, applies the configured signup gift, and records invite relationships.
 func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.AuthResponse, error) {
 	if !s.cfg.RegistrationEnabled {
 		return dto.AuthResponse{}, ErrRegistrationDisabled
@@ -49,9 +50,6 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 	}
 
 	registrationGiftCredits := maxSetting(s.settingInt64(systemSettingKeyRegistrationGiftCredits, 3))
-	inviteRewardPoints := maxSetting(s.settingInt64(systemSettingKeyInviteRewardPoints, 0))
-	inviteRewardCredits := maxSetting(s.settingInt64(systemSettingKeyInviteRewardCredits, 1))
-
 	var created model.User
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var exists int64
@@ -130,7 +128,7 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 		}
 
 		if inviter != nil {
-			if err := s.grantInviteReward(tx, inviter, user, inviteCode, inviteRewardPoints, inviteRewardCredits); err != nil {
+			if err := s.createPendingInvitation(tx, inviter.ID, user.ID, inviteCode); err != nil {
 				return err
 			}
 		}
@@ -142,6 +140,74 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 	}
 
 	return s.authResponse(created)
+}
+
+func (s *Service) createPendingInvitation(tx *gorm.DB, inviterUserID uint64, inviteeUserID uint64, inviteCode string) error {
+	return tx.Create(&model.Invitation{
+		InviterUserID: inviterUserID,
+		InviteeUserID: inviteeUserID,
+		InviteCode:    inviteCode,
+		RewardPoints:  0,
+		RewardCredits: 0,
+	}).Error
+}
+
+func (s *Service) grantInviteRewardAfterFirstRedeem(tx *gorm.DB, inviteeUserID uint64) error {
+	var invitation model.Invitation
+	query := tx.Where("invitee_user_id = ?", inviteeUserID)
+	if tx.Dialector.Name() == "mysql" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := query.First(&invitation).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if invitation.RewardPoints > 0 || invitation.RewardCredits > 0 {
+		return nil
+	}
+
+	rewardPoints := maxSetting(s.settingInt64(systemSettingKeyInviteRewardPoints, 0))
+	rewardCredits := maxSetting(s.settingInt64(systemSettingKeyInviteRewardCredits, 1))
+	if rewardPoints <= 0 && rewardCredits <= 0 {
+		return nil
+	}
+
+	inviter, err := s.lockUser(tx, invitation.InviterUserID)
+	if err != nil {
+		return err
+	}
+	bizID := strconv.FormatUint(invitation.ID, 10)
+
+	if rewardPoints > 0 {
+		before := inviter.PointsBalance
+		after := before + rewardPoints
+		if err := tx.Model(&model.User{}).Where("id = ?", inviter.ID).Update("points_balance", after).Error; err != nil {
+			return err
+		}
+		if err := s.recordPointsLog(tx, inviter.ID, model.PointsChangeTypeInvite, rewardPoints, before, after, "invite", bizID, "邀请好友首次兑换奖励"); err != nil {
+			return err
+		}
+		inviter.PointsBalance = after
+	}
+
+	if rewardCredits > 0 {
+		before := creditBalance{Free: inviter.FreeCredits, Paid: inviter.PaidCredits}
+		after := creditBalance{Free: before.Free + rewardCredits, Paid: before.Paid}
+		if err := tx.Model(&model.User{}).Where("id = ?", inviter.ID).Update("free_credits", after.Free).Error; err != nil {
+			return err
+		}
+		if err := s.recordCreditLog(tx, inviter.ID, model.CreditChangeTypeInvite, rewardCredits, 0, before, after, "invite", bizID, "邀请好友首次兑换奖励"); err != nil {
+			return err
+		}
+		inviter.FreeCredits = after.Free
+	}
+
+	return tx.Model(&model.Invitation{}).Where("id = ?", invitation.ID).Updates(map[string]any{
+		"reward_points":  rewardPoints,
+		"reward_credits": rewardCredits,
+	}).Error
 }
 
 func (s *Service) grantInviteReward(tx *gorm.DB, inviter *model.User, invitee model.User, inviteCode string, rewardPoints, rewardCredits int64) error {

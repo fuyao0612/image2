@@ -3860,7 +3860,7 @@ function AppTopBar({
               <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 text-xs font-semibold text-white">
                 {currentUser?.username?.slice(0, 1).toUpperCase() || 'U'}
               </span>
-              <span className="truncate text-sm font-medium text-slate-200">
+              <span className="app-user-menu-name truncate text-sm font-medium text-slate-200">
                 {currentUser ? currentUser.username : '已登录'}
               </span>
               <ChevronDown
@@ -3984,11 +3984,8 @@ function AppTopBar({
         </div>
       </div>
 
-      <div className="app-mobile-topbar flex flex-col gap-1.5 lg:hidden">
-        <div className="flex h-9 items-center justify-end">
-          {renderUserMenu(mobileUserMenuRef)}
-        </div>
-        <nav className="grid grid-cols-5 gap-1">
+      <div className="app-mobile-topbar grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 lg:hidden">
+        <nav className="grid min-w-0 grid-cols-5 gap-1">
           <button type="button" onClick={onOpenSidebar} className="app-mobile-nav-btn" aria-label="展开导航">
             <Menu className="h-4 w-4" />
             <span>导航</span>
@@ -4015,6 +4012,9 @@ function AppTopBar({
             ) : null}
           </button>
         </nav>
+        <div className="app-mobile-user-slot flex items-center justify-end">
+          {renderUserMenu(mobileUserMenuRef)}
+        </div>
       </div>
     </header>
   )

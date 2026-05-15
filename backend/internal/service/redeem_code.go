@@ -81,6 +81,9 @@ func (s *Service) RedeemCode(ctx context.Context, userID uint64, req dto.RedeemC
 		}).Error; err != nil {
 			return err
 		}
+		if err := s.grantInviteRewardAfterFirstRedeem(tx, userID); err != nil {
+			return err
+		}
 
 		resp = dto.RedeemCodeResponse{
 			Code:                code.Code,
