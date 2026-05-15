@@ -67,6 +67,8 @@ type Service struct {
 	activeTasks   map[uint64]struct{}
 }
 
+const imageTaskSubmittingMarker = "__image_task_submitting__"
+
 type imageTaskFailureNotice struct {
 	TaskID         uint64
 	UserID         uint64
@@ -2118,6 +2120,10 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	}
 
 	imageStartedAt := time.Now()
+	if !s.claimImageTaskSubmitInDB(context.Background(), taskID, userID) {
+		log.Printf("寮傛鐢熷浘浠诲姟 %d 宸叉湁鎻愪氦涓爣璁帮紝璺宠繃閲嶅鎻愪氦", taskID)
+		return
+	}
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 	submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
 		Prompt:             input.Prompt,
@@ -2617,6 +2623,25 @@ func imageElapsedSecondsFromTask(task model.ImageTask) []int64 {
 		return nil
 	}
 	return normalizeImageElapsedSeconds(values, len(imageURLsFromTask(task)))
+}
+
+func (s *Service) claimImageTaskSubmitInDB(ctx context.Context, taskID uint64, userID uint64) bool {
+	if s == nil || s.db == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	marker := fmt.Sprintf("%s%d", imageTaskSubmittingMarker, time.Now().Unix())
+	result := s.db.WithContext(ctx).Model(&model.ImageTask{}).
+		Where("id = ? AND user_id = ? AND status = ? AND provider_task_id = ? AND (provider_response = ? OR provider_response IS NULL)",
+			taskID, userID, model.ImageTaskStatusGenerating, "", "").
+		Update("provider_response", marker)
+	if result.Error != nil {
+		log.Printf("鐢熷浘浠诲姟 %d 鎻愪氦閿佸畾澶辫触: %v", taskID, result.Error)
+		return false
+	}
+	return result.RowsAffected == 1
 }
 
 func (s *Service) isImageTaskActive(taskID uint64) bool {

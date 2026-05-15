@@ -475,6 +475,7 @@ function App() {
   const [rechargeConfirmDialog, setRechargeConfirmDialog] = useState<RechargeConfirmDialogState>({
     open: false,
   })
+  const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
   const [serverPromptItems, setServerPromptItems] = useState<PromptGalleryItem[]>([])
   const [myPromptItems, setMyPromptItems] = useState<PromptGalleryItem[]>([])
   const [products, setProducts] = useState<ProductItem[]>([])
@@ -501,12 +502,29 @@ function App() {
   const checkedInToday = isSameShanghaiDay(points?.lastCheckinAt ?? null)
   const imageGenerationEnabled = billingSettings?.imageGenerationEnabled ?? true
   const emailNotifyPointCost = Math.max(0, Math.floor(Number(billingSettings?.emailNotifyPointCost ?? 0)))
+  const imageGeneratePointCost = Math.max(0, Math.floor(Number(billingSettings?.imageGeneratePointCost ?? 20)))
   const emailNotifyAvailable = Boolean(
     isAuthed &&
       currentUser?.email &&
       (billingSettings?.emailNotifyEnabled ?? false) &&
       emailNotifyPointCost > 0,
   )
+  const estimatedGenerationPointCost = useMemo(() => {
+    const taskCount = clampCount(Number(count) || 1)
+    const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
+    const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
+    const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
+    const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
+    return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
+  }, [
+    count,
+    emailNotifyAvailable,
+    emailNotifyOnComplete,
+    emailNotifyPointCost,
+    imageGeneratePointCost,
+    points?.totalCredits,
+    referenceImages.length,
+  ])
   const promptGalleryItems = useMemo(
     () =>
       [...serverPromptItems, ...featuredPromptItems].map((item) => ({
@@ -1517,7 +1535,37 @@ function App() {
     }
   }
 
+  function handleOpenCreateTaskConfirm() {
+    if (busy === 'create-task') {
+      return
+    }
+    if (!isAuthed) {
+      setMessage('请先登录，再提交生图任务。')
+      return
+    }
+    if (!imageGenerationEnabled) {
+      return
+    }
+    if (!prompt.trim()) {
+      setMessage('提示词不能为空。')
+      return
+    }
+    setGenerateConfirmOpen(true)
+  }
+
+  function handleCancelCreateTaskConfirm() {
+    setGenerateConfirmOpen(false)
+  }
+
+  function handleConfirmCreateTask() {
+    setGenerateConfirmOpen(false)
+    void handleCreateTask()
+  }
+
   async function handleCreateTask() {
+    if (busy === 'create-task') {
+      return
+    }
     if (!isAuthed) {
       setMessage('请先登录，再提交生图任务。')
       return
@@ -3050,7 +3098,7 @@ function App() {
                     <div className="mt-3">
                       <button
                         type="button"
-                        onClick={handleCreateTask}
+                        onClick={handleOpenCreateTaskConfirm}
                         disabled={!isAuthed || busy === 'create-task' || !prompt.trim() || !imageGenerationEnabled}
                         className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
                       >
@@ -3059,7 +3107,7 @@ function App() {
                         ) : (
                           <Sparkles className="h-4 w-4" />
                         )}
-                        {imageGenerationEnabled ? '生成图片' : '暂时关闭，详情见公告'}
+                        {imageGenerationEnabled ? `生成图片，本次预计消耗 ${estimatedGenerationPointCost} 积分` : '暂时关闭，详情见公告'}
                       </button>
                     </div>
                   </section>
@@ -3237,6 +3285,20 @@ function App() {
           busy={busy === 'purchase:custom' || busy === `purchase:${activeRechargePackageCode}`}
           onCancel={handleCancelRechargeConfirm}
           onConfirm={handleConfirmRechargeDialog}
+        />
+      ) : null}
+      {generateConfirmOpen ? (
+        <RechargeConfirmDialog
+          title="确认提交生图任务"
+          lines={[
+            '确认是否提交生图任务？',
+            `生成张数：${clampCount(Number(count) || 1)} 张`,
+            `本次预计消耗：${estimatedGenerationPointCost} 积分`,
+          ]}
+          confirmLabel="确定"
+          busy={busy === 'create-task'}
+          onCancel={handleCancelCreateTaskConfirm}
+          onConfirm={handleConfirmCreateTask}
         />
       ) : null}
       {wechatSaveGuide.open ? (

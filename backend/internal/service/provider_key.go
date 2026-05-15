@@ -325,9 +325,7 @@ func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID ui
 		lastErr = err
 		message := providerFailureMessage(result, err)
 		s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
-		if shouldStopProviderSubmitFailover(result, err) {
-			return result, currentProvider, key.ID, err
-		}
+		return result, currentProvider, key.ID, err
 	}
 
 	if s.imageProvider != nil && s.imageProvider.Configured() {
