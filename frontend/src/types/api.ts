@@ -283,6 +283,8 @@ export interface ImageTaskItem {
   freeCreditsCost?: number
   paidCreditsCost?: number
   creditSource?: string
+  emailNotifyEnabled?: boolean
+  emailNotifyCostPoints?: number
   status: string
   requestParams?: string
   errorMessage?: string
@@ -304,6 +306,8 @@ export interface ImageTaskDetailResponse {
   freeCreditsCost?: number
   paidCreditsCost?: number
   creditSource?: string
+  emailNotifyEnabled?: boolean
+  emailNotifyCostPoints?: number
   status: string
   requestParams?: string
   errorMessage?: string

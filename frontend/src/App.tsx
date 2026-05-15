@@ -1579,6 +1579,8 @@ function App() {
           freeCreditsCost: Number(result.freeCreditsCost ?? 0),
           paidCreditsCost: Number(result.paidCreditsCost ?? 0),
           creditSource: result.creditSource || 'free',
+          emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
+          emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
           status: result.status || 'generating',
           requestParams: stringifyTaskRequestSnapshot(requestSnapshot),
           errorMessage: result.errorMessage,
@@ -1663,6 +1665,8 @@ function App() {
           freeCreditsCost: Number(result.freeCreditsCost ?? 0),
           paidCreditsCost: Number(result.paidCreditsCost ?? 0),
           creditSource: result.creditSource || 'free',
+          emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
+          emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
           status: result.status || 'generating',
           requestParams: preview.requestParams,
           errorMessage: result.errorMessage,
@@ -1718,6 +1722,12 @@ function App() {
   }
 
   function handleSelectTask(item: ImageTaskItem) {
+    if (preview.taskId === item.id) {
+      setPreview(emptyPreview)
+      setPreviewImageIndex(0)
+      setPreviewDetailOpen(false)
+      return
+    }
     const nextPreview = toPreview(item)
     setPreview(nextPreview)
     setPreviewImageIndex(0)
@@ -2847,7 +2857,7 @@ function App() {
                           ? 'border-violet-400 bg-violet-950/40 ring-2 ring-violet-400/40'
                           : 'border-slate-700 bg-slate-900'
                       }`}
-                      placeholder={`请输入提示词，或将本地图片拖入 / 粘贴到此框中\n参考图规则：可免费使用 ${FREE_REFERENCE_IMAGE_COUNT} 张参考图，后续每多 1 张额外消耗 1 积分，最多可添加 ${MAX_REFERENCE_IMAGES} 张。`}
+                      placeholder={`请输入提示词，或将本地图片拖入 / 粘贴到此框中\n可免费使用 ${FREE_REFERENCE_IMAGE_COUNT} 张参考图，后续每多 1 张额外消耗 1 积分，最多可添加 ${MAX_REFERENCE_IMAGES} 张。`}
                     />
 
                     <div className="mt-3 grid grid-cols-2 gap-2">
@@ -3120,6 +3130,7 @@ function App() {
                   <UserSummaryPanel
                     currentUser={currentUser}
                     points={points}
+                    billingSettings={billingSettings}
                     busy={busy}
                     checkedInToday={checkedInToday}
                     onCheckin={handleCheckin}
@@ -3933,43 +3944,54 @@ function AppTopBar({
   }
 
   return (
-    <header className="app-shell__topbar sticky top-0 z-30 min-w-0 overflow-visible border-b border-slate-800 bg-slate-950/95 px-2 py-2 backdrop-blur sm:px-4 lg:flex lg:h-20 lg:items-center lg:px-6 lg:py-0">
-      <div className="hidden w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 lg:grid">
+    <header className="app-shell__topbar sticky top-0 z-30 min-w-0 overflow-visible border-b border-slate-800 bg-slate-950/95 px-2 py-2 backdrop-blur sm:px-4 lg:flex lg:h-16 lg:items-center lg:px-6 lg:py-0">
+      <div className="app-desktop-topbar hidden w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 lg:grid">
         <div className="flex min-w-0 items-center gap-2 pr-1">
           <button
             type="button"
             onClick={onOpenSidebar}
-            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white ${
+            className={`app-desktop-nav-btn inline-flex shrink-0 items-center justify-center ${
               sidebarOpen ? 'hidden' : ''
             }`}
             title="打开侧边栏"
           >
             <Menu className="h-4 w-4" />
+            <span>导航</span>
           </button>
           <nav className="flex flex-nowrap items-center gap-2 whitespace-nowrap text-sm font-medium">
             <button
               type="button"
-              onClick={() => onNavigate(activePage === 'prompts' ? 'home' : 'prompts')}
-              className="rounded-md px-3 py-2 text-slate-400 transition hover:text-slate-100"
+              onClick={() => onNavigate('home')}
+              className={`app-desktop-nav-btn ${activePage === 'home' ? 'is-active' : ''}`}
             >
-              {activePage === 'prompts' ? '首页' : '提示词广场'}
+              <Home className="h-4 w-4" />
+              <span>首页</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('prompts')}
+              className={`app-desktop-nav-btn ${activePage === 'prompts' ? 'is-active' : ''}`}
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>广场</span>
             </button>
             <button
               type="button"
               onClick={() => onNavigate('products')}
-              className={`rounded-md px-3 py-2 transition ${activePage === 'products' ? 'text-slate-100' : 'text-slate-400 hover:text-slate-100'}`}
+              className={`app-desktop-nav-btn ${activePage === 'products' ? 'is-active' : ''}`}
             >
-              商品
+              <ShoppingBag className="h-4 w-4" />
+              <span>商品</span>
             </button>
             <button
               type="button"
               onClick={onOpenAnnouncements}
-              className="relative inline-flex items-center gap-1 rounded-md px-3 py-2 text-slate-400 transition hover:text-slate-100"
+              className="app-desktop-nav-btn relative"
               aria-label="查看公告"
               title="查看公告"
             >
               <Megaphone className="h-4 w-4" />
-              公告
+              <span>公告</span>
               {unreadAnnouncementCount > 0 ? (
                 <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
                   {unreadAnnouncementCount > 9 ? '9+' : unreadAnnouncementCount}
@@ -4042,12 +4064,14 @@ function PageHeader({
 function UserSummaryPanel({
   currentUser,
   points,
+  billingSettings,
   busy,
   checkedInToday,
   onCheckin,
 }: {
   currentUser: UserInfo | null
   points: PointsResponse | null
+  billingSettings: BillingSettingsResponse | null
   busy: BusyAction
   checkedInToday: boolean
   onCheckin: () => void
@@ -4065,9 +4089,16 @@ function UserSummaryPanel({
               <div className="truncate text-sm font-medium text-slate-100">{currentUser?.username ?? '已登录用户'}</div>
               <div className="mt-1 truncate text-xs text-slate-500">{currentUser?.email ?? '-'}</div>
             </div>
-            <span className="shrink-0 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-xs text-violet-200">
-              {getUserRoleLabel(currentUser?.role ?? 'user')}
-            </span>
+            <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+              {currentUser?.id ? (
+                <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-xs text-violet-200">
+                  #{currentUser.id}
+                </span>
+              ) : null}
+              <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-xs text-violet-200">
+                {getUserRoleLabel(currentUser?.role ?? 'user')}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -4078,10 +4109,13 @@ function UserSummaryPanel({
 
         <div className="grid grid-cols-2 gap-3">
           <MiniStat
-            label="累计签到奖励"
-            value={`${points?.checkinCreditsTotal ?? 0}福利次数+${points?.checkinPointsTotal ?? 0}积分`}
+            label="今日签到奖励"
+            value={<RewardLines points={billingSettings?.checkinPoints ?? 0} credits={billingSettings?.checkinCredits ?? 0} />}
           />
-          <MiniStat label="最近签到时间" value={points?.lastCheckinAt ? formatDateTime(points.lastCheckinAt) : '-'} />
+          <MiniStat
+            label="累计签到奖励"
+            value={<RewardLines points={points?.checkinPointsTotal ?? 0} credits={points?.checkinCreditsTotal ?? 0} />}
+          />
         </div>
 
         <button
@@ -4611,6 +4645,7 @@ function PreviewImageStage({
   const canNavigate = imageURLs.length > 1
   const thumbnailSlots = createCenteredThumbnailSlots(thumbnailURLs.length > 0 ? thumbnailURLs : imageURLs, currentIndex, 5)
   const currentDisplayUrl = displayCandidates.find((candidate) => !failedDisplayURLs.has(candidate)) ?? ''
+  const emptyMessage = getPreviewEmptyMessage(preview.status)
 
   useEffect(() => {
     setFailedDisplayURLs(new Set())
@@ -4662,7 +4697,7 @@ function PreviewImageStage({
               )}
             </div>
             <h3 className="mt-4 text-xl font-medium text-slate-50">{getImageTaskStatusLabel(preview.status)}</h3>
-            <p className="mt-2 text-sm leading-6 text-slate-400">{preview.prompt}</p>
+            <p className="mt-2 text-sm leading-6 text-slate-400">{emptyMessage}</p>
           </div>
         )}
       </div>
@@ -5948,11 +5983,20 @@ function ProgressStat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-2 text-lg font-semibold text-slate-100">{value}</div>
+    </div>
+  )
+}
+
+function RewardLines({ points, credits }: { points: number; credits: number }) {
+  return (
+    <div className="space-y-1 leading-tight">
+      <div>{Math.max(0, Number(points) || 0)}积分</div>
+      <div>{Math.max(0, Number(credits) || 0)}福利次数</div>
     </div>
   )
 }
@@ -6006,6 +6050,24 @@ function getGenerationStatusLabel(status: GenerationStatus): string {
 
 function getImageTaskStatusLabel(status: string): string {
   return getTaskStatusLabel(status)
+}
+
+function getPreviewEmptyMessage(status: string): string {
+  switch (status) {
+    case 'running':
+    case 'generating':
+      return '请稍等，任务耗时会随着图片质量增加，感谢理解。'
+    case 'failed':
+      return '本次生成未成功，可查看失败原因后调整参数再试。'
+    case 'partial_success':
+      return '部分图片生成成功，其余图片暂未返回，可稍后刷新或查看历史任务。'
+    case 'success':
+      return '任务已完成，但暂未读取到可展示图片，请稍后刷新或查看历史任务。'
+    case 'idle':
+      return '填写提示词并提交后，生成结果会显示在这里。'
+    default:
+      return '当前暂无可展示图片，请稍后刷新或重新选择任务。'
+  }
 }
 
 function getTaskStatusLabel(status: string): string {
@@ -6275,8 +6337,13 @@ function formatPreviewOptionValue(
   return matched?.label ?? (trimmed || '-')
 }
 
-function formatTaskCost(task: Pick<ImageTaskDetailResponse, 'costPoints' | 'costCredits'>, fallbackCredits = 0): string {
-  const points = Math.max(0, Math.floor(Number(task.costPoints || 0)))
+function formatTaskCost(
+  task: Pick<ImageTaskDetailResponse, 'costPoints' | 'costCredits' | 'emailNotifyCostPoints'>,
+  fallbackCredits = 0,
+): string {
+  const points =
+    Math.max(0, Math.floor(Number(task.costPoints || 0))) +
+    Math.max(0, Math.floor(Number(task.emailNotifyCostPoints || 0)))
   const credits = Math.max(0, Math.floor(Number(task.costCredits || 0)))
 
   if (points > 0 && credits > 0) {
@@ -6816,6 +6883,8 @@ function toPreview(item: ImageTaskItem): ImageTaskDetailResponse {
     freeCreditsCost: item.freeCreditsCost,
     paidCreditsCost: item.paidCreditsCost,
     creditSource: item.creditSource,
+    emailNotifyEnabled: item.emailNotifyEnabled,
+    emailNotifyCostPoints: item.emailNotifyCostPoints,
     status: item.status,
     requestParams: item.requestParams,
     errorMessage: item.errorMessage,
@@ -6839,6 +6908,8 @@ function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailRespon
     freeCreditsCost: detail.freeCreditsCost,
     paidCreditsCost: detail.paidCreditsCost,
     creditSource: detail.creditSource,
+    emailNotifyEnabled: detail.emailNotifyEnabled,
+    emailNotifyCostPoints: detail.emailNotifyCostPoints,
     status: detail.status,
     requestParams: detail.requestParams,
     errorMessage: detail.errorMessage,

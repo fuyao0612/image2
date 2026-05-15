@@ -265,6 +265,62 @@ input[type="number"] {
   color: var(--user-primary);
 }
 
+@media (min-width: 1024px) {
+  .user-glass-shell .app-shell {
+    grid-template-rows: 64px minmax(0, 1fr);
+  }
+
+  .user-glass-shell .app-shell__topbar {
+    min-height: 64px;
+  }
+
+  .user-glass-shell .app-desktop-topbar {
+    min-height: 64px;
+  }
+
+  .user-glass-shell .app-desktop-nav-btn {
+    display: inline-flex;
+    min-width: 74px;
+    height: 50px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border-radius: 14px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    transition: 0.15s ease;
+  }
+
+  .user-glass-shell .app-desktop-nav-btn svg {
+    height: 18px;
+    width: 18px;
+    color: #334155;
+  }
+
+  .user-glass-shell .app-desktop-nav-btn.is-active,
+  .user-glass-shell .app-desktop-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--user-primary);
+    box-shadow: 0 8px 22px rgba(99, 102, 241, 0.09);
+  }
+
+  .user-glass-shell .app-desktop-nav-btn.is-active svg,
+  .user-glass-shell .app-desktop-nav-btn:hover svg {
+    color: var(--user-primary);
+  }
+
+  .user-glass-shell .app-desktop-topbar .relative > button {
+    height: 42px !important;
+    border-radius: 999px !important;
+    background: rgba(255, 255, 255, 0.74) !important;
+    border-color: rgba(148, 163, 184, 0.2) !important;
+    color: var(--user-text) !important;
+  }
+}
+
 @media (max-width: 1023px) {
   .app-shell {
     grid-template-rows: 64px minmax(0, 1fr);
