@@ -126,6 +126,34 @@ func (h *Handler) Login(c *gin.Context) {
 	response.Success(c, resp)
 }
 
+func (h *Handler) CheckResetPasswordEmail(c *gin.Context) {
+	var req dto.CheckResetPasswordEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数不合法")
+		return
+	}
+	resp, err := h.svc.CheckResetPasswordEmail(c.Request.Context(), req)
+	if err != nil {
+		h.writeServiceError(c, err)
+		return
+	}
+	response.Success(c, resp)
+}
+
+func (h *Handler) ResetPassword(c *gin.Context) {
+	var req dto.ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数不合法")
+		return
+	}
+	resp, err := h.svc.ResetPassword(c.Request.Context(), req)
+	if err != nil {
+		h.writeServiceError(c, err)
+		return
+	}
+	response.Success(c, resp)
+}
+
 // CheckIn 用户每日签到。
 func (h *Handler) CheckIn(c *gin.Context) {
 	userID, ok := middleware.CurrentUserID(c)

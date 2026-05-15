@@ -80,6 +80,25 @@ export interface RegisterRequest {
 export interface LoginRequest {
   account: string
   password: string
+  rememberMe?: boolean
+}
+
+export interface CheckResetPasswordEmailRequest {
+  email: string
+}
+
+export interface CheckResetPasswordEmailResponse {
+  available: boolean
+  message?: string
+  nextResetAt?: string | null
+  resetAfterAt?: string | null
+}
+
+export interface ResetPasswordRequest {
+  email: string
+  code: string
+  password: string
+  confirmPassword: string
 }
 
 export interface UserInfo {

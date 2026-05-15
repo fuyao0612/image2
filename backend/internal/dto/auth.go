@@ -34,8 +34,27 @@ type RegisterRequest struct {
 
 // LoginRequest 是登录请求体。
 type LoginRequest struct {
-	Account  string `json:"account" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Account    string `json:"account" binding:"required"`
+	Password   string `json:"password" binding:"required"`
+	RememberMe bool   `json:"rememberMe,omitempty"`
+}
+
+type CheckResetPasswordEmailRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type CheckResetPasswordEmailResponse struct {
+	Available    bool       `json:"available"`
+	Message      string     `json:"message,omitempty"`
+	NextResetAt  *time.Time `json:"nextResetAt,omitempty"`
+	ResetAfterAt *time.Time `json:"resetAfterAt,omitempty"`
+}
+
+type ResetPasswordRequest struct {
+	Email           string `json:"email" binding:"required,email"`
+	Code            string `json:"code" binding:"required"`
+	Password        string `json:"password" binding:"required,min=8,max=72"`
+	ConfirmPassword string `json:"confirmPassword" binding:"required,min=8,max=72"`
 }
 
 // UserInfo 是统一的用户返回结构。

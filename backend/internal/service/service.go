@@ -299,8 +299,14 @@ func (s *Service) SendEmailCode(ctx context.Context, req dto.SendEmailCodeReques
 		return dto.SendEmailCodeResponse{}, ErrRegistrationDisabled
 	}
 	isRegisterScene := strings.EqualFold(strings.TrimSpace(req.Scene), "register")
+	isResetPasswordScene := strings.EqualFold(strings.TrimSpace(req.Scene), "reset_password")
 	if isRegisterScene {
 		if err := s.ensureRegisterEmailDailyQuota(ctx); err != nil {
+			return dto.SendEmailCodeResponse{}, err
+		}
+	}
+	if isResetPasswordScene {
+		if err := s.ensureResetPasswordEmailAllowed(ctx, email); err != nil {
 			return dto.SendEmailCodeResponse{}, err
 		}
 	}
@@ -388,7 +394,11 @@ func (s *Service) Login(ctx context.Context, req dto.LoginRequest) (dto.AuthResp
 	user.LastLoginAt = &now
 	user = s.syncConfiguredAdminRole(user)
 
-	return s.authResponse(user)
+	ttl := s.cfg.AccessTokenTTL
+	if req.RememberMe {
+		ttl = 7 * 24 * time.Hour
+	}
+	return s.authResponseWithTTL(user, ttl)
 }
 
 // CheckIn 完成每日签到，若当天已签到则返回幂等成功。
@@ -636,7 +646,11 @@ func (s *Service) RedeemPoints(ctx context.Context, userID uint64, req dto.Redee
 }
 
 func (s *Service) authResponse(user model.User) (dto.AuthResponse, error) {
-	token, exp, err := s.jwt.Generate(user.ID, user.Username, user.Email, user.TokenVersion)
+	return s.authResponseWithTTL(user, s.cfg.AccessTokenTTL)
+}
+
+func (s *Service) authResponseWithTTL(user model.User, ttl time.Duration) (dto.AuthResponse, error) {
+	token, exp, err := s.jwt.GenerateWithTTL(user.ID, user.Username, user.Email, user.TokenVersion, ttl)
 	if err != nil {
 		return dto.AuthResponse{}, err
 	}

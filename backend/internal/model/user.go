@@ -37,6 +37,7 @@ type User struct {
 	LastCreditSettlementDate *time.Time `gorm:"type:date;comment:最后一次次数转积分结算日期" json:"-"`
 	EmailVerifiedAt          *time.Time `gorm:"comment:邮箱验证时间" json:"emailVerifiedAt,omitempty"`
 	LastLoginAt              *time.Time `gorm:"comment:最后登录时间" json:"lastLoginAt,omitempty"`
+	LastPasswordResetAt      *time.Time `gorm:"comment:最后重置密码时间" json:"lastPasswordResetAt,omitempty"`
 	Status                   UserStatus `gorm:"type:tinyint;not null;default:1;comment:用户状态" json:"status"`
 	Role                     UserRole   `gorm:"type:varchar(20);not null;default:user;index;comment:用户角色" json:"role"`
 }

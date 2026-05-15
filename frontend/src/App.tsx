@@ -82,7 +82,7 @@ import type {
   UserInfo,
 } from '@/types/api'
 
-type AuthMode = 'login' | 'register'
+type AuthMode = 'login' | 'register' | 'reset'
 type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
 type UserTheme = 'light' | 'dark'
 type FlowLogType = 'points' | 'credits'
@@ -92,6 +92,7 @@ type FlowLogDetail =
   | null
 type BusyAction =
   | 'send-code'
+  | 'check-reset-email'
   | 'auth'
   | 'checkin'
   | 'upload-reference'
@@ -367,7 +368,11 @@ const HIGH_QUALITY_SIZE_LIMIT_MESSAGE = '4K 或超大尺寸使用高质量时，
 
 function App() {
   const [mode, setMode] = useState<AuthMode>(() =>
-    REGISTRATION_ENABLED && window.location.pathname === '/register' ? 'register' : 'login',
+    window.location.pathname === '/reset-password'
+      ? 'reset'
+      : REGISTRATION_ENABLED && window.location.pathname === '/register'
+        ? 'register'
+        : 'login',
   )
   const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
   const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
@@ -385,12 +390,14 @@ function App() {
     account: '',
     password: '',
     confirmPassword: '',
+    rememberMe: false,
   })
   const [authFormSeed, setAuthFormSeed] = useState(0)
   const [captcha, setCaptcha] = useState<CaptchaResponse | null>(null)
   const [emailCodeCountdown, setEmailCodeCountdown] = useState(0)
   const [emailCaptchaPassUntil, setEmailCaptchaPassUntil] = useState(0)
   const [registrationDailyLimitReached, setRegistrationDailyLimitReached] = useState(false)
+  const [resetEmailCheck, setResetEmailCheck] = useState<{ email: string; available: boolean; message: string } | null>(null)
   const [changePasswordForm, setChangePasswordForm] = useState<PasswordChangeForm>({
     currentPassword: '',
     newPassword: '',
@@ -619,6 +626,8 @@ function App() {
       ? (adminOpen ? '/admin' : '/app')
       : mode === 'register' && canRegister
         ? '/register'
+        : mode === 'reset'
+          ? '/reset-password'
         : '/login'
     if (window.location.pathname !== nextPath) {
       window.history.replaceState(null, '', nextPath)
@@ -655,6 +664,8 @@ function App() {
       const path = window.location.pathname
       if (path === '/register' && canRegister) {
         setMode('register')
+      } else if (path === '/reset-password') {
+        setMode('reset')
       } else if (path === '/login') {
         setMode('login')
       } else if (path === '/register') {
@@ -673,7 +684,7 @@ function App() {
   }, [canRegister])
 
   useEffect(() => {
-    if (mode === 'register' && REGISTRATION_ENABLED) {
+    if ((mode === 'register' && REGISTRATION_ENABLED) || mode === 'reset') {
       void refreshCaptcha(false)
       return
     }
@@ -1107,7 +1118,10 @@ function App() {
   }
 
   async function refreshCaptcha(showMessage = false) {
-    if (!REGISTRATION_ENABLED || mode !== 'register') {
+    if (mode !== 'register' && mode !== 'reset') {
+      return
+    }
+    if (mode === 'register' && !REGISTRATION_ENABLED) {
       return
     }
 
@@ -1132,7 +1146,7 @@ function App() {
   }
 
   async function handleSendCode() {
-    if (registrationDailyLimitReached) {
+    if (mode === 'register' && registrationDailyLimitReached) {
       setMessage(REGISTRATION_DAILY_LIMIT_MESSAGE)
       return
     }
@@ -1145,16 +1159,22 @@ function App() {
       setMessage('请先输入图形验证码。')
       return
     }
-    if (!REGISTRATION_ENABLED) {
+    if (mode === 'register' && !REGISTRATION_ENABLED) {
       setMessage('注册功能暂时关闭。')
       return
+    }
+    if (mode === 'reset') {
+      const checked = await handleCheckResetEmail()
+      if (!checked) {
+        return
+      }
     }
 
     try {
       setBusy('send-code')
       const result = await api.sendEmailCode({
         email: authForm.email,
-        scene: 'register',
+        scene: mode === 'reset' ? 'reset_password' : 'register',
         captchaId: hasCaptchaPass ? undefined : captcha?.captchaId,
         captchaCode: hasCaptchaPass ? undefined : authForm.captchaCode,
       })
@@ -1170,6 +1190,30 @@ function App() {
         return
       }
       setMessage(error instanceof Error ? error.message : '发送验证码失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleCheckResetEmail(): Promise<boolean> {
+    const email = authForm.email.trim()
+    if (mode !== 'reset' || !email) {
+      return false
+    }
+    try {
+      setBusy('check-reset-email')
+      const result = await api.checkResetPasswordEmail({ email })
+      const message = result.message || (result.available ? '该邮箱可以重置密码。' : '该邮箱暂不可重置密码。')
+      setResetEmailCheck({ email, available: result.available, message })
+      if (!result.available) {
+        setMessage(message)
+      }
+      return result.available
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '邮箱检查失败'
+      setResetEmailCheck({ email, available: false, message })
+      setMessage(message)
+      return false
     } finally {
       setBusy(null)
     }
@@ -1200,6 +1244,35 @@ function App() {
           password: authForm.password,
           inviteCode: authForm.inviteCode.trim() || undefined,
         })
+      } else if (mode === 'reset') {
+        if (!authForm.email || !authForm.code || !authForm.password || !authForm.confirmPassword) {
+          setMessage('请把重置密码所需字段补齐。')
+          return
+        }
+        if (authForm.password !== authForm.confirmPassword) {
+          setMessage('两次输入的密码不一致。')
+          return
+        }
+        await api.resetPassword({
+          email: authForm.email,
+          code: authForm.code,
+          password: authForm.password,
+          confirmPassword: authForm.confirmPassword,
+        })
+        setMode('login')
+        setAuthForm((current) => ({
+          ...current,
+          account: current.email,
+          code: '',
+          captchaCode: '',
+          password: '',
+          confirmPassword: '',
+        }))
+        setEmailCodeCountdown(0)
+        setEmailCaptchaPassUntil(0)
+        setResetEmailCheck(null)
+        setMessage('密码已重置，请使用新密码登录。')
+        return
       } else {
         if (!authForm.account || !authForm.password) {
           setMessage('请把登录所需字段补齐。')
@@ -1208,6 +1281,7 @@ function App() {
         result = await api.login({
           account: authForm.account,
           password: authForm.password,
+          rememberMe: authForm.rememberMe,
         })
       }
 
@@ -1896,6 +1970,7 @@ function App() {
       account: '',
       password: '',
       confirmPassword: '',
+      rememberMe: false,
     })
     setAuthFormSeed((current) => current + 1)
     setShowRegisterPassword(false)
@@ -2266,26 +2341,37 @@ function App() {
                   void handleAuthSubmit()
                 }}
               >
-                {mode === 'register' ? (
+                {mode !== 'login' ? (
                   <>
-                    {registrationDailyLimitReached ? (
+                    {mode === 'register' && registrationDailyLimitReached ? (
                       <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
                         {REGISTRATION_DAILY_LIMIT_MESSAGE}
                       </div>
                     ) : null}
                     <Field label="邮箱" icon={<Mail className="h-4 w-4" />}>
                       <input
-                        name={`register_email_${authFormSeed}`}
+                        name={`${mode}_email_${authFormSeed}`}
                         autoComplete="off"
                         value={authForm.email}
+                        onBlur={() => {
+                          if (mode === 'reset' && authForm.email.trim()) {
+                            void handleCheckResetEmail()
+                          }
+                        }}
                         onChange={(event) => {
                           setAuthForm((current) => ({ ...current, email: event.target.value }))
                           setEmailCodeCountdown(0)
                           setEmailCaptchaPassUntil(0)
+                          setResetEmailCheck(null)
                         }}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入邮箱"
                       />
+                      {mode === 'reset' && resetEmailCheck?.email === authForm.email.trim() ? (
+                        <div className={`mt-2 text-xs ${resetEmailCheck.available ? 'text-emerald-300' : 'text-amber-300'}`}>
+                          {resetEmailCheck.message}
+                        </div>
+                      ) : null}
                     </Field>
                     <Field label="图形验证码" icon={<ShieldCheck className="h-4 w-4" />}>
                       <div className="flex min-w-0 items-stretch gap-2">
@@ -2340,7 +2426,7 @@ function App() {
                         <button
                           type="button"
                           onClick={handleSendCode}
-                          disabled={registrationDailyLimitReached || busy === 'send-code' || emailCodeCountdown > 0}
+                          disabled={(mode === 'register' && registrationDailyLimitReached) || busy === 'send-code' || busy === 'check-reset-email' || emailCodeCountdown > 0}
                           className="inline-flex h-10 w-32 shrink-0 items-center justify-center gap-1.5 rounded-md border border-slate-700 bg-slate-950 px-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60 min-[380px]:w-36"
                         >
                           {busy === 'send-code' ? (
@@ -2352,35 +2438,39 @@ function App() {
                         </button>
                       </div>
                     </Field>
-                    <Field label="用户名" icon={<UserRoundPlus className="h-4 w-4" />}>
-                      <input
-                        name={`register_username_${authFormSeed}`}
-                        autoComplete="off"
-                        value={authForm.username}
-                        onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
-                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                        placeholder="请输入用户名（英文或者数字组成）"
-                      />
-                    </Field>
-                    <Field label="邀请码（选填）" icon={<Gift className="h-4 w-4" />}>
-                      <input
-                        name={`register_invite_${authFormSeed}`}
-                        autoComplete="off"
-                        value={authForm.inviteCode}
-                        onChange={(event) =>
-                          setAuthForm((current) => ({
-                            ...current,
-                            inviteCode: event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16),
-                          }))
-                        }
-                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                        placeholder="好友给你的邀请码"
-                      />
-                    </Field>
+                    {mode === 'register' ? (
+                      <>
+                        <Field label="用户名" icon={<UserRoundPlus className="h-4 w-4" />}>
+                          <input
+                            name={`register_username_${authFormSeed}`}
+                            autoComplete="off"
+                            value={authForm.username}
+                            onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
+                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
+                            placeholder="请输入用户名（英文或者数字组成）"
+                          />
+                        </Field>
+                        <Field label="邀请码（选填）" icon={<Gift className="h-4 w-4" />}>
+                          <input
+                            name={`register_invite_${authFormSeed}`}
+                            autoComplete="off"
+                            value={authForm.inviteCode}
+                            onChange={(event) =>
+                              setAuthForm((current) => ({
+                                ...current,
+                                inviteCode: event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16),
+                              }))
+                            }
+                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
+                            placeholder="好友给你的邀请码"
+                          />
+                        </Field>
+                      </>
+                    ) : null}
                     <Field label="密码" icon={<KeyRound className="h-4 w-4" />}>
                       <div className="relative">
                         <input
-                          name={`register_password_${authFormSeed}`}
+                          name={`${mode}_password_${authFormSeed}`}
                           autoComplete="new-password"
                           type={showRegisterPassword ? 'text' : 'password'}
                           value={authForm.password}
@@ -2401,7 +2491,7 @@ function App() {
                     <Field label="再次输入密码" icon={<KeyRound className="h-4 w-4" />}>
                       <div className="relative">
                         <input
-                          name={`register_confirm_password_${authFormSeed}`}
+                          name={`${mode}_confirm_password_${authFormSeed}`}
                           autoComplete="new-password"
                           type={showRegisterPassword ? 'text' : 'password'}
                           value={authForm.confirmPassword}
@@ -2445,6 +2535,18 @@ function App() {
                         placeholder="请输入密码"
                       />
                     </Field>
+                    <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-600 shadow-sm transition hover:border-violet-200 hover:bg-violet-50/40">
+                      <span className="min-w-0">
+                        <span className="font-medium text-slate-700">记住我</span>
+                        <span className="ml-2 text-xs text-slate-400">勾选后登录状态保留 7 天</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={authForm.rememberMe}
+                        onChange={(event) => setAuthForm((current) => ({ ...current, rememberMe: event.target.checked }))}
+                        className="h-4 w-4 shrink-0 rounded border-slate-300 bg-white text-violet-500 accent-violet-500"
+                      />
+                    </label>
                   </>
                 )}
 
@@ -2457,24 +2559,27 @@ function App() {
                     <LoaderCircle className="h-4 w-4 animate-spin" />
                   ) : mode === 'register' ? (
                     <UserRoundPlus className="h-4 w-4" />
+                  ) : mode === 'reset' ? (
+                    <KeyRound className="h-4 w-4" />
                   ) : (
                     <LogIn className="h-4 w-4" />
                   )}
-                  {mode === 'register' ? '注册' : '登录'}
+                  {mode === 'register' ? '注册' : mode === 'reset' ? '重置密码' : '登录'}
                 </button>
               </form>
 
               <div className="mt-5 border-t border-slate-800 pt-4 text-center text-sm text-slate-400">
-                {mode === 'register' ? (
-                  canRegister ? (
+                {mode === 'register' || mode === 'reset' ? (
+                  canRegister || mode === 'reset' ? (
                     <>
-                      已有账号？
+                      {mode === 'register' ? '已有账号？' : '想起密码了？'}
                       <button
                         type="button"
                         onClick={() => {
                           setMode('login')
                           setMessage('')
                           setShowRegisterPassword(false)
+                          setResetEmailCheck(null)
                         }}
                         className="ml-1 font-medium text-violet-300 transition hover:text-violet-200"
                       >
@@ -2499,9 +2604,36 @@ function App() {
                       >
                         立即注册
                       </button>
+                      <span className="mx-2 text-slate-600">/</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMode('reset')
+                          setMessage('')
+                          setShowRegisterPassword(false)
+                          setResetEmailCheck(null)
+                        }}
+                        className="font-medium text-violet-300 transition hover:text-violet-200"
+                      >
+                        忘记密码？
+                      </button>
                     </>
                   ) : (
-                    <span>当前仅支持登录。</span>
+                    <>
+                      <span>当前仅支持登录。</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMode('reset')
+                          setMessage('')
+                          setShowRegisterPassword(false)
+                          setResetEmailCheck(null)
+                        }}
+                        className="ml-2 font-medium text-violet-300 transition hover:text-violet-200"
+                      >
+                        忘记密码？
+                      </button>
+                    </>
                   )
                 )}
               </div>

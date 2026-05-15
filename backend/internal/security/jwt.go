@@ -27,8 +27,16 @@ func NewJWTManager(secret, issuer string, ttl time.Duration) *JWTManager {
 
 // Generate 为指定用户生成 token。
 func (m *JWTManager) Generate(userID uint64, username string, email string, tokenVersion int64) (string, time.Time, error) {
+	return m.GenerateWithTTL(userID, username, email, tokenVersion, m.ttl)
+}
+
+// GenerateWithTTL 为指定用户生成自定义有效期的 token。
+func (m *JWTManager) GenerateWithTTL(userID uint64, username string, email string, tokenVersion int64, ttl time.Duration) (string, time.Time, error) {
+	if ttl <= 0 {
+		ttl = m.ttl
+	}
 	now := time.Now()
-	exp := now.Add(m.ttl)
+	exp := now.Add(ttl)
 	claims := jwt.MapClaims{
 		"sub":      strconv.FormatUint(userID, 10),
 		"user_id":  strconv.FormatUint(userID, 10),

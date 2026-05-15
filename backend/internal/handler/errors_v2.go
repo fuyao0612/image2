@@ -30,6 +30,10 @@ func (h *Handler) writeServiceErrorV2(c *gin.Context, err error) {
 		response.TooManyRequests(c, err.Error())
 	case errors.Is(err, service.ErrEmailAlreadyRegistered):
 		response.Conflict(c, err.Error())
+	case errors.Is(err, service.ErrEmailNotRegistered):
+		response.NotFound(c, err.Error())
+	case errors.Is(err, service.ErrPasswordResetTooFrequent):
+		response.TooManyRequests(c, err.Error())
 	case errors.Is(err, service.ErrAccountExists):
 		response.Conflict(c, err.Error())
 	case errors.Is(err, service.ErrInviteCodeInvalid):

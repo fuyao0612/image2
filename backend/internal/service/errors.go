@@ -12,8 +12,10 @@ var (
 	ErrVerificationCodeTooFrequent  = errors.New("验证码发送过于频繁，请稍后再试")
 	ErrVerificationCodeRateLimited  = errors.New("验证码发送次数过多，请稍后再试")
 	ErrVerificationAttemptsExceeded = errors.New("验证码错误次数过多，请重新获取")
-	ErrEmailDailyLimitReached       = errors.New("当日注册额度已达到上限，请0点后再尝试")
+	ErrEmailDailyLimitReached       = errors.New("当日注册额度已达到上限，请 0 点后再尝试")
 	ErrEmailAlreadyRegistered       = errors.New("该邮箱已被注册，请直接登录")
+	ErrEmailNotRegistered           = errors.New("该邮箱尚未注册，请确认邮箱或先注册账号")
+	ErrPasswordResetTooFrequent     = errors.New("该邮箱三天内已重置过密码，请稍后再试")
 	ErrAccountExists                = errors.New("用户名或邮箱已被注册")
 	ErrRegistrationDisabled         = errors.New("注册功能暂时关闭")
 	ErrInvalidCredentials           = errors.New("账号或密码错误")
@@ -53,6 +55,7 @@ var (
 	ErrImageNotFound       = errors.New("图片不存在")
 	ErrImageDownloadFailed = errors.New("图片下载失败")
 )
+
 var (
 	ErrProductInvalid         = errors.New("商品不存在或参数不合法")
 	ErrProductCategoryInvalid = errors.New("商品分类不存在或参数不合法")

@@ -29,6 +29,8 @@ import type {
   BillingSettingsResponse,
   ChangePasswordRequest,
   ChangePasswordResponse,
+  CheckResetPasswordEmailRequest,
+  CheckResetPasswordEmailResponse,
   CheckinResponse,
   CreateImageTaskRequest,
   CreateImageTaskResponse,
@@ -54,6 +56,7 @@ import type {
   ProductCategoryItem,
   ProductItem,
   RegisterRequest,
+  ResetPasswordRequest,
   SubmitPromptPlazaRequest,
   SendEmailCodeRequest,
   SendEmailCodeResponse,
@@ -264,6 +267,22 @@ export async function register(payload: RegisterRequest): Promise<AuthResponse> 
 
 export async function login(payload: LoginRequest): Promise<AuthResponse> {
   return request<AuthResponse>('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function checkResetPasswordEmail(
+  payload: CheckResetPasswordEmailRequest,
+): Promise<CheckResetPasswordEmailResponse> {
+  return request<CheckResetPasswordEmailResponse>('/api/v1/auth/reset-password/check', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function resetPassword(payload: ResetPasswordRequest): Promise<ChangePasswordResponse> {
+  return request<ChangePasswordResponse>('/api/v1/auth/reset-password', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -784,6 +803,8 @@ export const api = {
   sendEmailCode,
   register,
   login,
+  checkResetPasswordEmail,
+  resetPassword,
   checkin,
   getMe,
   getInviteInfo,
