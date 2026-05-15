@@ -39,6 +39,24 @@ func TestExtractGenerateResultFromSuccessResponse(t *testing.T) {
 	}
 }
 
+func TestExtractGenerateResultSkipsAPIEndpointURLs(t *testing.T) {
+	body := []byte(`{"status":"success","message":"http://chunfeng.mentalout.top/v1/images/edits","detail":"https://cdn.example.com/results/batch-abc123/final.png"}`)
+
+	result := extractGenerateResult(body, "https://image.mentalout.top", "https://chunfeng.mentalout.top")
+
+	if result.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected success status, got %q", result.Status)
+	}
+	if result.ImageURL != "https://cdn.example.com/results/batch-abc123/final.png" {
+		t.Fatalf("expected generated image url, got %q", result.ImageURL)
+	}
+	for _, candidate := range result.ImageURLs {
+		if strings.Contains(candidate, "/v1/images/edits") {
+			t.Fatalf("unexpected api endpoint in image urls: %#v", result.ImageURLs)
+		}
+	}
+}
+
 func TestExtractGenerateResultFromSucceededResponseWithRelativeImageURL(t *testing.T) {
 	body := []byte(`{"id":"batch-abc123","status":"succeeded","tasks":[{"status":"succeeded","imageUrl":"/results/batch-abc123/task-result.png"}]}`)
 
@@ -79,9 +97,9 @@ func TestBuildSubmitPayloadIncludesGenerationOptions(t *testing.T) {
 	})
 
 	payload := provider.buildSubmitPayload(GenerateRequest{
-		Prompt:       "一只机械狐狸",
+		Prompt:       "test robot fox",
 		Size:         "2048x1152",
-		Style:        "油画",
+		Style:        "oil",
 		Count:        6,
 		Quality:      "high",
 		OutputFormat: "webp",
@@ -102,6 +120,26 @@ func TestBuildSubmitPayloadIncludesGenerationOptions(t *testing.T) {
 	}
 	if _, ok := payload["referenceImageUrl"]; ok {
 		t.Fatalf("did not expect referenceImageUrl in plain payload: %#v", payload)
+	}
+}
+
+func TestConfiguredRejectsPlaceholderKeys(t *testing.T) {
+	cases := []string{
+		"",
+		"change-me",
+		"replace-with-your-api-key",
+		"replace-with-real-provider-key",
+	}
+
+	for _, key := range cases {
+		provider := NewMentaloutProvider(MentaloutConfig{
+			BatchServiceURL:    "https://image.mentalout.top",
+			ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+			APIKey:             key,
+		})
+		if provider.Configured() {
+			t.Fatalf("expected key %q to be treated as unconfigured", key)
+		}
 	}
 }
 
@@ -156,7 +194,7 @@ func TestSubmitBatchWithReferenceImageUsesMultipart(t *testing.T) {
 	})
 
 	result, err := provider.submitBatch(context.Background(), GenerateRequest{
-		Prompt:            "一只站在城市屋顶上的机械狐狸",
+		Prompt:            "test robot fox on rooftop",
 		Size:              "1024x1024",
 		Count:             1,
 		ReferenceImageURL: server.URL + "/reference.png",
@@ -176,7 +214,7 @@ func TestSubmitBatchWithReferenceImageUsesMultipart(t *testing.T) {
 	if !strings.HasPrefix(receivedContentType, "image/") {
 		t.Fatalf("unexpected uploaded content type: %q", receivedContentType)
 	}
-	if got := receivedPayload["prompt"]; got != "一只站在城市屋顶上的机械狐狸" {
+	if got := receivedPayload["prompt"]; got != "test robot fox on rooftop" {
 		t.Fatalf("unexpected prompt in payload: %#v", got)
 	}
 	if _, ok := receivedPayload["referenceImageUrl"]; ok {
@@ -184,7 +222,108 @@ func TestSubmitBatchWithReferenceImageUsesMultipart(t *testing.T) {
 	}
 }
 
-func TestSubmitBatchRetriesEOFAndUsesBrowserHeaders(t *testing.T) {
+func TestSubmitBatchWithProvidedReferenceImageSkipsDownload(t *testing.T) {
+	var referenceDownloaded bool
+	var receivedFileBytes []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/reference.png":
+			referenceDownloaded = true
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/api/batches":
+			if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+				t.Fatalf("expected multipart request, got %s", r.Header.Get("Content-Type"))
+			}
+			if err := r.ParseMultipartForm(8 << 20); err != nil {
+				t.Fatalf("parse multipart form failed: %v", err)
+			}
+			file, _, err := r.FormFile("image")
+			if err != nil {
+				t.Fatalf("expected image form file: %v", err)
+			}
+			defer file.Close()
+			receivedFileBytes, err = io.ReadAll(file)
+			if err != nil {
+				t.Fatalf("read uploaded image failed: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"batch-ref","status":"running"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewMentaloutProvider(MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+	})
+
+	imageData := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	result, err := provider.submitBatch(context.Background(), GenerateRequest{
+		Prompt:            "test prompt",
+		Size:              "1024x1024",
+		Count:             1,
+		ReferenceImageURL: server.URL + "/reference.png",
+		ReferenceImage: &ReferenceImage{
+			Name:        "reference.png",
+			ContentType: "image/png",
+			Data:        imageData,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit batch failed: %v", err)
+	}
+	if referenceDownloaded {
+		t.Fatalf("expected provided reference image to skip URL download")
+	}
+	if string(receivedFileBytes) != string(imageData) {
+		t.Fatalf("unexpected uploaded image bytes: %#v", receivedFileBytes)
+	}
+	if result.ProviderTaskID != "batch-ref" {
+		t.Fatalf("expected provider task id batch-ref, got %q", result.ProviderTaskID)
+	}
+}
+
+func TestSubmitBatchRejectsFakeReferenceImage(t *testing.T) {
+	var batchCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/reference.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("<html>not an image</html>"))
+		case "/api/batches":
+			batchCalled = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"batch-ref","status":"running"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewMentaloutProvider(MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+	})
+
+	_, err := provider.submitBatch(context.Background(), GenerateRequest{
+		Prompt:            "test prompt",
+		Size:              "1024x1024",
+		Count:             1,
+		ReferenceImageURL: server.URL + "/reference.png",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected unsupported reference image error, got %v", err)
+	}
+	if batchCalled {
+		t.Fatalf("batch endpoint should not be called after invalid reference image")
+	}
+}
+
+func TestSubmitBatchDoesNotRetryEOFAndUsesBrowserHeaders(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/batches" {
@@ -197,6 +336,40 @@ func TestSubmitBatchRetriesEOFAndUsesBrowserHeaders(t *testing.T) {
 			t.Fatalf("expected origin header")
 		}
 
+		atomic.AddInt32(&attempts, 1)
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatalf("response writer does not support hijacking")
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatalf("hijack failed: %v", err)
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	provider := NewMentaloutProvider(MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+	})
+
+	_, err := provider.submitBatch(context.Background(), GenerateRequest{Prompt: "test prompt", Size: "1024x1024", Count: 1})
+	if err == nil {
+		t.Fatalf("expected submit batch to return the first network error")
+	}
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
+func TestFetchBatchRetriesTemporaryNetworkError(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/batches/batch-test" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 		if atomic.AddInt32(&attempts, 1) == 1 {
 			hijacker, ok := w.(http.Hijacker)
 			if !ok {
@@ -211,7 +384,7 @@ func TestSubmitBatchRetriesEOFAndUsesBrowserHeaders(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"batch-test","status":"running"}`))
+		_, _ = w.Write([]byte(`{"id":"batch-test","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-test/final.png"}]}`))
 	}))
 	defer server.Close()
 
@@ -221,15 +394,15 @@ func TestSubmitBatchRetriesEOFAndUsesBrowserHeaders(t *testing.T) {
 		APIKey:             "test-key",
 	})
 
-	result, err := provider.submitBatch(context.Background(), GenerateRequest{Prompt: "一个人", Size: "1024x1024", Count: 1})
+	result, err := provider.fetchBatch(context.Background(), "batch-test")
 	if err != nil {
-		t.Fatalf("submit batch failed: %v", err)
+		t.Fatalf("fetch batch failed: %v", err)
 	}
 	if atomic.LoadInt32(&attempts) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", attempts)
 	}
-	if result.ProviderTaskID != "batch-test" {
-		t.Fatalf("expected batch id, got %q", result.ProviderTaskID)
+	if result.ImageURL != server.URL+"/results/batch-test/final.png" {
+		t.Fatalf("expected absolute image url, got %q", result.ImageURL)
 	}
 }
 

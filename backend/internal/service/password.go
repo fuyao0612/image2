@@ -50,7 +50,10 @@ func (s *Service) ChangePassword(ctx context.Context, userID uint64, req dto.Cha
 		changedAt = s.now()
 		return tx.Model(&model.User{}).
 			Where("id = ?", userID).
-			Update("password_hash", hash).Error
+			Updates(map[string]any{
+				"password_hash": hash,
+				"token_version": gorm.Expr("token_version + 1"),
+			}).Error
 	})
 	if err != nil {
 		return dto.ChangePasswordResponse{}, err

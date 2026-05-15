@@ -4,8 +4,10 @@ import "time"
 
 // SendEmailCodeRequest 是发送邮箱验证码的请求体。
 type SendEmailCodeRequest struct {
-	Email string `json:"email" binding:"required,email"`
-	Scene string `json:"scene" binding:"required,oneof=register reset_password"`
+	Email       string `json:"email" binding:"required,email"`
+	Scene       string `json:"scene" binding:"required,oneof=register reset_password"`
+	CaptchaID   string `json:"captchaId,omitempty"`
+	CaptchaCode string `json:"captchaCode,omitempty"`
 }
 
 // SendEmailCodeResponse 是发送验证码的响应体。
@@ -15,12 +17,19 @@ type SendEmailCodeResponse struct {
 	DebugCode string `json:"debugCode,omitempty"`
 }
 
+type CaptchaResponse struct {
+	CaptchaID string `json:"captchaId"`
+	Image     string `json:"image"`
+	ExpiresIn int    `json:"expiresIn"`
+}
+
 // RegisterRequest 是注册请求体。
 type RegisterRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Code     string `json:"code" binding:"required"`
-	Username string `json:"username" binding:"required,min=2,max=32"`
-	Password string `json:"password" binding:"required,min=8,max=72"`
+	Email      string `json:"email" binding:"required,email"`
+	Code       string `json:"code" binding:"required"`
+	Username   string `json:"username" binding:"required,min=2,max=32"`
+	Password   string `json:"password" binding:"required,min=8,max=72"`
+	InviteCode string `json:"inviteCode,omitempty" binding:"omitempty,max=16"`
 }
 
 // LoginRequest 是登录请求体。
@@ -42,6 +51,7 @@ type UserInfo struct {
 	CheckinStreak int        `json:"checkinStreak"`
 	LastCheckinAt *time.Time `json:"lastCheckinAt,omitempty"`
 	LastLoginAt   *time.Time `json:"lastLoginAt,omitempty"`
+	InviteCode    string     `json:"inviteCode,omitempty"`
 }
 
 // AuthResponse 是登录或注册成功后的统一返回体。

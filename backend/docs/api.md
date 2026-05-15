@@ -198,10 +198,10 @@ Response:
 
 说明：
 
-- 提交任务前会先进行内容安全规则审核，命中 `PROMPT_BLOCK_KEYWORDS` 时会直接拒绝，不扣积分，也不扣生图次数。
-- 生图时优先消耗免费次数，免费次数不足时再消耗充值次数。
+- 提交任务前会先进行内容安全规则审核，命中 `PROMPT_BLOCK_KEYWORDS` 时会直接拒绝，不扣积分，也不扣生图福利次数。
+- 生图时优先消耗福利次数。
 - 后端会异步调用第三方服务，前端通过任务详情接口轮询状态。
-- 失败、超时、长期卡住时，任务会标记为 `failed` 并退还本次扣除的次数。
+- 失败、超时、长期卡住时，任务会标记为 `failed` 并退还本次扣除的福利次数。
 - 生成成功后，后端会根据 `IMAGE_STORAGE_DRIVER` 尝试把第三方图片转存到自有存储，并把自有图片 URL 写入任务。
 
 ### 查询任务详情
@@ -264,7 +264,7 @@ Response:
 
 - 只能重试非 `generating` 状态的任务。
 - 后端会读取历史任务的请求快照，创建一条新任务。
-- 重试会重新扣生图次数。
+- 重试会重新扣生图福利次数。
 
 Response:
 
@@ -300,127 +300,11 @@ Response:
       "bonusPoints": 0,
       "enabled": true,
       "sortOrder": 20,
-      "note": "11 积分兑换 5 次"
+      "note": "11 积分兑换 5 福利次数"
     }
   ]
 }
 ```
-
-### 旧版模拟支付（兼容保留）
-
-`POST /api/v1/recharge-orders/mock-pay`
-
-Request:
-
-```json
-{
-  "packageCode": "recharge-300"
-}
-```
-
-Response:
-
-```json
-{
-  "orderNo": "ORD202605031230001234",
-  "packageCode": "recharge-300",
-  "packageName": "标准充值包",
-  "amountCents": 4999,
-  "creditsAmount": 300,
-  "bonusPoints": 20,
-  "pointsAmount": 20,
-  "pointsBalance": 20,
-  "freeCreditsBalance": 0,
-  "paidCreditsBalance": 300,
-  "totalCreditsBalance": 300,
-  "balance": 300,
-  "status": "paid"
-}
-```
-
-### 充值订单流（新版）
-
-充值购买不再直接入账，而是先创建 `pending` 订单，支付成功后再由确认接口或支付回调完成入账。
-
-#### 创建待支付订单
-
-`POST /api/v1/recharge-orders`
-
-Request:
-
-```json
-{
-  "packageCode": "recharge-300"
-}
-```
-
-Response:
-
-```json
-{
-  "id": "1",
-  "orderNo": "ORD202605031230001234",
-  "packageCode": "recharge-300",
-  "packageName": "标准充值包",
-  "amountCents": 4999,
-  "creditsAmount": 300,
-  "bonusPoints": 20,
-  "pointsAmount": 20,
-  "status": "pending",
-  "createdAt": "2026-05-03T12:30:00+08:00",
-  "pointsBalance": 0,
-  "freeCreditsBalance": 0,
-  "paidCreditsBalance": 0,
-  "totalCreditsBalance": 0,
-  "balance": 0
-}
-```
-
-#### 查询订单
-
-```text
-GET /api/v1/recharge-orders?page=1&pageSize=10
-GET /api/v1/recharge-orders/:orderNo
-```
-
-#### 确认支付成功
-
-`POST /api/v1/recharge-orders/:orderNo/confirm`
-
-Request:
-
-```json
-{
-  "providerTradeNo": "mock-ORD202605031230001234",
-  "paymentChannel": "mock",
-  "amountCents": 4999,
-  "paidAt": "2026-05-03T12:31:00+08:00",
-  "remark": "mock payment"
-}
-```
-
-说明：本地 MVP 暂时用这个接口模拟支付渠道成功回调。接真实支付后，应由支付网关回调触发同一套入账逻辑。
-
-#### 支付网关回调
-
-`POST /api/v1/payments/recharge/callback`
-
-Request:
-
-```json
-{
-  "orderNo": "ORD202605031230001234",
-  "providerTradeNo": "wx-transaction-id",
-  "paymentChannel": "wechat",
-  "amountCents": 4999,
-  "paidAt": "2026-05-03T12:31:00+08:00"
-}
-```
-
-说明：
-- 入账逻辑按 `orderNo` 做幂等处理，同一个订单重复回调不会重复加次数或积分。
-- 如果回调携带 `amountCents`，后端会校验金额与订单金额一致。
-- `POST /api/v1/recharge-orders/mock-pay` 仅作为旧版兼容入口保留，新前端不再使用。
 
 ## 后台管理
 
@@ -450,7 +334,6 @@ Response:
   "tasksGenerating": 1,
   "tasksSuccess": 25,
   "tasksFailed": 4,
-  "ordersPaid": 3,
   "auditRejected": 2,
   "pointsBalanceTotal": 1000,
   "freeCreditsTotal": 200,
@@ -487,10 +370,6 @@ Response:
 
 `GET /api/v1/admin/image-tasks?page=1&pageSize=20&status=success`
 
-### 订单记录
-
-`GET /api/v1/admin/recharge-orders?page=1&pageSize=20&status=paid`
-
 ### 内容审核日志
 
 `GET /api/v1/admin/content-audits?page=1&pageSize=20&status=rejected`
@@ -507,7 +386,7 @@ GET /api/v1/admin/action-logs?page=1&pageSize=20&targetType=billing_package
 ```
 
 说明：
-- 后台可以配置充值档位和积分兑换档位。
+- 后台可以配置商品档位和积分兑换档位。
 - 创建或更新套餐会写入 `admin_action_logs`。
 - 后端会保护每个套餐类型至少保留一个启用档位，避免前台无可用套餐。
 
@@ -521,8 +400,5 @@ GET /api/v1/admin/action-logs?page=1&pageSize=20&targetType=billing_package
 - `POST /api/v1/user/checkin`
 - `POST /api/v1/image-tasks`
 - `POST /api/v1/image-tasks/:id/retry`
-- `POST /api/v1/recharge-orders`
-- `POST /api/v1/recharge-orders/:orderNo/confirm`
-- `POST /api/v1/recharge-orders/mock-pay`
 
 Redis 可用时使用 Redis 计数；本地开发没有 Redis 或 Redis 短暂异常时使用进程内存计数。限流命中时返回 HTTP `429`。

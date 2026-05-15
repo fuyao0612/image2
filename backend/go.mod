@@ -12,6 +12,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/redis/go-redis/v9 v9.19.0
 	golang.org/x/crypto v0.48.0
+	golang.org/x/image v0.39.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
 )
@@ -62,7 +63,7 @@ require (
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect

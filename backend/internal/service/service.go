@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ type Service struct {
 	db            *gorm.DB
 	redis         *redis.Client
 	emailCodes    cache.EmailCodeStore
+	captchas      cache.CaptchaStore
 	mailer        *mailer.Client
 	jwt           *security.JWTManager
 	location      *time.Location
@@ -53,8 +55,28 @@ type Service struct {
 	imageStore    *imagestorage.Client
 	settingsMu    sync.RWMutex
 	settings      map[string]string
+	captchaPassMu sync.Mutex
+	captchaPasses map[string]time.Time
+	emailUsageMu  sync.Mutex
+	emailUsage    map[string]int
 	activeTasksMu sync.RWMutex
 	activeTasks   map[uint64]struct{}
+}
+
+type imageTaskFailureNotice struct {
+	TaskID         uint64
+	UserID         uint64
+	Prompt         string
+	Message        string
+	Provider       string
+	ProviderTaskID string
+	RawResponse    string
+	CreatedAt      time.Time
+}
+
+// TokenVersionView 用于鉴权阶段读取账号当前会话版本。
+type TokenVersionView struct {
+	TokenVersion int64
 }
 
 // New 创建业务服务。
@@ -85,30 +107,44 @@ func New(cfg config.Config, db *gorm.DB, redisClient *redis.Client) *Service {
 		log.Printf("初始化图片存储失败，图片将保留第三方 URL: %v", err)
 	}
 
-	return &Service{
+	svc := &Service{
 		cfg:        cfg,
 		db:         db,
 		redis:      redisClient,
 		emailCodes: cache.NewEmailCodeStore(redisClient),
+		captchas:   cache.NewCaptchaStore(redisClient),
 		mailer: mailer.New(mailer.Config{
-			Delivery: cfg.EmailDelivery,
-			Host:     cfg.SMTPHost,
-			Port:     cfg.SMTPPort,
-			Username: cfg.SMTPUsername,
-			Password: cfg.SMTPPassword,
-			From:     cfg.SMTPFrom,
-			FromName: cfg.SMTPFromName,
-			UseTLS:   cfg.SMTPUseTLS,
-			StartTLS: cfg.SMTPStartTLS,
-			Timeout:  cfg.SMTPTimeout,
-			AppName:  "AI 生图 SaaS",
-			AppEnv:   cfg.AppEnv,
+			Delivery:              cfg.EmailDelivery,
+			Host:                  cfg.SMTPHost,
+			Port:                  cfg.SMTPPort,
+			Username:              cfg.SMTPUsername,
+			Password:              cfg.SMTPPassword,
+			From:                  cfg.SMTPFrom,
+			FromName:              cfg.SMTPFromName,
+			UseTLS:                cfg.SMTPUseTLS,
+			StartTLS:              cfg.SMTPStartTLS,
+			Timeout:               cfg.SMTPTimeout,
+			ResendKey:             cfg.ResendAPIKey,
+			ResendURL:             cfg.ResendAPIURL,
+			TencentSecretID:       cfg.TencentCloudSecretID,
+			TencentSecretKey:      cfg.TencentCloudSecretKey,
+			TencentToken:          cfg.TencentCloudToken,
+			TencentRegion:         cfg.TencentSESRegion,
+			TencentEndpoint:       cfg.TencentSESEndpoint,
+			TencentFrom:           cfg.TencentSESFrom,
+			TencentFromName:       cfg.TencentSESFromName,
+			TencentTemplateID:     cfg.TencentSESTemplateID,
+			TencentTaskTemplateID: cfg.TencentSESTaskTemplateID,
+			AppName:               cfg.SMTPFromName,
+			AppEnv:                cfg.AppEnv,
 		}),
-		jwt:         security.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer, cfg.AccessTokenTTL),
-		location:    loc,
-		imageStore:  store,
-		settings:    defaultSystemSettings(cfg),
-		activeTasks: make(map[uint64]struct{}),
+		jwt:           security.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer, cfg.AccessTokenTTL),
+		location:      loc,
+		imageStore:    store,
+		settings:      defaultSystemSettings(cfg),
+		captchaPasses: make(map[string]time.Time),
+		emailUsage:    make(map[string]int),
+		activeTasks:   make(map[uint64]struct{}),
 		imageProvider: provider.NewMentaloutProvider(provider.MentaloutConfig{
 			BatchServiceURL:    cfg.ImageProviderBatchURL,
 			ProviderAPIBaseURL: cfg.ImageProviderAPIBaseURL,
@@ -117,6 +153,8 @@ func New(cfg config.Config, db *gorm.DB, redisClient *redis.Client) *Service {
 			Timeout:            cfg.ImageProviderTimeout,
 		}),
 	}
+	svc.ensureDefaultProviderKey()
+	return svc
 }
 
 // JWT 返回令牌管理器。
@@ -129,6 +167,125 @@ func (s *Service) Redis() *redis.Client {
 	return s.redis
 }
 
+func (s *Service) Config() config.Config {
+	return s.cfg
+}
+
+func (s *Service) emailCodePolicy() cache.EmailCodePolicy {
+	return cache.EmailCodePolicy{
+		TTL:               s.cfg.EmailCodeTTL,
+		Cooldown:          s.cfg.EmailCodeCooldown,
+		SendWindow:        s.cfg.EmailCodeSendWindow,
+		MaxSendsPerWindow: s.cfg.EmailCodeMaxPerWindow,
+		MaxVerifyAttempts: s.cfg.EmailCodeMaxAttempts,
+	}
+}
+
+func mapEmailCodeError(err error) error {
+	switch {
+	case errors.Is(err, cache.ErrEmailCodeCooldown):
+		return ErrVerificationCodeTooFrequent
+	case errors.Is(err, cache.ErrEmailCodeRateLimited):
+		return ErrVerificationCodeRateLimited
+	case errors.Is(err, cache.ErrEmailCodeAttemptsExceeded):
+		return ErrVerificationAttemptsExceeded
+	case errors.Is(err, cache.ErrEmailCodeExpired):
+		return ErrVerificationCodeExpired
+	default:
+		return err
+	}
+}
+
+func (s *Service) ensureRegisterEmailDailyQuota(ctx context.Context) error {
+	if !s.emailDailyLimitEnabled() {
+		return nil
+	}
+	count, err := s.currentEmailDailyUsage(ctx)
+	if err != nil {
+		log.Printf("读取 Resend 当日发送计数失败，将继续执行: %v", err)
+		return nil
+	}
+	if count >= s.cfg.EmailDailySendLimit {
+		return ErrEmailDailyLimitReached
+	}
+	return nil
+}
+
+func (s *Service) recordRegisterEmailSent(ctx context.Context) {
+	if !s.emailDailyLimitEnabled() {
+		return
+	}
+	if _, err := s.incrementEmailDailyUsage(ctx); err != nil {
+		log.Printf("记录 Resend 当日发送计数失败: %v", err)
+	}
+}
+
+func (s *Service) emailDailyLimitEnabled() bool {
+	if s.cfg.EmailDailySendLimit <= 0 {
+		return false
+	}
+	delivery := strings.ToLower(strings.TrimSpace(s.cfg.EmailDelivery))
+	host := strings.ToLower(strings.TrimSpace(s.cfg.SMTPHost))
+	return delivery == "resend" || strings.Contains(host, "resend.com")
+}
+
+func (s *Service) currentEmailDailyUsage(ctx context.Context) (int, error) {
+	key := s.emailDailyUsageKey(time.Now().In(s.location))
+	if s.redis != nil {
+		value, err := s.redis.Get(ctx, key).Int()
+		if errors.Is(err, redis.Nil) {
+			return 0, nil
+		}
+		return value, err
+	}
+	s.emailUsageMu.Lock()
+	defer s.emailUsageMu.Unlock()
+	return s.emailUsage[key], nil
+}
+
+func (s *Service) incrementEmailDailyUsage(ctx context.Context) (int, error) {
+	now := time.Now().In(s.location)
+	key := s.emailDailyUsageKey(now)
+	if s.redis != nil {
+		count, err := s.redis.Incr(ctx, key).Result()
+		if err != nil {
+			return 0, err
+		}
+		if count == 1 {
+			_ = s.redis.Expire(ctx, key, s.durationUntilNextLocalDay(now)+time.Hour).Err()
+		}
+		return int(count), nil
+	}
+	s.emailUsageMu.Lock()
+	defer s.emailUsageMu.Unlock()
+	s.emailUsage[key]++
+	return s.emailUsage[key], nil
+}
+
+func (s *Service) emailDailyUsageKey(now time.Time) string {
+	return "email:resend:register:daily:" + now.Format("20060102")
+}
+
+func (s *Service) durationUntilNextLocalDay(now time.Time) time.Duration {
+	next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, s.location)
+	return time.Until(next)
+}
+
+// EnsureActiveUser 确认当前 Token 对应的账号仍然可用。
+func (s *Service) EnsureActiveUser(ctx context.Context, userID uint64) error {
+	var user model.User
+	if err := s.db.WithContext(ctx).First(&user, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrUserNotFound
+		}
+		return err
+	}
+	if user.Status == model.UserStatusDisabled {
+		return ErrUserDisabled
+	}
+	return nil
+}
+
 // SendEmailCode 生成并保存验证码。
 func (s *Service) SendEmailCode(ctx context.Context, req dto.SendEmailCodeRequest) (dto.SendEmailCodeResponse, error) {
 	email := normalizeEmail(req.Email)
@@ -138,27 +295,60 @@ func (s *Service) SendEmailCode(ctx context.Context, req dto.SendEmailCodeReques
 	if strings.EqualFold(strings.TrimSpace(req.Scene), "register") && !s.cfg.RegistrationEnabled {
 		return dto.SendEmailCodeResponse{}, ErrRegistrationDisabled
 	}
-
-	code, err := s.emailCodes.Save(ctx, email, req.Scene, s.cfg.EmailCodeTTL)
-	if err != nil {
-		return dto.SendEmailCodeResponse{}, err
-	}
-
-	if s.mailer != nil && s.mailer.Configured() {
-		if err := s.mailer.SendVerificationCode(ctx, email, code, req.Scene, s.cfg.EmailCodeTTL); err != nil {
+	isRegisterScene := strings.EqualFold(strings.TrimSpace(req.Scene), "register")
+	if isRegisterScene {
+		if err := s.ensureRegisterEmailDailyQuota(ctx); err != nil {
 			return dto.SendEmailCodeResponse{}, err
 		}
-	} else if strings.EqualFold(s.cfg.AppEnv, "prod") {
-		return dto.SendEmailCodeResponse{}, ErrEmailSenderNotConfigured
+	}
+
+	if !s.hasCaptchaPass(ctx, email, req.Scene) {
+		if strings.TrimSpace(req.CaptchaID) == "" || strings.TrimSpace(req.CaptchaCode) == "" {
+			return dto.SendEmailCodeResponse{}, ErrInvalidCaptcha
+		}
+		if err := s.verifyCaptcha(ctx, req.CaptchaID, req.CaptchaCode); err != nil {
+			return dto.SendEmailCodeResponse{}, err
+		}
+		_ = s.rememberCaptchaPass(ctx, email, req.Scene)
+	}
+	if isRegisterScene {
+		exists, err := s.emailExists(ctx, email)
+		if err != nil {
+			return dto.SendEmailCodeResponse{}, err
+		}
+		if exists {
+			return dto.SendEmailCodeResponse{}, ErrEmailAlreadyRegistered
+		}
+	}
+
+	code, err := s.emailCodes.Save(ctx, email, req.Scene, s.emailCodePolicy())
+	if err != nil {
+		return dto.SendEmailCodeResponse{}, mapEmailCodeError(err)
+	}
+
+	isProd := strings.EqualFold(strings.TrimSpace(s.cfg.AppEnv), "prod")
+	debugDelivery := strings.EqualFold(strings.TrimSpace(s.cfg.EmailDelivery), "debug")
+	if s.mailer != nil && s.mailer.Configured() {
+		if err := s.mailer.SendVerificationCode(ctx, email, code, req.Scene, s.cfg.EmailCodeTTL); err != nil {
+			_ = s.emailCodes.Delete(ctx, email, req.Scene)
+			return dto.SendEmailCodeResponse{}, err
+		}
+		if isRegisterScene {
+			s.recordRegisterEmailSent(ctx)
+		}
+	} else if debugDelivery && !isProd {
+		log.Printf("debug 邮箱验证码: email=%s scene=%s code=%s expires_in=%s", email, req.Scene, code, s.cfg.EmailCodeTTL)
+	} else if !isProd {
+		log.Printf("debug 邮箱验证码: email=%s scene=%s code=%s expires_in=%s", email, req.Scene, code, s.cfg.EmailCodeTTL)
 	} else {
-		log.Printf("开发环境邮箱验证码: email=%s scene=%s code=%s expires_in=%s", email, req.Scene, code, s.cfg.EmailCodeTTL)
+		return dto.SendEmailCodeResponse{}, ErrEmailSenderNotConfigured
 	}
 
 	resp := dto.SendEmailCodeResponse{
 		Sent:      true,
 		ExpiresIn: int(s.cfg.EmailCodeTTL / time.Second),
 	}
-	if !strings.EqualFold(s.cfg.AppEnv, "prod") {
+	if debugDelivery && !isProd {
 		resp.DebugCode = code
 	}
 
@@ -166,72 +356,6 @@ func (s *Service) SendEmailCode(ctx context.Context, req dto.SendEmailCodeReques
 }
 
 // Register 完成注册并直接返回登录态。
-func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.AuthResponse, error) {
-	if !s.cfg.RegistrationEnabled {
-		return dto.AuthResponse{}, ErrRegistrationDisabled
-	}
-
-	email := normalizeEmail(req.Email)
-	username := normalizeUsername(req.Username)
-	if email == "" || username == "" || strings.TrimSpace(req.Password) == "" {
-		return dto.AuthResponse{}, fmt.Errorf("请求参数不合法")
-	}
-
-	ok, err := s.emailCodes.Verify(ctx, email, "register", req.Code)
-	if err != nil {
-		return dto.AuthResponse{}, err
-	}
-	if !ok {
-		return dto.AuthResponse{}, ErrInvalidVerificationCode
-	}
-
-	var created model.User
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		var exists int64
-		if err := tx.Model(&model.User{}).
-			Where("lower(email) = ? OR username = ?", email, username).
-			Count(&exists).Error; err != nil {
-			return err
-		}
-		if exists > 0 {
-			return ErrAccountExists
-		}
-
-		hash, err := hashPassword(req.Password)
-		if err != nil {
-			return err
-		}
-
-		now := s.now()
-		settlementDate := s.startOfDay(now)
-		user := model.User{
-			Username:                 username,
-			Email:                    email,
-			PasswordHash:             hash,
-			PointsBalance:            0,
-			CheckinStreak:            0,
-			LastCreditSettlementDate: &settlementDate,
-			EmailVerifiedAt:          &now,
-			LastLoginAt:              &now,
-			Status:                   model.UserStatusNormal,
-			Role:                     model.UserRoleUser,
-		}
-		if s.isAdminEmail(email) {
-			user.Role = model.UserRoleAdmin
-		}
-		if err := tx.Create(&user).Error; err != nil {
-			return err
-		}
-		created = user
-		return nil
-	})
-	if err != nil {
-		return dto.AuthResponse{}, err
-	}
-
-	return s.authResponse(created)
-}
-
 // Login 账号密码登录。
 func (s *Service) Login(ctx context.Context, req dto.LoginRequest) (dto.AuthResponse, error) {
 	_ = ctx
@@ -267,138 +391,49 @@ func (s *Service) Login(ctx context.Context, req dto.LoginRequest) (dto.AuthResp
 // CheckIn 完成每日签到，若当天已签到则返回幂等成功。
 func (s *Service) CheckIn(ctx context.Context, userID uint64) (dto.CheckinResponse, error) {
 	return s.checkInV2(ctx, userID)
-
-	_ = ctx
-
-	var result dto.CheckinResponse
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		user, err := s.lockUser(tx, userID)
-		if err != nil {
-			return err
-		}
-
-		now := s.now()
-		today := s.startOfDay(now)
-		if user.LastCheckinDate != nil && sameDay(*user.LastCheckinDate, today) {
-			lastCheckin := now
-			if user.LastCheckinAt != nil {
-				lastCheckin = *user.LastCheckinAt
-			}
-			result = dto.CheckinResponse{
-				CheckedIn:     false,
-				GainedPoints:  0,
-				Streak:        user.CheckinStreak,
-				PointsBalance: user.PointsBalance,
-				FreeCredits:   user.FreeCredits,
-				PaidCredits:   user.PaidCredits,
-				TotalCredits:  user.FreeCredits + user.PaidCredits,
-				LastCheckinAt: lastCheckin,
-			}
-			return nil
-		}
-
-		streak := 1
-		if user.LastCheckinDate != nil {
-			yesterday := today.AddDate(0, 0, -1)
-			if sameDay(*user.LastCheckinDate, yesterday) {
-				streak = user.CheckinStreak + 1
-			}
-		}
-
-		before := user.PointsBalance
-		after := before + s.cfg.CheckinPoints
-		lastCheckinAt := now
-		lastCheckinDate := today
-
-		user.PointsBalance = after
-		user.CheckinStreak = streak
-		user.LastCheckinAt = &lastCheckinAt
-		user.LastCheckinDate = &lastCheckinDate
-
-		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
-			"points_balance":    after,
-			"checkin_streak":    streak,
-			"last_checkin_at":   lastCheckinAt,
-			"last_checkin_date": lastCheckinDate,
-		}).Error; err != nil {
-			return err
-		}
-
-		log := model.PointsLog{
-			UserID:        user.ID,
-			ChangeType:    model.PointsChangeTypeCheckin,
-			Delta:         s.cfg.CheckinPoints,
-			BeforeBalance: before,
-			AfterBalance:  after,
-			BizType:       "checkin",
-			BizID:         dayKey(today),
-			Remark:        "每日签到",
-		}
-		if err := tx.Create(&log).Error; err != nil {
-			return err
-		}
-
-		result = dto.CheckinResponse{
-			CheckedIn:     true,
-			GainedPoints:  s.cfg.CheckinPoints,
-			Streak:        streak,
-			PointsBalance: after,
-			FreeCredits:   user.FreeCredits,
-			PaidCredits:   user.PaidCredits,
-			TotalCredits:  user.FreeCredits + user.PaidCredits,
-			LastCheckinAt: lastCheckinAt,
-		}
-		return nil
-	})
-	if err != nil {
-		return dto.CheckinResponse{}, err
-	}
-
-	if result.CheckedIn {
-		_ = s.rememberCheckin(ctx, userID, result.LastCheckinAt)
-	}
-
-	return result, nil
 }
 
 // GetPoints 获取当前积分和最近流水。
 func (s *Service) GetPoints(ctx context.Context, userID uint64) (dto.PointsResponse, error) {
 	return s.getPointsV2(ctx, userID)
-
-	_ = ctx
-	user, err := s.loadUser(userID)
-	if err != nil {
-		return dto.PointsResponse{}, err
-	}
-
-	var logs []model.PointsLog
-	if err := s.db.Where("user_id = ?", userID).Order("created_at desc").Limit(10).Find(&logs).Error; err != nil {
-		return dto.PointsResponse{}, err
-	}
-
-	var creditLogs []model.CreditLog
-	if err := s.db.Where("user_id = ?", userID).Order("created_at desc").Limit(10).Find(&creditLogs).Error; err != nil {
-		return dto.PointsResponse{}, err
-	}
-
-	return s.pointsResponse(user, logs, creditLogs), nil
 }
 
 // GetMe 返回当前登录用户信息。
 func (s *Service) GetMe(ctx context.Context, userID uint64) (dto.UserInfo, error) {
 	return s.getMeV2(ctx, userID)
-
-	_ = ctx
-	user, err := s.loadUser(userID)
-	if err != nil {
-		return dto.UserInfo{}, err
-	}
-	user = s.syncConfiguredAdminRole(user)
-	return s.userInfoBalance(user), nil
 }
 
 // UploadReferenceImage 上传参考图片并返回可访问地址。
 func (s *Service) UploadReferenceImage(ctx context.Context, userID uint64, header *multipart.FileHeader) (dto.UploadImageResponse, error) {
+	return s.UploadUserImage(ctx, userID, header, "reference")
+}
+
+func (s *Service) UploadUserImage(ctx context.Context, userID uint64, header *multipart.FileHeader, purpose string) (dto.UploadImageResponse, error) {
+	return s.uploadImageBytes(ctx, header, userUploadKeyPrefix(userID, purpose, s.now()))
+}
+
+func (s *Service) AdminUploadAnnouncementImage(ctx context.Context, adminID uint64, header *multipart.FileHeader) (dto.UploadImageResponse, error) {
+	if err := s.RequireAdmin(ctx, adminID); err != nil {
+		return dto.UploadImageResponse{}, err
+	}
+	return s.uploadImageBytes(ctx, header, adminUploadKeyPrefix(adminID, "announcement", s.now()))
+}
+
+func (s *Service) AdminUploadPromptPlazaImage(ctx context.Context, adminID uint64, header *multipart.FileHeader) (dto.UploadImageResponse, error) {
+	if err := s.RequireAdmin(ctx, adminID); err != nil {
+		return dto.UploadImageResponse{}, err
+	}
+	return s.uploadImageBytes(ctx, header, adminUploadKeyPrefix(adminID, "prompt-plaza", s.now()))
+}
+
+func (s *Service) AdminUploadProductImage(ctx context.Context, adminID uint64, header *multipart.FileHeader) (dto.UploadImageResponse, error) {
+	if err := s.RequireAdmin(ctx, adminID); err != nil {
+		return dto.UploadImageResponse{}, err
+	}
+	return s.uploadImageBytes(ctx, header, adminUploadKeyPrefix(adminID, "product-image", s.now()))
+}
+
+func (s *Service) uploadImageBytes(ctx context.Context, header *multipart.FileHeader, keyPrefix string) (dto.UploadImageResponse, error) {
 	if header == nil {
 		return dto.UploadImageResponse{}, ErrUploadFileRequired
 	}
@@ -430,12 +465,10 @@ func (s *Service) UploadReferenceImage(ctx context.Context, userID uint64, heade
 		return dto.UploadImageResponse{}, ErrUploadFileRequired
 	}
 
-	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
-	if contentType == "" {
-		contentType = http.DetectContentType(data)
+	contentType := http.DetectContentType(data)
+	if !isAllowedUploadImageType(contentType) {
+		return dto.UploadImageResponse{}, ErrUploadUnsupportedType
 	}
-
-	keyPrefix := fmt.Sprintf("reference-images/user-%d/%s", userID, s.now().Format("2006/01/02"))
 	imageURL, err := s.imageStore.StoreBytes(ctx, data, keyPrefix, contentType, header.Filename)
 	if err != nil {
 		return dto.UploadImageResponse{}, err
@@ -449,109 +482,33 @@ func (s *Service) UploadReferenceImage(ctx context.Context, userID uint64, heade
 	}, nil
 }
 
+func userUploadKeyPrefix(userID uint64, purpose string, now time.Time) string {
+	category := "references"
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "prompt-plaza", "prompt-plaza-preview", "prompt_plaza", "prompt_plaza_preview":
+		category = "prompt-plaza-previews"
+	case "reference", "reference-image", "image-task-reference", "":
+		category = "references"
+	}
+	return fmt.Sprintf("users/user-%d/%s/%s", userID, category, now.Format("2006/01/02"))
+}
+
+func adminUploadKeyPrefix(adminID uint64, purpose string, now time.Time) string {
+	category := "announcements"
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "prompt-plaza", "prompt-plaza-preview", "prompt_plaza", "prompt_plaza_preview":
+		category = "prompt-plaza-previews"
+	case "product-image", "product", "products":
+		category = "products"
+	case "announcement", "announcements", "":
+		category = "announcements"
+	}
+	return fmt.Sprintf("admin/admin-%d/%s/%s", adminID, category, now.Format("2006/01/02"))
+}
+
 // CreateImageTask 创建生图任务并立刻返回 mock 结果。
 func (s *Service) CreateImageTask(ctx context.Context, userID uint64, req dto.CreateImageTaskRequest) (dto.CreateImageTaskResponse, error) {
 	return s.createImageTaskV2(ctx, userID, req)
-
-	_ = ctx
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		return dto.CreateImageTaskResponse{}, ErrPromptRequired
-	}
-	decision := s.moderatePrompt(prompt)
-	if decision.Status == model.ContentAuditStatusRejected {
-		_ = s.recordContentAudit(ctx, userID, "image_task", "", "prompt", prompt, decision)
-		return dto.CreateImageTaskResponse{}, ErrContentRejected
-	}
-	if s.imageProvider == nil || !s.imageProvider.Configured() {
-		return dto.CreateImageTaskResponse{}, ErrProviderNotConfigured
-	}
-	count := normalizeImageCount(req.Count)
-	size := strings.TrimSpace(req.Size)
-	style := strings.TrimSpace(req.Style)
-	quality := strings.TrimSpace(req.Quality)
-	outputFormat := strings.TrimSpace(req.OutputFormat)
-	referenceImageURL := strings.TrimSpace(req.ReferenceImageURL)
-	referenceImageURL = s.normalizeReferenceImageURL(referenceImageURL)
-	costCredits := int64(count)
-	input := imageTaskGenerationInput{
-		Prompt:            prompt,
-		Size:              size,
-		Style:             style,
-		Count:             count,
-		Quality:           quality,
-		OutputFormat:      outputFormat,
-		ReferenceImageURL: referenceImageURL,
-	}
-
-	var responseData dto.CreateImageTaskResponse
-	var task model.ImageTask
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		user, err := s.lockUser(tx, userID)
-		if err != nil {
-			return err
-		}
-
-		before := creditBalance{Free: user.FreeCredits, Paid: user.PaidCredits}
-		if before.Total() < costCredits {
-			return ErrInsufficientCredits
-		}
-		freeCost, paidCost, after := before.spend(costCredits)
-		requestSnapshot, _ := json.Marshal(input)
-		creditSource := "free"
-		if freeCost > 0 && paidCost > 0 {
-			creditSource = "mixed"
-		} else if paidCost > 0 {
-			creditSource = "paid"
-		}
-
-		task = model.ImageTask{
-			UserID:          userID,
-			Prompt:          prompt,
-			CostPoints:      0,
-			CostCredits:     costCredits,
-			FreeCreditsCost: freeCost,
-			PaidCreditsCost: paidCost,
-			CreditSource:    creditSource,
-			Status:          model.ImageTaskStatusGenerating,
-			Provider:        s.imageProvider.Name(),
-			RequestParams:   string(requestSnapshot),
-		}
-		if err := tx.Create(&task).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
-			"free_credits": after.Free,
-			"paid_credits": after.Paid,
-		}).Error; err != nil {
-			return err
-		}
-
-		if err := s.recordCreditLog(tx, userID, model.CreditChangeTypeGenerate, -freeCost, -paidCost, before, after, "image_task", strconv.FormatUint(task.ID, 10), "生图消耗次数"); err != nil {
-			return err
-		}
-
-		responseData = dto.CreateImageTaskResponse{
-			TaskID:              strconv.FormatUint(task.ID, 10),
-			Status:              string(task.Status),
-			Balance:             after.Total(),
-			PointsBalance:       user.PointsBalance,
-			FreeCreditsBalance:  after.Free,
-			PaidCreditsBalance:  after.Paid,
-			TotalCreditsBalance: after.Total(),
-		}
-		return nil
-	})
-
-	if err != nil {
-		return dto.CreateImageTaskResponse{}, err
-	}
-
-	_ = s.recordContentAudit(ctx, userID, "image_task", strconv.FormatUint(task.ID, 10), "prompt", prompt, decision)
-	s.launchImageTask(task.ID, userID, input)
-
-	return responseData, nil
 }
 
 // RetryImageTask 基于历史任务的请求快照重新创建一条生图任务。
@@ -601,36 +558,6 @@ func (s *Service) processImageTask(taskID uint64, userID uint64, input imageTask
 // GetImageTask 获取用户自己的任务详情。
 func (s *Service) GetImageTask(ctx context.Context, userID uint64, taskID string) (dto.ImageTaskDetailResponse, error) {
 	return s.getImageTaskV2(ctx, userID, taskID)
-
-	_ = ctx
-	id, err := strconv.ParseUint(strings.TrimSpace(taskID), 10, 64)
-	if err != nil || id == 0 {
-		return dto.ImageTaskDetailResponse{}, ErrTaskNotFound
-	}
-
-	var task model.ImageTask
-	if err := s.db.Where("id = ? AND user_id = ?", id, userID).First(&task).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return dto.ImageTaskDetailResponse{}, ErrTaskNotFound
-		}
-		return dto.ImageTaskDetailResponse{}, err
-	}
-
-	return dto.ImageTaskDetailResponse{
-		TaskID:          strconv.FormatUint(task.ID, 10),
-		Prompt:          task.Prompt,
-		ImageURL:        task.ImageURL,
-		ImageURLs:       imageURLsFromTask(task),
-		CostPoints:      task.CostPoints,
-		CostCredits:     task.CostCredits,
-		FreeCreditsCost: task.FreeCreditsCost,
-		PaidCreditsCost: task.PaidCreditsCost,
-		CreditSource:    task.CreditSource,
-		Status:          string(task.Status),
-		RequestParams:   task.RequestParams,
-		ErrorMessage:    task.ErrorMessage,
-		CreatedAt:       task.CreatedAt,
-	}, nil
 }
 
 // DownloadImageTaskImage 下载用户某个生图任务中的指定图片。
@@ -685,53 +612,6 @@ func (s *Service) DownloadImageTaskImage(ctx context.Context, userID uint64, tas
 // ListImageTasks 返回用户任务分页。
 func (s *Service) ListImageTasks(ctx context.Context, userID uint64, page int, pageSize int) (dto.ListImageTasksResponse, error) {
 	return s.listImageTasksV2(ctx, userID, page, pageSize)
-
-	_ = ctx
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 10
-	}
-	if pageSize > 50 {
-		pageSize = 50
-	}
-
-	var total int64
-	if err := s.db.Model(&model.ImageTask{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
-		return dto.ListImageTasksResponse{}, err
-	}
-
-	var tasks []model.ImageTask
-	if err := s.db.Where("user_id = ?", userID).Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&tasks).Error; err != nil {
-		return dto.ListImageTasksResponse{}, err
-	}
-
-	items := make([]dto.ImageTaskItem, 0, len(tasks))
-	for _, task := range tasks {
-		items = append(items, dto.ImageTaskItem{
-			ID:              strconv.FormatUint(task.ID, 10),
-			Prompt:          task.Prompt,
-			ImageURL:        task.ImageURL,
-			ImageURLs:       imageURLsFromTask(task),
-			CostPoints:      task.CostPoints,
-			CostCredits:     task.CostCredits,
-			FreeCreditsCost: task.FreeCreditsCost,
-			PaidCreditsCost: task.PaidCreditsCost,
-			CreditSource:    task.CreditSource,
-			Status:          string(task.Status),
-			RequestParams:   task.RequestParams,
-			ErrorMessage:    task.ErrorMessage,
-			CreatedAt:       task.CreatedAt,
-		})
-	}
-
-	return dto.ListImageTasksResponse{
-		Items:    items,
-		Page:     page,
-		PageSize: pageSize,
-		Total:    total,
-	}, nil
 }
 
 // ListPackages 获取套餐列表。
@@ -747,180 +627,13 @@ func (s *Service) ListPackages(ctx context.Context, packageType string) dto.List
 	return dto.ListPackagesResponse{Items: result}
 }
 
-// RedeemPoints 将积分兑换为免费次数。
+// RedeemPoints 将积分兑换为福利次数。
 func (s *Service) RedeemPoints(ctx context.Context, userID uint64, req dto.RedeemPointsRequest) (dto.RedeemPointsResponse, error) {
 	return dto.RedeemPointsResponse{}, ErrPackageInvalid
-
-	pkg, err := s.findBillingPackageByCode(ctx, req.PackageCode, true)
-	if err != nil {
-		return dto.RedeemPointsResponse{}, err
-	}
-	if pkg.PackageType != model.BillingPackageTypeRedeem {
-		return dto.RedeemPointsResponse{}, ErrPackageInvalid
-	}
-	if pkg.CreditsAmount <= 0 || pkg.PointsCost <= 0 {
-		return dto.RedeemPointsResponse{}, ErrPackageInvalid
-	}
-
-	var result dto.RedeemPointsResponse
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		user, err := s.lockUser(tx, userID)
-		if err != nil {
-			return err
-		}
-		if user.PointsBalance < pkg.PointsCost {
-			return ErrInsufficientPoints
-		}
-
-		beforeCredits := creditBalance{Free: user.FreeCredits, Paid: user.PaidCredits}
-		afterCredits := creditBalance{Free: beforeCredits.Free + pkg.CreditsAmount, Paid: beforeCredits.Paid}
-		beforePoints := user.PointsBalance
-		afterPoints := beforePoints - pkg.PointsCost
-
-		if err := tx.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
-			"points_balance": afterPoints,
-			"free_credits":   afterCredits.Free,
-			"paid_credits":   afterCredits.Paid,
-		}).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Create(&model.PointsLog{
-			UserID:        userID,
-			ChangeType:    model.PointsChangeTypeRedeem,
-			Delta:         -pkg.PointsCost,
-			BeforeBalance: beforePoints,
-			AfterBalance:  afterPoints,
-			BizType:       "billing_package",
-			BizID:         pkg.Code,
-			Remark:        fmt.Sprintf("兑换 %s", pkg.Name),
-		}).Error; err != nil {
-			return err
-		}
-
-		if err := s.recordCreditLog(tx, userID, model.CreditChangeTypeRedeem, pkg.CreditsAmount, 0, beforeCredits, afterCredits, "billing_package", pkg.Code, fmt.Sprintf("积分兑换 %s", pkg.Name)); err != nil {
-			return err
-		}
-
-		result = dto.RedeemPointsResponse{
-			RedemptionNo:        generateOrderNo(s.now()),
-			PackageCode:         pkg.Code,
-			PackageName:         pkg.Name,
-			PointsCost:          pkg.PointsCost,
-			CreditsAmount:       pkg.CreditsAmount,
-			PointsBalance:       afterPoints,
-			FreeCreditsBalance:  afterCredits.Free,
-			PaidCreditsBalance:  afterCredits.Paid,
-			TotalCreditsBalance: afterCredits.Total(),
-			Status:              "success",
-		}
-		return nil
-	})
-	return result, err
-}
-
-// MockPurchase 模拟完成一个套餐购买，并直接入账次数。
-func (s *Service) MockPurchase(ctx context.Context, userID uint64, req dto.MockPurchaseRequest) (dto.MockPurchaseResponse, error) {
-	return s.mockPurchaseV2(ctx, userID, req)
-
-	pkg, err := s.findBillingPackageByCode(ctx, req.PackageCode, true)
-	if err != nil {
-		return dto.MockPurchaseResponse{}, err
-	}
-	if pkg.PackageType != model.BillingPackageTypeRecharge {
-		return dto.MockPurchaseResponse{}, ErrPackageInvalid
-	}
-	if pkg.CreditsAmount <= 0 || pkg.AmountCents < 0 {
-		return dto.MockPurchaseResponse{}, ErrPackageInvalid
-	}
-
-	var result dto.MockPurchaseResponse
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		user, err := s.lockUser(tx, userID)
-		if err != nil {
-			return err
-		}
-
-		now := s.now()
-		orderNo := generateOrderNo(now)
-
-		order := model.RechargeOrder{
-			UserID:         user.ID,
-			OrderNo:        orderNo,
-			PackageCode:    pkg.Code,
-			PackageName:    pkg.Name,
-			AmountCents:    pkg.AmountCents,
-			PointsAmount:   pkg.BonusPoints,
-			CreditsAmount:  pkg.CreditsAmount,
-			BonusPoints:    pkg.BonusPoints,
-			Status:         model.RechargeOrderStatusPaid,
-			PaidAt:         &now,
-			PaymentChannel: "mock",
-		}
-		if err := tx.Create(&order).Error; err != nil {
-			return err
-		}
-
-		beforePoints := user.PointsBalance
-		afterPoints := beforePoints + pkg.BonusPoints
-		beforeCredits := creditBalance{Free: user.FreeCredits, Paid: user.PaidCredits}
-		afterCredits := creditBalance{Free: beforeCredits.Free, Paid: beforeCredits.Paid + pkg.CreditsAmount}
-
-		if err := tx.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
-			"points_balance": afterPoints,
-			"free_credits":   afterCredits.Free,
-			"paid_credits":   afterCredits.Paid,
-		}).Error; err != nil {
-			return err
-		}
-
-		if pkg.BonusPoints > 0 {
-			if err := tx.Create(&model.PointsLog{
-				UserID:        userID,
-				ChangeType:    model.PointsChangeTypePurchaseBonus,
-				Delta:         pkg.BonusPoints,
-				BeforeBalance: beforePoints,
-				AfterBalance:  afterPoints,
-				BizType:       "recharge_order",
-				BizID:         strconv.FormatUint(order.ID, 10),
-				Remark:        "充值赠送积分",
-			}).Error; err != nil {
-				return err
-			}
-		}
-
-		if err := s.recordCreditLog(tx, userID, model.CreditChangeTypePurchase, 0, pkg.CreditsAmount, beforeCredits, afterCredits, "recharge_order", strconv.FormatUint(order.ID, 10), "充值购买次数"); err != nil {
-			return err
-		}
-
-		result = dto.MockPurchaseResponse{
-			RechargeOrderItem: dto.RechargeOrderItem{
-				ID:             strconv.FormatUint(order.ID, 10),
-				OrderNo:        orderNo,
-				PackageCode:    pkg.Code,
-				PackageName:    pkg.Name,
-				AmountCents:    pkg.AmountCents,
-				CreditsAmount:  pkg.CreditsAmount,
-				BonusPoints:    pkg.BonusPoints,
-				PointsAmount:   pkg.BonusPoints,
-				Status:         string(order.Status),
-				PaymentChannel: order.PaymentChannel,
-				PaidAt:         order.PaidAt,
-				CreatedAt:      order.CreatedAt,
-			},
-			PointsBalance:       afterPoints,
-			FreeCreditsBalance:  afterCredits.Free,
-			PaidCreditsBalance:  afterCredits.Paid,
-			TotalCreditsBalance: afterCredits.Total(),
-			Balance:             afterCredits.Total(),
-		}
-		return nil
-	})
-	return result, err
 }
 
 func (s *Service) authResponse(user model.User) (dto.AuthResponse, error) {
-	token, exp, err := s.jwt.Generate(user.ID, user.Username, user.Email)
+	token, exp, err := s.jwt.Generate(user.ID, user.Username, user.Email, user.TokenVersion)
 	if err != nil {
 		return dto.AuthResponse{}, err
 	}
@@ -942,6 +655,27 @@ func (s *Service) loadUser(userID uint64) (model.User, error) {
 		return model.User{}, err
 	}
 	return user, nil
+}
+
+func (s *Service) emailExists(ctx context.Context, email string) (bool, error) {
+	var exists int64
+	if err := s.db.WithContext(ctx).
+		Model(&model.User{}).
+		Where("lower(email) = ?", normalizeEmail(email)).
+		Count(&exists).Error; err != nil {
+		return false, err
+	}
+	return exists > 0, nil
+}
+
+// TokenVersionView 读取当前账号会话版本，仅用于鉴权比对。
+func (s *Service) TokenVersionView(ctx context.Context, userID uint64) (TokenVersionView, error) {
+	user, err := s.loadUser(userID)
+	if err != nil {
+		return TokenVersionView{}, err
+	}
+	_ = ctx
+	return TokenVersionView{TokenVersion: user.TokenVersion}, nil
 }
 
 func (s *Service) findUserByAccount(account string) (model.User, error) {
@@ -1038,6 +772,7 @@ func userInfo(user model.User) dto.UserInfo {
 		CheckinStreak: user.CheckinStreak,
 		LastCheckinAt: user.LastCheckinAt,
 		LastLoginAt:   user.LastLoginAt,
+		InviteCode:    user.InviteCode,
 	}
 }
 
@@ -1076,6 +811,54 @@ func normalizeImageCount(count int) int {
 	return count
 }
 
+func normalizeSupportedImageSize(size string) (string, error) {
+	trimmed := strings.TrimSpace(size)
+	switch trimmed {
+	case "", "auto", "1024x1024", "1024x1536", "1536x1024", "2048x2048", "2048x1152", "3840x2160", "2160x3840":
+		return trimmed, nil
+	default:
+		if isValidCustomImageSize(trimmed) {
+			return trimmed, nil
+		}
+		return "", ErrInvalidImageSize
+	}
+}
+
+func isValidCustomImageSize(size string) bool {
+	const (
+		maxSide   = 3840
+		minPixels = 655360
+		maxPixels = 8294400
+	)
+
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return false
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return false
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return false
+	}
+	if width <= 0 || width > maxSide || height <= 0 || height > maxSide {
+		return false
+	}
+	pixels := width * height
+	return pixels >= minPixels && pixels <= maxPixels
+}
+
+func isAllowedUploadImageType(contentType string) bool {
+	switch strings.TrimSpace(strings.Split(contentType, ";")[0]) {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Service) findPackage(code string) (dto.PackageItem, bool) {
 	for _, item := range s.ListPackages(context.Background(), "").Items {
 		if item.Code == code {
@@ -1091,13 +874,130 @@ func imageURLsFromResult(result provider.GenerateResult) []string {
 	return urls
 }
 
+func normalizeGeneratedImageURLs(result provider.GenerateResult, requestedCount int, referenceImageURL string) []string {
+	urls := imageURLsFromResult(result)
+	if len(urls) == 0 {
+		return urls
+	}
+
+	ordered := make([]string, 0, len(urls))
+	fallbackThumbnailURLs := make([]string, 0, len(urls))
+	primaryURL := strings.TrimSpace(result.ImageURL)
+	if primaryURL != "" && !isLikelyThumbnailURL(primaryURL) {
+		ordered = append(ordered, primaryURL)
+	}
+	for _, rawURL := range urls {
+		trimmed := strings.TrimSpace(rawURL)
+		if trimmed == "" {
+			continue
+		}
+		if isLikelyThumbnailURL(trimmed) {
+			fallbackThumbnailURLs = append(fallbackThumbnailURLs, trimmed)
+			continue
+		}
+		if primaryURL != "" && canonicalGeneratedImageURLKey(trimmed) == canonicalGeneratedImageURLKey(primaryURL) {
+			continue
+		}
+		ordered = append(ordered, trimmed)
+	}
+	if len(ordered) > 0 {
+		urls = ordered
+	} else {
+		urls = fallbackThumbnailURLs
+	}
+
+	referenceKey := canonicalGeneratedImageURLKey(referenceImageURL)
+	seen := make(map[string]string, len(urls))
+	filtered := make([]string, 0, len(urls))
+	for _, rawURL := range urls {
+		trimmed := strings.TrimSpace(rawURL)
+		key := canonicalGeneratedImageURLKey(trimmed)
+		if key == "" {
+			continue
+		}
+		if referenceKey != "" && key == referenceKey {
+			continue
+		}
+		if existing, ok := seen[key]; ok {
+			if isLikelyThumbnailURL(existing) && !isLikelyThumbnailURL(trimmed) {
+				for i := range filtered {
+					if filtered[i] == existing {
+						filtered[i] = trimmed
+						break
+					}
+				}
+				seen[key] = trimmed
+			}
+			continue
+		}
+		seen[key] = trimmed
+		filtered = append(filtered, trimmed)
+	}
+
+	if requestedCount > 0 && len(filtered) > requestedCount {
+		filtered = filtered[:requestedCount]
+	}
+	return filtered
+}
+
+func canonicalGeneratedImageURLKey(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	candidate := trimmed
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
+		candidate = parsed.Path
+	}
+	candidate = strings.ReplaceAll(candidate, "\\", "/")
+	candidate = strings.ReplaceAll(candidate, "/thumbs/", "/")
+	candidate = path.Clean(candidate)
+	if candidate == "." {
+		return ""
+	}
+	return candidate
+}
+
+func isLikelyThumbnailURL(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	if parsed, err := url.Parse(trimmed); err == nil {
+		return strings.Contains(parsed.Path, "/thumbs/")
+	}
+	return strings.Contains(trimmed, "/thumbs/")
+}
+
+func referenceImageURLFromRequestParams(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	var payload struct {
+		ReferenceImageURL string `json:"referenceImageUrl"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.ReferenceImageURL)
+}
+
 func imageURLsFromTask(task model.ImageTask) []string {
 	var urls []string
 	if strings.TrimSpace(task.ImageURLs) != "" {
 		_ = json.Unmarshal([]byte(task.ImageURLs), &urls)
 	}
 	urls = mergeStringURLs(urls, []string{task.ImageURL})
+	urls = filterUsableTaskImageURLs(urls)
 	return urls
+}
+
+func thumbnailURLFromList(urls []string, index int) string {
+	if index < 0 || index >= len(urls) {
+		return ""
+	}
+	return urls[index]
 }
 
 func mergeStringURLs(base []string, next []string) []string {
@@ -1117,8 +1017,59 @@ func mergeStringURLs(base []string, next []string) []string {
 	return urls
 }
 
+func filterUsableTaskImageURLs(urls []string) []string {
+	filtered := make([]string, 0, len(urls))
+	for _, rawURL := range urls {
+		if isUsableTaskImageURL(rawURL) {
+			filtered = append(filtered, strings.TrimSpace(rawURL))
+		}
+	}
+	return filtered
+}
+
+func isUsableTaskImageURL(rawURL string) bool {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return false
+	}
+
+	candidate := trimmed
+	if parsed, err := url.Parse(trimmed); err == nil {
+		if parsed.Path == "" {
+			return false
+		}
+		candidate = parsed.Path
+	}
+	candidate = strings.ReplaceAll(candidate, "\\", "/")
+	candidate = path.Clean(candidate)
+	if candidate == "." {
+		return false
+	}
+
+	if isLikelyTaskImageFile(candidate) {
+		return true
+	}
+
+	return strings.HasPrefix(candidate, "/results/") ||
+		strings.HasPrefix(candidate, "/images/") ||
+		strings.HasPrefix(candidate, "/uploads/") ||
+		strings.HasPrefix(candidate, "/outputs/")
+}
+
+func isLikelyTaskImageFile(value string) bool {
+	switch strings.ToLower(path.Ext(strings.TrimSpace(value))) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Service) completeImageTask(taskID uint64, userID uint64, result provider.GenerateResult) (int64, error) {
-	imageURLs := imageURLsFromResult(result)
+	var taskMeta model.ImageTask
+	_ = s.db.Select("requested_count, request_params").Where("id = ? AND user_id = ?", taskID, userID).First(&taskMeta).Error
+	referenceImageURL := referenceImageURLFromRequestParams(taskMeta.RequestParams)
+	imageURLs := normalizeGeneratedImageURLs(result, taskMeta.RequestedCount, referenceImageURL)
 	imageURLs = s.storeGeneratedImages(taskID, userID, imageURLs)
 
 	imageURL := ""
@@ -1138,13 +1089,33 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 		updates["provider_task_id"] = providerTaskID
 	}
 
-	res := s.db.Model(&model.ImageTask{}).
-		Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
-		Updates(updates)
-	if res.Error != nil {
-		return 0, res.Error
+	completed := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var task model.ImageTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
+			First(&task).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+
+		if err := incrementImagesGeneratedTotal(tx, int64(task.RequestedCount)); err != nil {
+			return err
+		}
+		if err := tx.Model(&model.ImageTask{}).
+			Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
+			Updates(updates).Error; err != nil {
+			return err
+		}
+		completed = true
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	if res.RowsAffected == 0 {
+	if !completed {
 		var task model.ImageTask
 		if err := s.db.Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1163,6 +1134,7 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 	if err != nil {
 		return 0, err
 	}
+	s.notifyImageTaskSuccessAsync(taskID, userID)
 	return user.FreeCredits + user.PaidCredits, nil
 }
 
@@ -1185,95 +1157,36 @@ func (s *Service) storeGeneratedImages(taskID uint64, userID uint64, imageURLs [
 	return storedURLs
 }
 
-func (s *Service) failImageTaskAndRefund(taskID uint64, userID uint64, result provider.GenerateResult, message string) (int64, error) {
-	message = truncateProviderMessage(message)
-
-	var balance int64
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		task, err := s.lockImageTask(tx, taskID, userID)
-		if err != nil {
-			return err
-		}
-		if task.Status != model.ImageTaskStatusGenerating {
-			user, err := s.lockUser(tx, userID)
-			if err != nil {
-				return err
-			}
-			balance = user.FreeCredits + user.PaidCredits
-			return nil
-		}
-
-		updates := map[string]any{
-			"status":            model.ImageTaskStatusFailed,
-			"provider_response": result.RawResponse,
-			"error_message":     message,
-		}
-		if providerTaskID := strings.TrimSpace(result.ProviderTaskID); providerTaskID != "" {
-			updates["provider_task_id"] = providerTaskID
-		}
-		res := tx.Model(&model.ImageTask{}).
-			Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
-			Updates(updates)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			user, err := s.lockUser(tx, userID)
-			if err != nil {
-				return err
-			}
-			balance = user.FreeCredits + user.PaidCredits
-			return nil
-		}
-
-		user, err := s.lockUser(tx, userID)
-		if err != nil {
-			return err
-		}
-		if task.CostCredits > 0 || task.FreeCreditsCost > 0 || task.PaidCreditsCost > 0 {
-			before := creditBalance{Free: user.FreeCredits, Paid: user.PaidCredits}
-			after := creditBalance{
-				Free: before.Free + task.FreeCreditsCost,
-				Paid: before.Paid + task.PaidCreditsCost,
-			}
-			if err := tx.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]any{
-				"free_credits": after.Free,
-				"paid_credits": after.Paid,
-			}).Error; err != nil {
-				return err
-			}
-			if err := s.recordCreditLog(tx, userID, model.CreditChangeTypeRefund, task.FreeCreditsCost, task.PaidCreditsCost, before, after, "image_task", strconv.FormatUint(task.ID, 10), "生图失败退回次数"); err != nil {
-				return err
-			}
-			balance = after.Total()
-			return nil
-		}
-
-		beforePoints := user.PointsBalance
-		afterPoints := beforePoints + task.CostPoints
-
-		if err := tx.Model(&model.User{}).Where("id = ?", userID).Update("points_balance", afterPoints).Error; err != nil {
-			return err
-		}
-
-		log := model.PointsLog{
-			UserID:        userID,
-			ChangeType:    model.PointsChangeTypeRefund,
-			Delta:         task.CostPoints,
-			BeforeBalance: beforePoints,
-			AfterBalance:  afterPoints,
-			BizType:       "image_task",
-			BizID:         strconv.FormatUint(task.ID, 10),
-			Remark:        "生图失败退款",
-		}
-		if err := tx.Create(&log).Error; err != nil {
-			return err
-		}
-
-		balance = afterPoints
+func (s *Service) referenceImageForProvider(ctx context.Context, referenceImageURL string) *provider.ReferenceImage {
+	trimmed := strings.TrimSpace(referenceImageURL)
+	if trimmed == "" || s == nil || s.imageStore == nil {
 		return nil
-	})
-	return balance, err
+	}
+
+	data, contentType, ext, err := s.imageStore.DownloadStoredImage(ctx, trimmed)
+	if err != nil {
+		log.Printf("读取本地参考图失败，将回退为 URL 下载: %v", err)
+		return nil
+	}
+	if len(data) == 0 || !isAllowedUploadImageType(contentType) {
+		return nil
+	}
+
+	name := "reference-image" + ext
+	if parsed, err := url.Parse(trimmed); err == nil {
+		if base := path.Base(parsed.Path); base != "." && base != "/" && strings.TrimSpace(base) != "" {
+			name = base
+		}
+	}
+	return &provider.ReferenceImage{
+		Name:        name,
+		ContentType: contentType,
+		Data:        data,
+	}
+}
+
+func (s *Service) failImageTaskAndRefund(taskID uint64, userID uint64, result provider.GenerateResult, message string) (int64, error) {
+	return s.failImageTaskAndRefundV2(taskID, userID, result, message)
 }
 
 func providerFailureMessage(result provider.GenerateResult, err error) string {
@@ -1287,15 +1200,265 @@ func providerFailureMessage(result provider.GenerateResult, err error) string {
 	if message == "" {
 		message = "图片生成失败"
 	}
+	message = normalizeProviderFailureMessage(message)
 	return truncateProviderMessage(message)
 }
 
+func normalizeProviderFailureMessage(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return "图片生成失败"
+	}
+
+	lower := strings.ToLower(trimmed)
+	model := extractProviderModel(trimmed)
+	code := extractProviderErrorCode(trimmed)
+
+	switch {
+	case isProviderProtocolMismatchError(lower):
+		return "生图服务地址协议配置不匹配，请联系管理员检查上游 API Base URL 的 http/https 配置。"
+	case isProviderCooldownError(trimmed):
+		if model == "" {
+			return "上游模型当前限流冷却中，请稍后重试；如果一直失败，请在后台更换可用的生图 Key。"
+		}
+		return fmt.Sprintf("上游模型 %s 当前限流冷却中，请稍后重试；如果一直失败，请在后台更换可用的生图 Key。", model)
+	case code == "model_not_found" || strings.Contains(lower, "no available channel") || strings.Contains(lower, "model not found"):
+		if model == "" {
+			return "上游没有可用的生图模型通道，请在服务商后台检查模型名称、分组和渠道配置。"
+		}
+		return fmt.Sprintf("上游没有可用的生图模型通道：%s。请在服务商后台检查模型名称、分组和渠道配置。", model)
+	case code == "invalid_api_key" || code == "invalid_token" || strings.Contains(lower, "invalid token") || strings.Contains(lower, "incorrect api key") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "http 401") || strings.Contains(lower, "http 403"):
+		return "上游 API Key 无效或未授权，请在管理员后台检查生图 Key 是否正确、是否已启用。"
+	case code == "insufficient_quota" || code == "billing_not_active" || isProviderBalanceError(trimmed):
+		return "上游账号余额或额度不足，请在服务商后台充值，或在管理员后台切换可用的生图 Key。"
+	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "http 429"):
+		return "上游请求过于频繁，当前被限流了，请稍后重试；如果经常出现，请增加 Key 池或降低并发。"
+	case isProviderContentRejectedError(lower):
+		return "上游拒绝了这次提示词或参考图内容，请换一种更安全、具体的描述后重试。"
+	case isProviderTimeoutError(lower):
+		return "上游生图响应超时，请稍后重试。"
+	case isProviderReferenceImageError(lower):
+		return "参考图处理失败，请重新上传清晰的 JPG、PNG、WebP 或 GIF 图片后再试。"
+	case isProviderTemporaryServerError(lower):
+		return "上游生图服务暂时不可用，请稍后重试；如果持续失败，请检查服务商通道状态。"
+	case isProviderNetworkError(lower):
+		return "暂时无法连接上游生图服务，请稍后重试；如果持续失败，请联系管理员检查服务器网络或服务商域名。"
+	case strings.Contains(lower, "unsupported size") || strings.Contains(lower, "invalid size") || strings.Contains(lower, "size is not supported") || strings.Contains(lower, "invalid image size"):
+		return "当前尺寸暂不支持，请改用 1024x1024、1024x1536、1536x1024 或自动尺寸后重试。"
+	case strings.Contains(lower, "unsupported quality") || strings.Contains(lower, "invalid quality"):
+		return "当前质量档位暂不支持，请改为“自动”或“低/中/高”后重试。"
+	case strings.Contains(lower, "unsupported output") || strings.Contains(lower, "invalid output") || strings.Contains(lower, "output format"):
+		return "当前输出格式暂不支持，请改为默认、PNG、JPEG 或 WebP 后重试。"
+	case strings.Contains(lower, "count") && (strings.Contains(lower, "invalid") || strings.Contains(lower, "unsupported") || strings.Contains(lower, "too many")):
+		return "生成张数不被上游接受，请改为 1 到 6 张后重试。"
+	case strings.Contains(lower, "http 400") || strings.Contains(lower, "bad request") || strings.Contains(lower, "invalid request"):
+		return "上游拒绝了这次生图请求。请先用 1024x1024、1 张、自动质量、不带参考图重试；如果仍失败，请联系管理员检查模型和 Key 配置。"
+	}
+
+	return fmt.Sprintf("上游生图失败：%s", trimmed)
+}
+
+func (s *Service) notifyImageTaskFailureAsync(notice imageTaskFailureNotice) {
+	if s == nil || s.mailer == nil || !s.mailer.Configured() {
+		return
+	}
+
+	recipients := dedupeEmails(s.cfg.ImageFailureNotifyEmails)
+	if len(recipients) == 0 {
+		recipients = dedupeEmails(s.cfg.AdminEmails)
+	}
+	if len(recipients) == 0 {
+		return
+	}
+
+	subject, textBody := buildImageFailureEmail(notice)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		for _, to := range recipients {
+			if err := s.mailer.SendPlainText(ctx, to, subject, textBody); err != nil {
+				log.Printf("发送生图失败通知邮件失败: to=%s task=%d err=%v", to, notice.TaskID, err)
+			}
+		}
+	}()
+}
+
+func buildImageFailureEmail(notice imageTaskFailureNotice) (string, string) {
+	subject := fmt.Sprintf("image2 生图失败通知：任务 %d", notice.TaskID)
+	var b strings.Builder
+	b.WriteString("检测到一条生图任务失败。\n\n")
+	fmt.Fprintf(&b, "任务ID：%d\n", notice.TaskID)
+	fmt.Fprintf(&b, "用户ID：%d\n", notice.UserID)
+	if strings.TrimSpace(notice.Provider) != "" {
+		fmt.Fprintf(&b, "服务商：%s\n", notice.Provider)
+	}
+	if strings.TrimSpace(notice.ProviderTaskID) != "" {
+		fmt.Fprintf(&b, "上游任务ID：%s\n", notice.ProviderTaskID)
+	}
+	if !notice.CreatedAt.IsZero() {
+		fmt.Fprintf(&b, "创建时间：%s\n", notice.CreatedAt.Format("2006-01-02 15:04:05"))
+	}
+	if strings.TrimSpace(notice.Prompt) != "" {
+		b.WriteString("\n提示词：\n")
+		b.WriteString(notice.Prompt)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(notice.Message) != "" {
+		b.WriteString("\n失败原因：\n")
+		b.WriteString(notice.Message)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(notice.RawResponse) != "" {
+		b.WriteString("\n上游原始返回：\n")
+		b.WriteString(notice.RawResponse)
+		b.WriteString("\n")
+	}
+	return subject, b.String()
+}
+
+func dedupeEmails(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		email := normalizeEmail(item)
+		if email == "" {
+			continue
+		}
+		if _, ok := seen[email]; ok {
+			continue
+		}
+		seen[email] = struct{}{}
+		result = append(result, email)
+	}
+	return result
+}
+
+func extractProviderModel(message string) string {
+	lower := strings.ToLower(message)
+	start := strings.Index(lower, "model ")
+	if start < 0 {
+		return ""
+	}
+	value := strings.TrimSpace(message[start+len("model "):])
+	if value == "" {
+		return ""
+	}
+	for _, marker := range []string{" are cooling", " is cooling", ";", ",", "；", "，"} {
+		if idx := strings.Index(strings.ToLower(value), marker); idx >= 0 {
+			value = strings.TrimSpace(value[:idx])
+		}
+	}
+	return strings.Trim(value, `"'`)
+}
+
+func extractProviderErrorCode(message string) string {
+	lower := strings.ToLower(message)
+	marker := "code="
+	start := strings.Index(lower, marker)
+	if start < 0 {
+		return ""
+	}
+	value := strings.TrimSpace(lower[start+len(marker):])
+	if value == "" {
+		return ""
+	}
+	for _, separator := range []string{";", ",", " ", ")", "；", "，"} {
+		if idx := strings.Index(value, separator); idx >= 0 {
+			value = strings.TrimSpace(value[:idx])
+		}
+	}
+	return strings.Trim(value, `"'`)
+}
+
+func isProviderProtocolMismatchError(lower string) bool {
+	return strings.Contains(lower, "plain http request was sent to https port") ||
+		strings.Contains(lower, "server gave http response to https client") ||
+		strings.Contains(lower, "http response to https client")
+}
+
+func isProviderContentRejectedError(lower string) bool {
+	return strings.Contains(lower, "content_policy") ||
+		strings.Contains(lower, "safety") ||
+		strings.Contains(lower, "moderation") ||
+		strings.Contains(lower, "refused prompt") ||
+		strings.Contains(lower, "policy violation") ||
+		strings.Contains(lower, "sensitive content")
+}
+
+func isProviderTimeoutError(lower string) bool {
+	return strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline exceeded") ||
+		strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout exceeded")
+}
+
+func isProviderReferenceImageError(lower string) bool {
+	return strings.Contains(lower, "reference image") ||
+		strings.Contains(lower, "image too large") ||
+		strings.Contains(lower, "unsupported image") ||
+		strings.Contains(lower, "invalid image") ||
+		strings.Contains(lower, "download reference image") ||
+		strings.Contains(lower, "read reference image")
+}
+
+func isProviderNetworkError(lower string) bool {
+	return strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "lookup ") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "unexpected eof") ||
+		strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "network is unreachable")
+}
+
+func isProviderTemporaryServerError(lower string) bool {
+	return strings.Contains(lower, "http 500") ||
+		strings.Contains(lower, "http 502") ||
+		strings.Contains(lower, "http 503") ||
+		strings.Contains(lower, "http 504") ||
+		strings.Contains(lower, "internal_server_error") ||
+		strings.Contains(lower, "internal_error") ||
+		strings.Contains(lower, "server_error") ||
+		strings.Contains(lower, "stream error") ||
+		strings.Contains(lower, "bad gateway") ||
+		strings.Contains(lower, "service unavailable")
+}
+
+const imageTaskFailureUserNotice = "本次消耗的积分或福利次数已原路退回；失败信息已邮件通知管理员，我们会尽快处理。"
+
+func buildImageTaskFailureUserMessage(message string) string {
+	base := strings.TrimSpace(message)
+	if base == "" {
+		base = "图片生成失败"
+	}
+	base = strings.TrimSuffix(base, "。")
+	notice := imageTaskFailureUserNotice
+	if strings.Contains(base, notice) {
+		return truncateRunes(base, 500)
+	}
+
+	maxBaseRunes := 500 - len([]rune(notice)) - 1
+	if maxBaseRunes < 0 {
+		maxBaseRunes = 0
+	}
+	base = truncateRunes(base, maxBaseRunes)
+	if base == "" {
+		return truncateRunes(notice, 500)
+	}
+	return base + "。" + notice
+}
+
 func truncateProviderMessage(message string) string {
+	return truncateRunes(message, 240)
+}
+
+func truncateRunes(message string, max int) string {
 	runes := []rune(strings.TrimSpace(message))
-	if len(runes) <= 240 {
+	if max <= 0 || len(runes) <= max {
 		return string(runes)
 	}
-	return string(runes[:240])
+	return string(runes[:max])
 }
 
 // RecoverPendingImageTasks 恢复数据库中仍处于生成中的生图任务。
@@ -1340,7 +1503,11 @@ func (s *Service) imageTaskInputFromRecord(task model.ImageTask) (imageTaskGener
 			input.Count = normalizeImageCount(input.Count)
 			input.Quality = strings.TrimSpace(input.Quality)
 			input.OutputFormat = strings.TrimSpace(input.OutputFormat)
-			input.ReferenceImageURL = s.normalizeReferenceImageURL(strings.TrimSpace(input.ReferenceImageURL))
+			normalizedReferenceImageURL, err := s.normalizeReferenceImageURL(task.UserID, strings.TrimSpace(input.ReferenceImageURL))
+			if err != nil {
+				return imageTaskGenerationInput{}, err
+			}
+			input.ReferenceImageURL = normalizedReferenceImageURL
 			if input.Prompt != "" {
 				return input, nil
 			}
@@ -1368,21 +1535,76 @@ func (s *Service) imageTaskInputFromRecord(task model.ImageTask) (imageTaskGener
 	}, nil
 }
 
-func (s *Service) normalizeReferenceImageURL(rawURL string) string {
+func (s *Service) normalizeReferenceImageURL(userID uint64, rawURL string) (string, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return ""
+		return "", nil
 	}
 	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
-		return rawURL
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return "", ErrInvalidReferenceImageURL
+		}
+		base, err := url.Parse(strings.TrimRight(strings.TrimSpace(s.cfg.BackendPublicURL), "/"))
+		if err == nil && base.Scheme != "" && base.Host != "" && strings.EqualFold(parsed.Scheme, base.Scheme) && strings.EqualFold(parsed.Host, base.Host) && s.isAllowedReferenceImagePath(userID, parsed.Path) {
+			return rawURL, nil
+		}
+		return "", ErrInvalidReferenceImageURL
 	}
 	if strings.HasPrefix(rawURL, "/") {
+		if !s.isAllowedReferenceImagePath(userID, rawURL) {
+			return "", ErrInvalidReferenceImageURL
+		}
 		base := strings.TrimRight(strings.TrimSpace(s.cfg.BackendPublicURL), "/")
 		if base != "" {
-			return base + rawURL
+			return base + rawURL, nil
 		}
 	}
-	return rawURL
+	return "", ErrInvalidReferenceImageURL
+}
+
+func (s *Service) isAllowedReferenceImagePath(userID uint64, rawPath string) bool {
+	return s.isUserOwnedUploadPath(userID, rawPath, "references")
+}
+
+func (s *Service) isAllowedPromptPreviewPath(userID uint64, rawPath string) bool {
+	return s.isUserOwnedUploadPath(userID, rawPath, "prompt-plaza-previews", "references")
+}
+
+func (s *Service) isUserOwnedUploadPath(userID uint64, rawPath string, categories ...string) bool {
+	if userID == 0 {
+		return false
+	}
+	publicPath := strings.TrimRight(strings.TrimSpace(s.cfg.ImageStoragePublicPath), "/")
+	if publicPath == "" {
+		publicPath = "/uploads"
+	}
+	normalizedPath := path.Clean("/" + strings.TrimLeft(rawPath, "/"))
+	publicRoot := strings.TrimRight(publicPath, "/")
+	if normalizedPath == publicRoot || !strings.HasPrefix(normalizedPath, publicRoot+"/") {
+		return false
+	}
+	relative := strings.TrimPrefix(normalizedPath, publicRoot+"/")
+	userPart := fmt.Sprintf("user-%d/", userID)
+	for _, category := range categories {
+		category = strings.Trim(strings.TrimSpace(category), "/")
+		if category == "" {
+			continue
+		}
+		if strings.HasPrefix(relative, "users/"+userPart+category+"/") {
+			return true
+		}
+		if category == "references" && strings.HasPrefix(relative, "users/") && strings.Contains(relative, "/references/") {
+			return true
+		}
+		if category == "references" && strings.HasPrefix(relative, "reference-images/"+userPart) {
+			return true
+		}
+		if category == "references" && strings.HasPrefix(relative, "reference-images/") {
+			return true
+		}
+	}
+	return false
 }
 
 // StartImageTaskMaintenance 启动后台巡检，定期恢复生成中的任务。
@@ -1484,19 +1706,8 @@ func (s *Service) launchRecoveredImageTaskV2(taskID uint64, userID uint64, batch
 func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTaskGenerationInput) {
 	defer s.releaseImageTask(taskID)
 
-	if s.imageProvider == nil || !s.imageProvider.Configured() {
-		message := ErrProviderNotConfigured.Error()
-		balance, err := s.failImageTaskAndRefund(taskID, userID, provider.GenerateResult{}, message)
-		if err != nil {
-			log.Printf("异步生图任务 %d 失败回滚失败: %v", taskID, err)
-			return
-		}
-		log.Printf("异步生图任务 %d 失败并退款，当前余额 %d", taskID, balance)
-		return
-	}
-
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
-	submitted, submitErr := s.imageProvider.Submit(submitCtx, provider.GenerateRequest{
+	submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
 		Prompt:            input.Prompt,
 		Size:              input.Size,
 		Style:             input.Style,
@@ -1504,6 +1715,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 		Quality:           input.Quality,
 		OutputFormat:      input.OutputFormat,
 		ReferenceImageURL: input.ReferenceImageURL,
+		ReferenceImage:    s.referenceImageForProvider(submitCtx, input.ReferenceImageURL),
 	})
 	submitCancel()
 
@@ -1518,7 +1730,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 		return
 	}
 
-	if err := s.recordImageTaskDispatch(taskID, userID, submitted); err != nil {
+	if err := s.recordImageTaskDispatch(taskID, userID, submitted, providerKeyID); err != nil {
 		message := "保存第三方任务信息失败: " + err.Error()
 		balance, updateErr := s.failImageTaskAndRefund(taskID, userID, submitted, message)
 		if updateErr != nil {
@@ -1574,7 +1786,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	pollCtx, pollCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 	defer pollCancel()
 
-	result, pollErr := s.pollImageTaskV2(pollCtx, batchID, submitted)
+	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, activeProvider, batchID, submitted)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
 			log.Printf("异步生图任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
@@ -1627,11 +1839,22 @@ func (s *Service) resumeImageTaskV2(taskID uint64, userID uint64, batchID string
 	pollCtx, pollCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
 	defer pollCancel()
 
+	var task model.ImageTask
+	if err := s.db.WithContext(pollCtx).First(&task, "id = ? AND user_id = ?", taskID, userID).Error; err != nil {
+		log.Printf("恢复任务 %d 加载任务失败: %v", taskID, err)
+		return
+	}
+	activeProvider, _, _, err := s.providerForTask(pollCtx, task)
+	if err != nil || activeProvider == nil || !activeProvider.Configured() {
+		log.Printf("恢复任务 %d 图片服务未配置: %v", taskID, err)
+		return
+	}
+
 	seed := provider.GenerateResult{
 		ProviderTaskID: strings.TrimSpace(batchID),
 		Status:         model.ImageTaskStatusGenerating,
 	}
-	result, pollErr := s.pollImageTaskV2(pollCtx, batchID, seed)
+	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, activeProvider, batchID, seed)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
 			log.Printf("恢复任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
@@ -1678,7 +1901,7 @@ func (s *Service) resumeImageTaskV2(taskID uint64, userID uint64, batchID string
 	}
 }
 
-func (s *Service) pollImageTaskV2(ctx context.Context, batchID string, seed provider.GenerateResult) (provider.GenerateResult, error) {
+func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uint64, activeProvider *provider.MentaloutProvider, batchID string, seed provider.GenerateResult) (provider.GenerateResult, error) {
 	result := seed
 	if strings.TrimSpace(result.ProviderTaskID) == "" {
 		result.ProviderTaskID = strings.TrimSpace(batchID)
@@ -1704,14 +1927,27 @@ func (s *Service) pollImageTaskV2(ctx context.Context, batchID string, seed prov
 		case <-ticker.C:
 		}
 
-		fetched, err := s.imageProvider.Fetch(ctx, batchID)
+		if activeProvider == nil || !activeProvider.Configured() {
+			return result, ErrProviderNotConfigured
+		}
+		fetched, err := activeProvider.Fetch(ctx, batchID)
 		if err != nil {
+			if provider.IsTemporaryFetchError(err) {
+				if result.Status == "" {
+					result.Status = model.ImageTaskStatusGenerating
+				}
+				result.ErrorMessage = truncateProviderMessage(err.Error())
+				continue
+			}
 			return result, err
 		}
 		if fetched.ProviderTaskID == "" {
 			fetched.ProviderTaskID = batchID
 		}
 		result = mergeGenerateResult(result, fetched)
+		if err := s.persistPartialImageTask(ctx, taskID, userID, result); err != nil {
+			log.Printf("生图任务 %d 保存部分结果失败: %v", taskID, err)
+		}
 
 		switch result.Status {
 		case model.ImageTaskStatusSuccess:
@@ -1724,9 +1960,10 @@ func (s *Service) pollImageTaskV2(ctx context.Context, batchID string, seed prov
 	}
 }
 
-func (s *Service) recordImageTaskDispatch(taskID uint64, userID uint64, result provider.GenerateResult) error {
+func (s *Service) recordImageTaskDispatch(taskID uint64, userID uint64, result provider.GenerateResult, providerKeyID uint64) error {
 	updates := map[string]any{
 		"provider_task_id":  strings.TrimSpace(result.ProviderTaskID),
+		"provider_key_id":   providerKeyID,
 		"provider_response": result.RawResponse,
 	}
 	if strings.TrimSpace(result.ErrorMessage) != "" {
@@ -1735,6 +1972,36 @@ func (s *Service) recordImageTaskDispatch(taskID uint64, userID uint64, result p
 
 	return s.db.Model(&model.ImageTask{}).
 		Where("id = ? AND user_id = ?", taskID, userID).
+		Updates(updates).Error
+}
+
+func (s *Service) persistPartialImageTask(ctx context.Context, taskID uint64, userID uint64, result provider.GenerateResult) error {
+	urls := normalizeGeneratedImageURLs(result, 0, "")
+	if len(urls) == 0 && strings.TrimSpace(result.RawResponse) == "" && strings.TrimSpace(result.ErrorMessage) == "" {
+		return nil
+	}
+
+	updates := map[string]any{}
+	if len(urls) > 0 {
+		imageURLsJSON, _ := json.Marshal(urls)
+		updates["image_url"] = urls[0]
+		updates["image_urls"] = string(imageURLsJSON)
+	}
+	if strings.TrimSpace(result.RawResponse) != "" {
+		updates["provider_response"] = result.RawResponse
+	}
+	if providerTaskID := strings.TrimSpace(result.ProviderTaskID); providerTaskID != "" {
+		updates["provider_task_id"] = providerTaskID
+	}
+	if strings.TrimSpace(result.ErrorMessage) != "" && result.Status != model.ImageTaskStatusSuccess {
+		updates["error_message"] = truncateProviderMessage(result.ErrorMessage)
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	return s.db.WithContext(ctx).Model(&model.ImageTask{}).
+		Where("id = ? AND user_id = ? AND status = ?", taskID, userID, model.ImageTaskStatusGenerating).
 		Updates(updates).Error
 }
 

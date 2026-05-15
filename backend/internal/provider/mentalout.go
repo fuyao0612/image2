@@ -42,6 +42,13 @@ type GenerateRequest struct {
 	Quality           string
 	OutputFormat      string
 	ReferenceImageURL string
+	ReferenceImage    *ReferenceImage
+}
+
+type ReferenceImage struct {
+	Name        string
+	ContentType string
+	Data        []byte
 }
 
 // GenerateResult 是第三方图片服务返回的统一结果。
@@ -72,7 +79,7 @@ type MentaloutProvider struct {
 // NewMentaloutProvider 创建第三方图片服务适配器。
 func NewMentaloutProvider(cfg MentaloutConfig) *MentaloutProvider {
 	batchURL := normalizeBaseURL(cfg.BatchServiceURL, "https://image.mentalout.top")
-	apiBaseURL := normalizeBaseURL(cfg.ProviderAPIBaseURL, "https://chunfeng.mentalout.top")
+	apiBaseURL := normalizeProviderAPIBaseURL(cfg.ProviderAPIBaseURL)
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 90 * time.Second
@@ -80,6 +87,13 @@ func NewMentaloutProvider(cfg MentaloutConfig) *MentaloutProvider {
 	pollInterval := cfg.PollInterval
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
+	}
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver: &net.Resolver{
+			PreferGo: true,
+		},
 	}
 
 	return &MentaloutProvider{
@@ -94,6 +108,7 @@ func NewMentaloutProvider(cfg MentaloutConfig) *MentaloutProvider {
 			Timeout: 0,
 			Transport: &http.Transport{
 				Proxy:                 http.ProxyFromEnvironment,
+				DialContext:           dialer.DialContext,
 				DisableKeepAlives:     true,
 				ForceAttemptHTTP2:     false,
 				MaxIdleConns:          10,
@@ -113,8 +128,13 @@ func (p *MentaloutProvider) Name() string {
 
 // Configured 表示是否已经配置了可用的 API Key。
 func (p *MentaloutProvider) Configured() bool {
-	key := strings.TrimSpace(p.cfg.APIKey)
-	return key != "" && key != "replace-with-your-api-key"
+	key := strings.ToLower(strings.TrimSpace(p.cfg.APIKey))
+	switch key {
+	case "", "change-me", "your-api-key", "replace-with-your-api-key", "replace-with-real-provider-key":
+		return false
+	default:
+		return true
+	}
 }
 
 // Generate 提交批次并轮询直到图片生成完成或失败。
@@ -186,10 +206,10 @@ func (p *MentaloutProvider) submitBatch(ctx context.Context, req GenerateRequest
 		status int
 		err    error
 	)
-	if strings.TrimSpace(req.ReferenceImageURL) == "" {
+	if req.ReferenceImage == nil && strings.TrimSpace(req.ReferenceImageURL) == "" {
 		body, status, err = p.doJSONRequest(ctx, http.MethodPost, p.submitURL(), p.buildSubmitPayload(req))
 	} else {
-		body, status, err = p.doMultipartBatchRequest(ctx, p.submitURL(), p.buildSubmitPayload(req), req.ReferenceImageURL)
+		body, status, err = p.doMultipartBatchRequest(ctx, p.submitURL(), p.buildSubmitPayload(req), req.ReferenceImageURL, req.ReferenceImage)
 	}
 	if err != nil {
 		return GenerateResult{}, err
@@ -218,10 +238,23 @@ func (p *MentaloutProvider) buildSubmitPayload(req GenerateRequest) map[string]a
 	return payload
 }
 
-func (p *MentaloutProvider) doMultipartBatchRequest(ctx context.Context, targetURL string, payload map[string]any, referenceImageURL string) ([]byte, int, error) {
-	image, err := p.downloadReferenceImage(ctx, referenceImageURL)
-	if err != nil {
-		return nil, 0, err
+func (p *MentaloutProvider) doMultipartBatchRequest(ctx context.Context, targetURL string, payload map[string]any, referenceImageURL string, providedImage *ReferenceImage) ([]byte, int, error) {
+	var image referenceImageFile
+	if providedImage != nil && len(providedImage.Data) > 0 {
+		image = referenceImageFile{
+			Name:        providedImage.Name,
+			ContentType: providedImage.ContentType,
+			Data:        providedImage.Data,
+		}
+		if strings.TrimSpace(image.Name) == "" {
+			image.Name = referenceImageNameFromURL(referenceImageURL, image.ContentType)
+		}
+	} else {
+		var err error
+		image, err = p.downloadReferenceImage(ctx, referenceImageURL)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
 	raw, contentType, err := buildMultipartBatchBody(payload, image)
@@ -229,22 +262,7 @@ func (p *MentaloutProvider) doMultipartBatchRequest(ctx context.Context, targetU
 		return nil, 0, err
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		body, status, err := p.doRequestOnce(ctx, http.MethodPost, targetURL, contentType, raw)
-		if err == nil {
-			return body, status, nil
-		}
-		lastErr = err
-		if !isRetriableNetworkError(err) || attempt == 2 {
-			return nil, status, err
-		}
-		if err := sleepWithContext(ctx, time.Duration(attempt)*300*time.Millisecond); err != nil {
-			return nil, 0, err
-		}
-	}
-
-	return nil, 0, lastErr
+	return p.doRequestOnce(ctx, http.MethodPost, targetURL, contentType, raw)
 }
 
 type referenceImageFile struct {
@@ -293,7 +311,7 @@ func (p *MentaloutProvider) downloadReferenceImage(ctx context.Context, rawURL s
 	if err != nil {
 		return referenceImageFile{}, fmt.Errorf("create reference image request: %w", err)
 	}
-	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	req.Header.Set("Accept", "image/webp,image/png,image/jpeg,image/gif,*/*;q=0.8")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
 
 	resp, err := p.client.Do(req)
@@ -316,12 +334,9 @@ func (p *MentaloutProvider) downloadReferenceImage(ctx context.Context, rawURL s
 		return referenceImageFile{}, fmt.Errorf("reference image is too large")
 	}
 
-	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	if contentType == "" {
-		contentType = http.DetectContentType(data)
-	}
-	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
-		return referenceImageFile{}, fmt.Errorf("reference image content type is not image: %s", contentType)
+	contentType, err := normalizeReferenceImageContentType(resp.Header.Get("Content-Type"), data)
+	if err != nil {
+		return referenceImageFile{}, err
 	}
 
 	return referenceImageFile{
@@ -361,6 +376,36 @@ func sanitizeReferenceImageFileName(fileName string, contentType string) string 
 	return name
 }
 
+func normalizeReferenceImageContentType(headerContentType string, data []byte) (string, error) {
+	detected := cleanContentType(http.DetectContentType(data))
+	if isSupportedReferenceImageContentType(detected) {
+		return detected, nil
+	}
+
+	headerType := cleanContentType(headerContentType)
+	if isSupportedReferenceImageContentType(headerType) && detected == "application/octet-stream" {
+		return headerType, nil
+	}
+
+	if detected == "" {
+		detected = headerType
+	}
+	return "", fmt.Errorf("reference image content type is not supported: %s", detected)
+}
+
+func cleanContentType(contentType string) string {
+	return strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+}
+
+func isSupportedReferenceImageContentType(contentType string) bool {
+	switch cleanContentType(contentType) {
+	case "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif":
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *MentaloutProvider) fetchBatch(ctx context.Context, batchID string) (GenerateResult, error) {
 	body, status, err := p.doJSONRequest(ctx, http.MethodGet, p.fetchURL(batchID), nil)
 	if err != nil {
@@ -387,7 +432,7 @@ func (p *MentaloutProvider) doJSONRequest(ctx context.Context, method string, ta
 		raw = encoded
 	}
 
-	attempts := 2
+	attempts := 1
 	if method == http.MethodGet {
 		attempts = 3
 	}
@@ -475,6 +520,23 @@ func isRetriableNetworkError(err error) bool {
 		strings.Contains(message, "connection reset") ||
 		strings.Contains(message, "connection refused") ||
 		strings.Contains(message, "unexpected end of file")
+}
+
+func IsTemporaryFetchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isRetriableNetworkError(err) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "fetch batch failed: http 500") ||
+		strings.Contains(message, "fetch batch failed: http 502") ||
+		strings.Contains(message, "fetch batch failed: http 503") ||
+		strings.Contains(message, "fetch batch failed: http 504") ||
+		strings.Contains(message, "stream disconnected") ||
+		strings.Contains(message, "stream error") ||
+		strings.Contains(message, "internal_error")
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -630,7 +692,10 @@ func collectHintsInto(value any, hints *resultHints, batchPattern *regexp.Regexp
 						hints.BatchID = trimmed
 					}
 				}
-				if isURLKey(lowerKey) && isImageURL(trimmed, rawText) {
+				if isThumbnailURLKey(lowerKey) {
+					continue
+				}
+				if isURLKey(lowerKey) && isLikelyGeneratedImageURL(trimmed) {
 					hints.addImageURL(trimmed)
 				}
 				if isURLKey(lowerKey) && isRelativeImageURL(trimmed) {
@@ -658,7 +723,7 @@ func collectHintsInto(value any, hints *resultHints, batchPattern *regexp.Regexp
 		if hints.BatchID == "" && batchPattern.MatchString(trimmed) {
 			hints.BatchID = batchPattern.FindString(trimmed)
 		}
-		if isLooseURL(trimmed) && !isKnownServiceURL(trimmed) {
+		if isLikelyGeneratedImageURL(trimmed) {
 			hints.addImageURL(trimmed)
 		}
 		if isRelativeImageURL(trimmed) {
@@ -827,18 +892,25 @@ func isURLKey(key string) bool {
 	}
 }
 
+func isThumbnailURLKey(key string) bool {
+	return strings.Contains(key, "thumb") ||
+		strings.Contains(key, "thumbnail") ||
+		strings.Contains(key, "preview")
+}
+
 func shouldTreatAsImageURL(key string, value string) bool {
-	if isKnownServiceURL(value) {
+	if isThumbnailURLKey(key) {
 		return false
 	}
 	if strings.Contains(key, "image") || strings.Contains(key, "result") || strings.Contains(key, "download") || strings.Contains(key, "preview") || key == "url" || key == "src" {
-		return true
+		return isLikelyGeneratedImageURL(value)
 	}
 	return false
 }
 
 func isImageURL(value string, rawText string) bool {
-	return isLooseURL(value) && !isKnownServiceURL(value)
+	_ = rawText
+	return isLikelyGeneratedImageURL(value)
 }
 
 func isLooseURL(value string) bool {
@@ -853,6 +925,8 @@ func isKnownServiceURL(value string) bool {
 	known := []string{
 		"https://image.mentalout.top",
 		"https://image.mentalout.top/",
+		"http://chunfeng.mentalout.top",
+		"http://chunfeng.mentalout.top/",
 		"https://chunfeng.mentalout.top",
 		"https://chunfeng.mentalout.top/",
 	}
@@ -879,6 +953,9 @@ func findAnyURL(rawText string, batchServiceURL string, providerAPIBaseURL strin
 		if strings.Contains(candidate, "/api/batches") {
 			continue
 		}
+		if !isLikelyGeneratedImageURL(candidate) {
+			continue
+		}
 		return candidate
 	}
 	return ""
@@ -897,11 +974,20 @@ func findURLCandidate(rawText string) string {
 	if len(candidates) == 0 {
 		return ""
 	}
-	return candidates[0]
+	for _, candidate := range candidates {
+		if isLikelyGeneratedImageURL(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func isRelativeImageURL(value string) bool {
-	return relativeImagePattern.MatchString(strings.TrimSpace(value))
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	return relativeImagePattern.MatchString(trimmed)
 }
 
 func absolutizeImageURL(value string, batchServiceURL string) string {
@@ -931,13 +1017,32 @@ func mergeImageURLs(base []string, next []string) []string {
 		if trimmed == "" {
 			continue
 		}
-		if _, ok := seen[trimmed]; ok {
+		key := canonicalImageURLKey(trimmed)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[trimmed] = struct{}{}
+		seen[key] = struct{}{}
 		urls = append(urls, trimmed)
 	}
 	return urls
+}
+
+func canonicalImageURLKey(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	candidate := trimmed
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
+		candidate = parsed.Path
+	}
+	candidate = strings.ReplaceAll(candidate, "\\", "/")
+	candidate = strings.ReplaceAll(candidate, "/thumbs/", "/")
+	candidate = path.Clean(candidate)
+	if candidate == "." {
+		return ""
+	}
+	return candidate
 }
 
 func normalizeBaseURL(value string, fallback string) string {
@@ -946,6 +1051,10 @@ func normalizeBaseURL(value string, fallback string) string {
 		trimmed = fallback
 	}
 	return strings.TrimRight(trimmed, "/")
+}
+
+func normalizeProviderAPIBaseURL(value string) string {
+	return normalizeBaseURL(value, "https://chunfeng.mentalout.top")
 }
 
 func joinURL(base string, path string) string {
@@ -963,6 +1072,60 @@ func truncateText(text string, max int) string {
 func isTrivialMessage(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "ok", "success", "done", "completed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLikelyGeneratedImageURL(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || isKnownServiceURL(trimmed) || isLikelyGeneratedThumbnailURL(trimmed) {
+		return false
+	}
+
+	candidate := trimmed
+	if parsed, err := url.Parse(trimmed); err == nil {
+		if parsed.Path == "" {
+			return false
+		}
+		candidate = parsed.Path
+	}
+	candidate = strings.ReplaceAll(candidate, "\\", "/")
+	candidate = path.Clean(candidate)
+	if candidate == "." {
+		return false
+	}
+
+	if isImageFilePath(candidate) {
+		return true
+	}
+
+	return strings.HasPrefix(candidate, "/results/") ||
+		strings.HasPrefix(candidate, "/images/") ||
+		strings.HasPrefix(candidate, "/uploads/") ||
+		strings.HasPrefix(candidate, "/outputs/")
+}
+
+func isLikelyGeneratedThumbnailURL(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	candidate := trimmed
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
+		candidate = parsed.Path
+	}
+	candidate = strings.ToLower(strings.ReplaceAll(candidate, "\\", "/"))
+	return strings.Contains(candidate, "/thumbs/") ||
+		strings.Contains(candidate, "/thumbnail/") ||
+		strings.Contains(candidate, "/thumbnails/")
+}
+
+func isImageFilePath(value string) bool {
+	ext := strings.ToLower(path.Ext(strings.TrimSpace(value)))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif":
 		return true
 	default:
 		return false

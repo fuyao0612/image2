@@ -56,16 +56,17 @@ func (s *Service) AdminCreatePackageV2(ctx context.Context, adminID uint64, req 
 		enabled = *req.Enabled
 	}
 	pkg := model.BillingPackage{
-		Code:          strings.TrimSpace(req.Code),
-		Name:          strings.TrimSpace(req.Name),
-		PackageType:   model.BillingPackageType(strings.TrimSpace(req.PackageType)),
-		CreditsAmount: req.CreditsAmount,
-		PointsCost:    req.PointsCost,
-		AmountCents:   req.AmountCents,
-		BonusPoints:   req.BonusPoints,
-		Enabled:       enabled,
-		SortOrder:     req.SortOrder,
-		Note:          strings.TrimSpace(req.Note),
+		Code:             strings.TrimSpace(req.Code),
+		Name:             strings.TrimSpace(req.Name),
+		PackageType:      model.BillingPackageType(strings.TrimSpace(req.PackageType)),
+		CreditsAmount:    req.CreditsAmount,
+		PointsCost:       req.PointsCost,
+		AmountCents:      req.AmountCents,
+		BonusPoints:      req.BonusPoints,
+		ProductURL:       strings.TrimSpace(req.ProductURL),
+		Enabled:          enabled,
+		SortOrder:        req.SortOrder,
+		Note:             strings.TrimSpace(req.Note),
 	}
 	if pkg.PackageType == "" {
 		pkg.PackageType = model.BillingPackageTypeRecharge
@@ -115,7 +116,7 @@ func (s *Service) AdminUpdatePackageV2(ctx context.Context, adminID uint64, pack
 		if name := strings.TrimSpace(req.Name); name != "" {
 			pkg.Name = name
 		}
-		if req.CreditsAmount > 0 {
+		if req.CreditsAmount >= 0 {
 			pkg.CreditsAmount = req.CreditsAmount
 		}
 		if req.PointsCost >= 0 {
@@ -127,15 +128,14 @@ func (s *Service) AdminUpdatePackageV2(ctx context.Context, adminID uint64, pack
 		if req.BonusPoints >= 0 {
 			pkg.BonusPoints = req.BonusPoints
 		}
+		pkg.ProductURL = strings.TrimSpace(req.ProductURL)
 		if req.Enabled != nil {
 			pkg.Enabled = *req.Enabled
 		}
 		if req.SortOrder != nil {
 			pkg.SortOrder = *req.SortOrder
 		}
-		if note := strings.TrimSpace(req.Note); note != "" {
-			pkg.Note = note
-		}
+		pkg.Note = strings.TrimSpace(req.Note)
 		if err := validateBillingPackage(pkg); err != nil {
 			return err
 		}
@@ -184,38 +184,8 @@ func (s *Service) AdminDeletePackageV2(ctx context.Context, adminID uint64, pack
 	})
 }
 
-// AdminListRechargeOrdersV2 返回后台充值订单列表。
-func (s *Service) AdminListRechargeOrdersV2(ctx context.Context, adminID uint64, status string, page int, pageSize int) (dto.AdminListRechargeOrdersResponse, error) {
-	if err := s.RequireAdmin(ctx, adminID); err != nil {
-		return dto.AdminListRechargeOrdersResponse{}, err
-	}
-	page, pageSize = normalizePage(page, pageSize)
-
-	query := s.db.WithContext(ctx).Model(&model.RechargeOrder{})
-	if status = strings.TrimSpace(status); status != "" {
-		query = query.Where("status = ?", status)
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return dto.AdminListRechargeOrdersResponse{}, err
-	}
-
-	var orders []model.RechargeOrder
-	if err := query.Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&orders).Error; err != nil {
-		return dto.AdminListRechargeOrdersResponse{}, err
-	}
-
-	items := make([]dto.AdminRechargeOrderItem, 0, len(orders))
-	for _, order := range orders {
-		items = append(items, adminRechargeOrderToItem(order))
-	}
-
-	return dto.AdminListRechargeOrdersResponse{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
-}
-
 // AdminListActionLogs 返回后台套餐审计日志。
-func (s *Service) AdminListActionLogs(ctx context.Context, adminID uint64, targetType, targetID string, page int, pageSize int) (dto.AdminListActionLogsResponse, error) {
+func (s *Service) AdminListActionLogs(ctx context.Context, adminID uint64, targetType, targetID string, action string, page int, pageSize int) (dto.AdminListActionLogsResponse, error) {
 	if err := s.RequireAdmin(ctx, adminID); err != nil {
 		return dto.AdminListActionLogsResponse{}, err
 	}
@@ -227,6 +197,9 @@ func (s *Service) AdminListActionLogs(ctx context.Context, adminID uint64, targe
 	}
 	if targetID = strings.TrimSpace(targetID); targetID != "" {
 		query = query.Where("target_id = ?", targetID)
+	}
+	if action = strings.TrimSpace(action); action != "" {
+		query = query.Where("action = ?", action)
 	}
 
 	var total int64
@@ -292,23 +265,4 @@ func marshalJSON(v any) string {
 		return ""
 	}
 	return string(data)
-}
-
-func adminRechargeOrderToItem(order model.RechargeOrder) dto.AdminRechargeOrderItem {
-	return dto.AdminRechargeOrderItem{
-		ID:              strconv.FormatUint(order.ID, 10),
-		UserID:          strconv.FormatUint(order.UserID, 10),
-		OrderNo:         order.OrderNo,
-		PackageCode:     order.PackageCode,
-		PackageName:     order.PackageName,
-		AmountCents:     order.AmountCents,
-		CreditsAmount:   order.CreditsAmount,
-		BonusPoints:     order.BonusPoints,
-		PointsAmount:    order.PointsAmount,
-		Status:          string(order.Status),
-		PaymentChannel:  order.PaymentChannel,
-		ProviderTradeNo: order.ProviderTradeNo,
-		PaidAt:          order.PaidAt,
-		CreatedAt:       order.CreatedAt,
-	}
 }

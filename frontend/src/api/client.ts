@@ -2,38 +2,59 @@ import type {
   AdminContentAuditItem,
   AdminListContentAuditsResponse,
   AdminListActionLogsResponse,
+  AdminAnnouncementPayload,
+  AdminListAnnouncementsResponse,
   AdminListImageTasksResponse,
   AdminListPackagesResponse,
-  AdminListRechargeOrdersResponse,
+  AdminListProductCategoriesResponse,
+  AdminListProductsResponse,
+  AdminListProviderKeysResponse,
+  AdminCreateRedeemCodesRequest,
+  AdminCreateRedeemCodesResponse,
+  AdminListRedeemCodesResponse,
   AdminListUsersResponse,
   AdminPackageItem,
   AdminPackagePayload,
+  AdminProductCategoryPayload,
+  AdminProductPayload,
+  AdminProviderKeyPayload,
   AdminStatsResponse,
   AdminReviewContentAuditRequest,
+  DataCleanupRequest,
+  DataCleanupResponse,
   APIEnvelope,
   AuthResponse,
+  CaptchaResponse,
+  AnnouncementItem,
   BillingSettingsResponse,
   ChangePasswordRequest,
   ChangePasswordResponse,
   CheckinResponse,
   CreateImageTaskRequest,
   CreateImageTaskResponse,
-  CreateRechargeOrderRequest,
-  ConfirmRechargeOrderRequest,
-  RechargePaymentCallbackRequest,
-  ListRechargeOrdersResponse,
+  RedeemCodeRequest,
+  RedeemCodeResponse,
+  ListAnnouncementsResponse,
   ListCreditLogsResponse,
   ListPointsLogsResponse,
   ListUserActivityResponse,
   ImageTaskDetailResponse,
+  InviteInfoResponse,
   ListImageTasksResponse,
   ListPackagesResponse,
+  ListProductCategoriesResponse,
+  ListProductsResponse,
   LoginRequest,
-  MockPurchaseRequest,
-  MockPurchaseResponse,
+  MarkAnnouncementReadResponse,
   PointsResponse,
-  RechargeOrderResponse,
+  AdminListPromptPlazaResponse,
+  AdminPromptPlazaPayload,
+  ListPromptPlazaResponse,
+  PromptPlazaItem,
+  ProductCategoryItem,
+  ProductItem,
   RegisterRequest,
+  SubmitPromptPlazaRequest,
   SendEmailCodeRequest,
   SendEmailCodeResponse,
   UpdateBillingSettingsRequest,
@@ -86,10 +107,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+    })
+  } catch (error) {
+    throw new APIError(buildNetworkErrorMessage(error), 0, -1)
+  }
 
   return parseResponse<T>(response)
 }
@@ -101,24 +127,32 @@ async function requestFormData<T>(path: string, formData: FormData): Promise<T> 
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+  } catch (error) {
+    throw new APIError(buildNetworkErrorMessage(error), 0, -1)
+  }
 
   return parseResponse<T>(response)
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
-  let payload: APIEnvelope<T> | undefined
+  const raw = await response.text()
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    throw new APIError(`后端返回了空响应（HTTP ${response.status}）`, response.status, -1)
+  }
+
+  let payload: APIEnvelope<T>
   try {
-    payload = (await response.json()) as APIEnvelope<T>
+    payload = JSON.parse(trimmed) as APIEnvelope<T>
   } catch {
-    if (!response.ok) {
-      throw new APIError('后端返回了非 JSON 响应', response.status, -1)
-    }
-    throw new Error('后端返回了非 JSON 响应')
+    throw new APIError(buildNonJSONErrorMessage(response, trimmed), response.status, -1)
   }
 
   if (!response.ok || payload.code !== 0) {
@@ -128,6 +162,29 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return payload.data
 }
 
+function buildNetworkErrorMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : ''
+  if (!API_BASE_URL) {
+    return `无法连接本地后端。请确认 backend 已在 127.0.0.1:8080 启动，Vite 代理才可以转发 /api 请求。${detail ? `（${detail}）` : ''}`
+  }
+  return `无法连接后端接口 ${API_BASE_URL}。${detail ? `（${detail}）` : ''}`
+}
+
+function buildNonJSONErrorMessage(response: Response, body: string): string {
+  const contentType = response.headers.get('content-type') || 'unknown'
+  const preview = body.replace(/\s+/g, ' ').slice(0, 160)
+  const isHTML = /^<!doctype html/i.test(body) || /^<html/i.test(body)
+  const isViteProxyError = body.includes('http proxy error') || body.includes('ECONNREFUSED')
+
+  if (!API_BASE_URL && (isViteProxyError || response.status >= 500)) {
+    return `本地后端没有正常响应。请先启动 backend（监听 127.0.0.1:8080），再刷新 5173 页面重试。HTTP ${response.status}，Content-Type: ${contentType}。`
+  }
+  if (isHTML) {
+    return `接口返回了 HTML 页面，不是 JSON。请检查请求是否被转到了前端页面或 Nginx 错误页。HTTP ${response.status}，Content-Type: ${contentType}。`
+  }
+  return `后端返回了非 JSON 响应。HTTP ${response.status}，Content-Type: ${contentType}，响应片段：${preview || '空'}`
+}
+
 async function requestBlob(path: string, fallbackFileName: string): Promise<DownloadedFile> {
   const headers = new Headers()
   const token = getStoredToken()
@@ -135,10 +192,15 @@ async function requestBlob(path: string, fallbackFileName: string): Promise<Down
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'GET',
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'GET',
+      headers,
+    })
+  } catch (error) {
+    throw new APIError(buildNetworkErrorMessage(error), 0, -1)
+  }
 
   if (!response.ok) {
     const message = await parseBlobErrorMessage(response)
@@ -187,6 +249,10 @@ export async function sendEmailCode(payload: SendEmailCodeRequest): Promise<Send
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export async function getCaptcha(): Promise<CaptchaResponse> {
+  return request<CaptchaResponse>('/api/v1/auth/captcha')
 }
 
 export async function register(payload: RegisterRequest): Promise<AuthResponse> {
@@ -242,6 +308,21 @@ export async function getMe(): Promise<UserInfo> {
   return request<UserInfo>('/api/v1/user/me')
 }
 
+export async function getInviteInfo(): Promise<InviteInfoResponse> {
+  return request<InviteInfoResponse>('/api/v1/user/invite')
+}
+
+export async function listAnnouncements(): Promise<ListAnnouncementsResponse> {
+  return request<ListAnnouncementsResponse>('/api/v1/user/announcements')
+}
+
+export async function markAnnouncementRead(announcementId: string): Promise<MarkAnnouncementReadResponse> {
+  return request<MarkAnnouncementReadResponse>(`/api/v1/user/announcements/${encodeURIComponent(announcementId)}/read`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 export async function changePassword(
   payload: ChangePasswordRequest,
 ): Promise<ChangePasswordResponse> {
@@ -251,9 +332,10 @@ export async function changePassword(
   })
 }
 
-export async function uploadReferenceImage(file: File): Promise<UploadImageResponse> {
+export async function uploadReferenceImage(file: File, purpose = 'reference'): Promise<UploadImageResponse> {
   const formData = new FormData()
   formData.append('file', file)
+  formData.append('purpose', purpose)
   return requestFormData<UploadImageResponse>('/api/v1/uploads/reference-image', formData)
 }
 
@@ -301,50 +383,47 @@ export async function getBillingSettings(): Promise<BillingSettingsResponse> {
   return request<BillingSettingsResponse>('/api/v1/billing-settings')
 }
 
-export async function createRechargeOrder(payload: CreateRechargeOrderRequest): Promise<RechargeOrderResponse> {
-  return request<RechargeOrderResponse>('/api/v1/recharge-orders', {
+export async function listPromptPlaza(): Promise<ListPromptPlazaResponse> {
+  return request<ListPromptPlazaResponse>('/api/v1/prompt-plaza')
+}
+
+export async function listProducts(keyword = '', categoryId = ''): Promise<ListProductsResponse> {
+  const params = new URLSearchParams()
+  if (keyword.trim()) params.set('keyword', keyword.trim())
+  if (categoryId.trim()) params.set('categoryId', categoryId.trim())
+  const query = params.toString()
+  return request<ListProductsResponse>(`/api/v1/products${query ? `?${query}` : ''}`)
+}
+
+export async function listProductCategories(): Promise<ListProductCategoriesResponse> {
+  return request<ListProductCategoriesResponse>('/api/v1/product-categories')
+}
+
+export async function listPromptPlazaForUser(): Promise<ListPromptPlazaResponse> {
+  return request<ListPromptPlazaResponse>('/api/v1/user/prompt-plaza-gallery')
+}
+
+export async function listMyPromptPlaza(): Promise<ListPromptPlazaResponse> {
+  return request<ListPromptPlazaResponse>('/api/v1/user/prompt-plaza')
+}
+
+export async function submitPromptPlaza(payload: SubmitPromptPlazaRequest): Promise<PromptPlazaItem> {
+  return request<PromptPlazaItem>('/api/v1/user/prompt-plaza', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
 }
 
-export async function confirmRechargeOrder(
-  orderNo: string,
-  payload: ConfirmRechargeOrderRequest = {},
-): Promise<RechargeOrderResponse> {
-  return request<RechargeOrderResponse>(`/api/v1/recharge-orders/${encodeURIComponent(orderNo)}/confirm`, {
+export async function togglePromptPlazaFavorite(id: string): Promise<PromptPlazaItem> {
+  return request<PromptPlazaItem>(`/api/v1/user/prompt-plaza/${encodeURIComponent(id)}/favorite`, {
+    method: 'POST',
+  })
+}
+
+export async function redeemCode(payload: RedeemCodeRequest): Promise<RedeemCodeResponse> {
+  return request<RedeemCodeResponse>('/api/v1/redeem-code', {
     method: 'POST',
     body: JSON.stringify(payload),
-  })
-}
-
-export async function getRechargeOrder(orderNo: string): Promise<RechargeOrderResponse> {
-  return request<RechargeOrderResponse>(`/api/v1/recharge-orders/${encodeURIComponent(orderNo)}`)
-}
-
-export async function listRechargeOrders(page = 1, pageSize = 10): Promise<ListRechargeOrdersResponse> {
-  const params = new URLSearchParams({
-    page: String(page),
-    pageSize: String(pageSize),
-  })
-  return request<ListRechargeOrdersResponse>(`/api/v1/recharge-orders?${params.toString()}`)
-}
-
-export async function rechargePaymentCallback(payload: RechargePaymentCallbackRequest): Promise<RechargeOrderResponse> {
-  return request<RechargeOrderResponse>('/api/v1/payments/recharge/callback', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export async function mockPurchase(payload: MockPurchaseRequest): Promise<MockPurchaseResponse> {
-  const order = await createRechargeOrder(payload)
-  return confirmRechargeOrder(order.orderNo, {
-    providerTradeNo: `mock-${order.orderNo}`,
-    paymentChannel: 'mock',
-    amountCents: order.amountCents,
-    paidAt: new Date().toISOString(),
-    remark: '兼容旧版模拟支付',
   })
 }
 
@@ -352,32 +431,57 @@ export async function adminStats(): Promise<AdminStatsResponse> {
   return request<AdminStatsResponse>('/api/v1/admin/stats')
 }
 
-export async function adminListUsers(page = 1, pageSize = 10, keyword = ''): Promise<AdminListUsersResponse> {
+export async function adminListUsers(page = 1, pageSize = 10, keyword = '', status = ''): Promise<AdminListUsersResponse> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (keyword.trim()) {
     params.set('keyword', keyword.trim())
   }
+  if (status.trim()) {
+    params.set('status', status.trim())
+  }
   return request<AdminListUsersResponse>(`/api/v1/admin/users?${params.toString()}`)
 }
 
-export async function adminListImageTasks(page = 1, pageSize = 10, status = ''): Promise<AdminListImageTasksResponse> {
+export async function adminListImageTasks(page = 1, pageSize = 10, status = '', keyword = ''): Promise<AdminListImageTasksResponse> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (status.trim()) {
     params.set('status', status.trim())
+  }
+  if (keyword.trim()) {
+    params.set('keyword', keyword.trim())
   }
   return request<AdminListImageTasksResponse>(`/api/v1/admin/image-tasks?${params.toString()}`)
 }
 
-export async function adminListRechargeOrders(
+export async function adminListRedeemCodes(
   page = 1,
   pageSize = 10,
   status = '',
-): Promise<AdminListRechargeOrdersResponse> {
+  keyword = '',
+): Promise<AdminListRedeemCodesResponse> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (status.trim()) {
     params.set('status', status.trim())
   }
-  return request<AdminListRechargeOrdersResponse>(`/api/v1/admin/recharge-orders?${params.toString()}`)
+  if (keyword.trim()) {
+    params.set('keyword', keyword.trim())
+  }
+  return request<AdminListRedeemCodesResponse>(`/api/v1/admin/redeem-codes?${params.toString()}`)
+}
+
+export async function adminCreateRedeemCodes(
+  payload: AdminCreateRedeemCodesRequest,
+): Promise<AdminCreateRedeemCodesResponse> {
+  return request<AdminCreateRedeemCodesResponse>('/api/v1/admin/redeem-codes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminDeleteRedeemCode(codeId: string): Promise<unknown> {
+  return request<unknown>(`/api/v1/admin/redeem-codes/${encodeURIComponent(codeId)}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function adminListContentAudits(
@@ -407,6 +511,7 @@ export async function adminListActionLogs(
   pageSize = 10,
   targetType = '',
   targetId = '',
+  action = '',
 ): Promise<AdminListActionLogsResponse> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (targetType) {
@@ -415,7 +520,101 @@ export async function adminListActionLogs(
   if (targetId) {
     params.set('targetId', targetId)
   }
+  if (action) {
+    params.set('action', action)
+  }
   return request<AdminListActionLogsResponse>(`/api/v1/admin/action-logs?${params.toString()}`)
+}
+
+export async function adminPreviewDataCleanup(payload: DataCleanupRequest): Promise<DataCleanupResponse> {
+  return request<DataCleanupResponse>('/api/v1/admin/data-cleanup/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminExecuteDataCleanup(payload: DataCleanupRequest): Promise<DataCleanupResponse> {
+  return request<DataCleanupResponse>('/api/v1/admin/data-cleanup', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminListAnnouncements(page = 1, pageSize = 10): Promise<AdminListAnnouncementsResponse> {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  return request<AdminListAnnouncementsResponse>(`/api/v1/admin/announcements?${params.toString()}`)
+}
+
+export async function adminCreateAnnouncement(payload: AdminAnnouncementPayload): Promise<AnnouncementItem> {
+  return request<AnnouncementItem>('/api/v1/admin/announcements', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminUploadAnnouncementImage(file: File, purpose = 'announcement'): Promise<UploadImageResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('purpose', purpose)
+  return requestFormData<UploadImageResponse>('/api/v1/admin/announcements/upload-image', formData)
+}
+
+export async function adminUploadPromptPlazaImage(file: File): Promise<UploadImageResponse> {
+  return adminUploadAnnouncementImage(file, 'prompt-plaza-preview')
+}
+
+export async function adminUploadProductImage(file: File): Promise<UploadImageResponse> {
+  return adminUploadAnnouncementImage(file, 'product-image')
+}
+
+export async function adminUpdateAnnouncement(
+  announcementId: string,
+  payload: AdminAnnouncementPayload,
+): Promise<AnnouncementItem> {
+  return request<AnnouncementItem>(`/api/v1/admin/announcements/${encodeURIComponent(announcementId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminDeleteAnnouncement(announcementId: string): Promise<unknown> {
+  return request<unknown>(`/api/v1/admin/announcements/${encodeURIComponent(announcementId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function adminListPromptPlaza(page = 1, pageSize = 50, status = ''): Promise<AdminListPromptPlazaResponse> {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (status.trim()) params.set('status', status.trim())
+  return request<AdminListPromptPlazaResponse>(`/api/v1/admin/prompt-plaza?${params.toString()}`)
+}
+
+export async function adminCreatePromptPlaza(payload: AdminPromptPlazaPayload): Promise<PromptPlazaItem> {
+  return request<PromptPlazaItem>('/api/v1/admin/prompt-plaza', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminUpdatePromptPlaza(id: string, payload: AdminPromptPlazaPayload): Promise<PromptPlazaItem> {
+  return request<PromptPlazaItem>(`/api/v1/admin/prompt-plaza/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminReviewPromptPlaza(id: string, status: 'approved' | 'rejected', rejectNote = ''): Promise<PromptPlazaItem> {
+  return request<PromptPlazaItem>(`/api/v1/admin/prompt-plaza/${encodeURIComponent(id)}/review`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, rejectNote }),
+  })
+}
+
+export async function adminDeletePromptPlaza(id: string, reason = ''): Promise<unknown> {
+  return request<unknown>(`/api/v1/admin/prompt-plaza/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ reason }),
+  })
 }
 
 export async function adminListPackages(
@@ -428,6 +627,68 @@ export async function adminListPackages(
     params.set('type', packageType.trim())
   }
   return request<AdminListPackagesResponse>(`/api/v1/admin/packages?${params.toString()}`)
+}
+
+export async function adminListProducts(
+  page = 1,
+  pageSize = 20,
+  keyword = '',
+  categoryId = '',
+  enabled = '',
+): Promise<AdminListProductsResponse> {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (keyword.trim()) params.set('keyword', keyword.trim())
+  if (categoryId.trim()) params.set('categoryId', categoryId.trim())
+  if (enabled.trim()) params.set('enabled', enabled.trim())
+  return request<AdminListProductsResponse>(`/api/v1/admin/products?${params.toString()}`)
+}
+
+export async function adminCreateProduct(payload: AdminProductPayload): Promise<ProductItem> {
+  return request<ProductItem>('/api/v1/admin/products', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminUpdateProduct(id: string, payload: AdminProductPayload): Promise<ProductItem> {
+  return request<ProductItem>(`/api/v1/admin/products/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminDeleteProduct(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/v1/admin/products/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function adminListProductCategories(page = 1, pageSize = 50): Promise<AdminListProductCategoriesResponse> {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  return request<AdminListProductCategoriesResponse>(`/api/v1/admin/product-categories?${params.toString()}`)
+}
+
+export async function adminCreateProductCategory(payload: AdminProductCategoryPayload): Promise<ProductCategoryItem> {
+  return request<ProductCategoryItem>('/api/v1/admin/product-categories', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminUpdateProductCategory(
+  id: string,
+  payload: AdminProductCategoryPayload,
+): Promise<ProductCategoryItem> {
+  return request<ProductCategoryItem>(`/api/v1/admin/product-categories/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminDeleteProductCategory(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/v1/admin/product-categories/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function adminGetBillingSettings(): Promise<BillingSettingsResponse> {
@@ -486,13 +747,48 @@ export async function adminDeletePackage(packageId: string): Promise<unknown> {
   })
 }
 
+export async function adminListProviderKeys(page = 1, pageSize = 20): Promise<AdminListProviderKeysResponse> {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  return request<AdminListProviderKeysResponse>(`/api/v1/admin/provider-keys?${params.toString()}`)
+}
+
+export async function adminCreateProviderKey(payload: AdminProviderKeyPayload): Promise<unknown> {
+  return request<unknown>('/api/v1/admin/provider-keys', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminUpdateProviderKey(providerKeyId: string, payload: AdminProviderKeyPayload): Promise<unknown> {
+  return request<unknown>(`/api/v1/admin/provider-keys/${encodeURIComponent(providerKeyId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function adminUseProviderKey(providerKeyId: string): Promise<unknown> {
+  return request<unknown>(`/api/v1/admin/provider-keys/${encodeURIComponent(providerKeyId)}/use`, {
+    method: 'POST',
+  })
+}
+
+export async function adminDeleteProviderKey(providerKeyId: string): Promise<unknown> {
+  return request<unknown>(`/api/v1/admin/provider-keys/${encodeURIComponent(providerKeyId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export const api = {
   API_BASE_URL,
+  getCaptcha,
   sendEmailCode,
   register,
   login,
   checkin,
   getMe,
+  getInviteInfo,
+  listAnnouncements,
+  markAnnouncementRead,
   changePassword,
   getPoints,
   listPointsLogs,
@@ -505,21 +801,47 @@ export const api = {
   retryImageTask,
   listImageTasks,
   listPackages,
+  listProducts,
+  listProductCategories,
   getBillingSettings,
-  createRechargeOrder,
-  confirmRechargeOrder,
-  getRechargeOrder,
-  listRechargeOrders,
-  rechargePaymentCallback,
-  mockPurchase,
+  listPromptPlaza,
+  listPromptPlazaForUser,
+  listMyPromptPlaza,
+  submitPromptPlaza,
+  togglePromptPlazaFavorite,
+  redeemCode,
   adminStats,
   adminListUsers,
   adminListImageTasks,
-  adminListRechargeOrders,
+  adminListRedeemCodes,
+  adminCreateRedeemCodes,
+  adminDeleteRedeemCode,
   adminListContentAudits,
   adminReviewContentAudit,
   adminListActionLogs,
+  adminPreviewDataCleanup,
+  adminExecuteDataCleanup,
+  adminListAnnouncements,
+  adminCreateAnnouncement,
+  adminUploadAnnouncementImage,
+  adminUploadPromptPlazaImage,
+  adminUploadProductImage,
+  adminUpdateAnnouncement,
+  adminDeleteAnnouncement,
+  adminListPromptPlaza,
+  adminCreatePromptPlaza,
+  adminUpdatePromptPlaza,
+  adminReviewPromptPlaza,
+  adminDeletePromptPlaza,
   adminListPackages,
+  adminListProducts,
+  adminCreateProduct,
+  adminUpdateProduct,
+  adminDeleteProduct,
+  adminListProductCategories,
+  adminCreateProductCategory,
+  adminUpdateProductCategory,
+  adminDeleteProductCategory,
   adminGetBillingSettings,
   adminUpdateBillingSettings,
   adminUpdateUserStatus,
@@ -528,4 +850,9 @@ export const api = {
   adminCreatePackage,
   adminDeletePackage,
   adminUpdatePackage,
+  adminListProviderKeys,
+  adminCreateProviderKey,
+  adminUpdateProviderKey,
+  adminUseProviderKey,
+  adminDeleteProviderKey,
 }

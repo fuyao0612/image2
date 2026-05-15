@@ -10,6 +10,7 @@ import (
 	"image2/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type creditBalance struct {
@@ -92,6 +93,28 @@ func (s *Service) pointsResponse(user model.User, pointsLogs []model.PointsLog, 
 	}
 }
 
+func (s *Service) checkinRewardTotals(ctx context.Context, userID uint64) (int64, int64, error) {
+	var freeCreditsTotal int64
+	if err := s.db.WithContext(ctx).
+		Model(&model.CreditLog{}).
+		Where("user_id = ? AND change_type = ?", userID, model.CreditChangeTypeCheckin).
+		Select("COALESCE(SUM(delta_free), 0)").
+		Scan(&freeCreditsTotal).Error; err != nil {
+		return 0, 0, err
+	}
+
+	var paidCreditsTotal int64
+	if err := s.db.WithContext(ctx).
+		Model(&model.CreditLog{}).
+		Where("user_id = ? AND change_type = ?", userID, model.CreditChangeTypeCheckin).
+		Select("COALESCE(SUM(delta_paid), 0)").
+		Scan(&paidCreditsTotal).Error; err != nil {
+		return 0, 0, err
+	}
+
+	return 0, freeCreditsTotal + paidCreditsTotal, nil
+}
+
 func (s *Service) ensureBillingPackages(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return nil
@@ -122,43 +145,43 @@ func (s *Service) seedDefaultBillingPackages(tx *gorm.DB) error {
 	if len(toCreate) == 0 {
 		return nil
 	}
-	return tx.Create(&toCreate).Error
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&toCreate).Error
 }
 
 func defaultBillingPackages() []model.BillingPackage {
 	return []model.BillingPackage{
 		{
 			Code:          "recharge-100",
-			Name:          "入门充值包",
+			Name:          "入门福利包",
 			PackageType:   model.BillingPackageTypeRecharge,
 			CreditsAmount: 100,
 			AmountCents:   1999,
 			BonusPoints:   0,
 			Enabled:       true,
 			SortOrder:     10,
-			Note:          "购买 100 次生图次数",
+			Note:          "购买 100 生图福利次数",
 		},
 		{
 			Code:          "recharge-300",
-			Name:          "标准充值包",
+			Name:          "标准福利包",
 			PackageType:   model.BillingPackageTypeRecharge,
 			CreditsAmount: 300,
 			AmountCents:   4999,
 			BonusPoints:   20,
 			Enabled:       true,
 			SortOrder:     20,
-			Note:          "购买 300 次生图次数，额外赠送 20 积分",
+			Note:          "购买 300 生图福利次数，额外赠送 20 积分",
 		},
 		{
 			Code:          "recharge-800",
-			Name:          "高阶充值包",
+			Name:          "高阶福利包",
 			PackageType:   model.BillingPackageTypeRecharge,
 			CreditsAmount: 800,
 			AmountCents:   9999,
 			BonusPoints:   100,
 			Enabled:       true,
 			SortOrder:     30,
-			Note:          "购买 800 次生图次数，额外赠送 100 积分",
+			Note:          "购买 800 生图福利次数，额外赠送 100 积分",
 		},
 	}
 }
@@ -185,34 +208,36 @@ func (s *Service) listBillingPackages(ctx context.Context, onlyEnabled bool, pac
 
 func (s *Service) billingPackageToDTO(pkg model.BillingPackage) dto.PackageItem {
 	return dto.PackageItem{
-		Code:          pkg.Code,
-		Name:          pkg.Name,
-		PackageType:   string(pkg.PackageType),
-		CreditsAmount: pkg.CreditsAmount,
-		PointsCost:    pkg.PointsCost,
-		AmountCents:   pkg.AmountCents,
-		BonusPoints:   pkg.BonusPoints,
-		Enabled:       pkg.Enabled,
-		SortOrder:     pkg.SortOrder,
-		Note:          pkg.Note,
+		Code:             pkg.Code,
+		Name:             pkg.Name,
+		PackageType:      string(pkg.PackageType),
+		CreditsAmount:    pkg.CreditsAmount,
+		PointsCost:       pkg.PointsCost,
+		AmountCents:      pkg.AmountCents,
+		BonusPoints:      pkg.BonusPoints,
+		ProductURL:       pkg.ProductURL,
+		Enabled:          pkg.Enabled,
+		SortOrder:        pkg.SortOrder,
+		Note:             pkg.Note,
 	}
 }
 
 func (s *Service) billingPackageToAdminDTO(pkg model.BillingPackage) dto.AdminPackageItem {
 	return dto.AdminPackageItem{
-		ID:            strconv.FormatUint(pkg.ID, 10),
-		Code:          pkg.Code,
-		Name:          pkg.Name,
-		PackageType:   string(pkg.PackageType),
-		CreditsAmount: pkg.CreditsAmount,
-		PointsCost:    pkg.PointsCost,
-		AmountCents:   pkg.AmountCents,
-		BonusPoints:   pkg.BonusPoints,
-		Enabled:       pkg.Enabled,
-		SortOrder:     pkg.SortOrder,
-		Note:          pkg.Note,
-		CreatedAt:     pkg.CreatedAt,
-		UpdatedAt:     pkg.UpdatedAt,
+		ID:               strconv.FormatUint(pkg.ID, 10),
+		Code:             pkg.Code,
+		Name:             pkg.Name,
+		PackageType:      string(pkg.PackageType),
+		CreditsAmount:    pkg.CreditsAmount,
+		PointsCost:       pkg.PointsCost,
+		AmountCents:      pkg.AmountCents,
+		BonusPoints:      pkg.BonusPoints,
+		ProductURL:       pkg.ProductURL,
+		Enabled:          pkg.Enabled,
+		SortOrder:        pkg.SortOrder,
+		Note:             pkg.Note,
+		CreatedAt:        pkg.CreatedAt,
+		UpdatedAt:        pkg.UpdatedAt,
 	}
 }
 

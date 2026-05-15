@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,7 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RateLimiter 提供 Redis 优先、内存兜底的固定窗口限流。
+// RateLimiter uses Redis first and falls back to in-process counters.
 type RateLimiter struct {
 	enabled bool
 	redis   *redis.Client
@@ -27,7 +29,6 @@ type memoryCounter struct {
 	ExpiresAt time.Time
 }
 
-// NewRateLimiter 创建限流器。
 func NewRateLimiter(enabled bool, redisClient *redis.Client) *RateLimiter {
 	return &RateLimiter{
 		enabled: enabled,
@@ -36,14 +37,23 @@ func NewRateLimiter(enabled bool, redisClient *redis.Client) *RateLimiter {
 	}
 }
 
-// LimitIP 按客户端 IP 限流。
 func (l *RateLimiter) LimitIP(name string, limit int, window time.Duration) gin.HandlerFunc {
 	return l.limit(name, limit, window, func(c *gin.Context) string {
 		return c.ClientIP()
 	})
 }
 
-// LimitUser 按登录用户限流，若没有用户 ID 则退回 IP。
+// LimitEmail limits by the JSON "email" field and falls back to client IP.
+func (l *RateLimiter) LimitEmail(name string, limit int, window time.Duration) gin.HandlerFunc {
+	return l.limit(name, limit, window, func(c *gin.Context) string {
+		email := readJSONEmail(c)
+		if email == "" {
+			return "ip:" + c.ClientIP()
+		}
+		return "email:" + email
+	})
+}
+
 func (l *RateLimiter) LimitUser(name string, limit int, window time.Duration) gin.HandlerFunc {
 	return l.limit(name, limit, window, func(c *gin.Context) string {
 		if userID, ok := CurrentUserID(c); ok && userID > 0 {
@@ -63,7 +73,6 @@ func (l *RateLimiter) limit(name string, limit int, window time.Duration, identi
 		key := fmt.Sprintf("rate_limit:%s:%s", sanitizeKeyPart(name), sanitizeKeyPart(identity(c)))
 		allowed, ttl, err := l.allow(c.Request.Context(), key, limit, window)
 		if err != nil {
-			// Redis 异常时 allow 会退回进程内存计数；响应头保留错误信息方便排查。
 			c.Header("X-RateLimit-Error", err.Error())
 		}
 		if !allowed {
@@ -138,4 +147,24 @@ func sanitizeKeyPart(value string) string {
 	}
 	replacer := strings.NewReplacer(" ", "_", "\n", "_", "\r", "_", "\t", "_", ":", "_")
 	return replacer.Replace(value)
+}
+
+func readJSONEmail(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
+		return ""
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return ""
+	}
+	c.Request.Body = io.NopCloser(strings.NewReader(string(body)))
+
+	var payload struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(payload.Email))
 }

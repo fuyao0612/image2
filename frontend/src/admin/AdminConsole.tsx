@@ -1,2901 +1,407 @@
-import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
-import {
-  ArrowLeft,
-  AlertTriangle,
-  BadgeCheck,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Edit3,
-  Eye,
-  Ban,
-  Image as ImageIcon,
-  FileText,
-  Filter,
-  LayoutDashboard,
-  LoaderCircle,
-  LogOut,
-  Menu,
-  Minus,
-  Package,
-  PanelLeftClose,
-  PanelLeftOpen,
-  RefreshCcw,
-  ReceiptText,
-  Search,
-  Save,
-  Settings,
-  ShieldCheck,
-  Plus,
-  Trash2,
-  Users,
-  XCircle,
-} from 'lucide-react'
+﻿import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { Activity, AlertTriangle, ArrowLeft, Database, Edit, Eye, FileText, KeyRound, LayoutDashboard, LoaderCircle, LogOut, Menu, RefreshCcw, Save, Search, Sparkles, Timer, TrendingUp, Users, X } from 'lucide-react'
 import { api } from '@/api/client'
 import { TopNotice } from '@/components/TopNotice'
-import type {
-  AdminActionLogItem,
-  AdminContentAuditItem,
-  AdminImageTaskItem,
-  AdminListActionLogsResponse,
-  AdminListContentAuditsResponse,
-  AdminListImageTasksResponse,
-  AdminListPackagesResponse,
-  AdminListRechargeOrdersResponse,
-  AdminListUsersResponse,
-  AdminPackageItem,
-  AdminReviewContentAuditRequest,
-  AdminStatsResponse,
-  AdminUserItem,
-  BillingSettingsResponse,
-  ListUserActivityResponse,
-  UpdateBillingSettingsRequest,
-  UserActivityItem,
-  UserInfo,
-} from '@/types/api'
+import type { AdminActionLogItem, AdminAnnouncementPayload, AdminCreateRedeemCodesRequest, AdminImageTaskItem, AdminListActionLogsResponse, AdminListAnnouncementsResponse, AdminListImageTasksResponse, AdminListPackagesResponse, AdminListProductCategoriesResponse, AdminListProductsResponse, AdminListPromptPlazaResponse, AdminListProviderKeysResponse, AdminListRedeemCodesResponse, AdminListUsersResponse, AdminPackageItem, AdminPackagePayload, AdminProductCategoryPayload, AdminProductPayload, AdminPromptPlazaPayload, AdminProviderKeyItem, AdminProviderKeyPayload, AdminRedeemCodeItem, AdminStatsResponse, AdminUserItem, AnnouncementItem, BillingSettingsResponse, DataCleanupRequest, DataCleanupResponse, ListUserActivityResponse, ProductCategoryItem, ProductItem, PromptPlazaItem, UpdateBillingSettingsRequest, UserInfo } from '@/types/api'
 
-type AdminTab = 'overview' | 'users' | 'packages' | 'billing' | 'tasks' | 'orders' | 'audits' | 'logs'
-type BusyState = string | null
-type UserPointsAction = 'increase' | 'decrease'
-
-type AdminPackageForm = {
-  code: string
-  name: string
-  packageType: 'recharge'
-  creditsAmount: number
-  pointsCost: number
-  amountCents: number
-  bonusPoints: number
-  enabled: boolean
-  sortOrder: number
-  note: string
-}
-
-type BillingSettingsForm = UpdateBillingSettingsRequest
-
-interface UserPointsDialogState {
-  open: boolean
-  user: AdminUserItem | null
-  action: UserPointsAction
-  amount: string
-  remark: string
-}
-
-interface UserActivityDialogState {
-  open: boolean
-  user: AdminUserItem | null
-  response: ListUserActivityResponse | null
-  page: number
-  loading: boolean
-  error: string
-}
-
-interface TaskDetailDialogState {
-  open: boolean
-  task: AdminImageTaskItem | null
-}
+type Tab = 'overview' | 'tasks' | 'redeemCodes' | 'promptPlaza' | 'packages' | 'products' | 'providerKeys' | 'announcements' | 'rules' | 'users' | 'cleanup' | 'logs'
+type Busy = string | null
+type ConfirmState = { title: string; content: ReactNode; danger?: boolean; confirmText?: string; onConfirm: () => Promise<void> | void }
+type Modal =
+  | { type: 'none' }
+  | { type: 'confirm'; data: ConfirmState }
+  | { type: 'task'; item: AdminImageTaskItem }
+  | { type: 'redeemCode'; item: AdminRedeemCodeItem }
+  | { type: 'prompt'; item: PromptPlazaItem | null }
+  | { type: 'promptReason'; action: 'reject' | 'delete'; item: PromptPlazaItem; reason: string }
+  | { type: 'package'; item: AdminPackageItem | null }
+  | { type: 'product'; item: ProductItem | null }
+  | { type: 'category'; item: ProductCategoryItem | null }
+  | { type: 'providerKey'; item: AdminProviderKeyItem | null }
+  | { type: 'announcement'; item: AnnouncementItem | null }
+  | { type: 'points'; user: AdminUserItem; delta: string; remark: string }
+  | { type: 'userLogs'; user: AdminUserItem; response: ListUserActivityResponse | null; page: number; loading: boolean; error: string }
+  | { type: 'log'; item: AdminActionLogItem }
 
 const PAGE_SIZE = 10
-const USER_ACTIVITY_PAGE_SIZE = 10
-
-const adminTabs: Array<{ id: AdminTab; label: string; icon: JSX.Element }> = [
+const STORAGE_KEY = 'image2-admin-tab'
+const defaultBilling: UpdateBillingSettingsRequest = { imageGeneratePointCost: 20, imageGenerationEnabled: true, emailNotifyEnabled: false, emailNotifyPointCost: 1, checkinPoints: 3, checkinCredits: 1, inviteRewardPoints: 0, inviteRewardCredits: 1, registrationGiftCredits: 3 }
+const tabs: Array<{ id: Tab; label: string; icon: ReactNode }> = [
   { id: 'overview', label: '概览', icon: <LayoutDashboard className="h-4 w-4" /> },
-  { id: 'users', label: '用户', icon: <Users className="h-4 w-4" /> },
-  { id: 'packages', label: '套餐', icon: <Package className="h-4 w-4" /> },
-  { id: 'billing', label: '账本规则', icon: <Settings className="h-4 w-4" /> },
   { id: 'tasks', label: '任务', icon: <FileText className="h-4 w-4" /> },
-  { id: 'orders', label: '订单', icon: <ReceiptText className="h-4 w-4" /> },
-  { id: 'audits', label: '审核', icon: <ShieldCheck className="h-4 w-4" /> },
-  { id: 'logs', label: '操作日志', icon: <FileText className="h-4 w-4" /> },
+  { id: 'redeemCodes', label: '兑换码', icon: <KeyRound className="h-4 w-4" /> },
+  { id: 'promptPlaza', label: '提示词广场', icon: <Sparkles className="h-4 w-4" /> },
+  { id: 'packages', label: '商品套餐', icon: <Sparkles className="h-4 w-4" /> },
+  { id: 'products', label: '商品管理', icon: <FileText className="h-4 w-4" /> },
+  { id: 'providerKeys', label: 'apikey', icon: <KeyRound className="h-4 w-4" /> },
+  { id: 'announcements', label: '公告', icon: <FileText className="h-4 w-4" /> },
+  { id: 'rules', label: '规则', icon: <Activity className="h-4 w-4" /> },
+  { id: 'users', label: '用户', icon: <Users className="h-4 w-4" /> },
+  { id: 'cleanup', label: '数据清理', icon: <Database className="h-4 w-4" /> },
+  { id: 'logs', label: '日志', icon: <Activity className="h-4 w-4" /> },
 ]
+function getInitialTab(): Tab { try { const v = localStorage.getItem(STORAGE_KEY) as Tab | null; return tabs.some(t => t.id === v) ? v! : 'overview' } catch { return 'overview' } }
 
-const emptyPackageForm: AdminPackageForm = {
-  code: '',
-  name: '',
-  packageType: 'recharge',
-  creditsAmount: 100,
-  pointsCost: 0,
-  amountCents: 1999,
-  bonusPoints: 0,
-  enabled: true,
-  sortOrder: 0,
-  note: '',
-}
-
-export function AdminConsole({
-  currentUser,
-  onBackToApp,
-  onLogout,
-}: {
-  currentUser: UserInfo | null
-  onBackToApp: () => void
-  onLogout: () => void
-}) {
-  const [activeTab, setActiveTab] = useState<AdminTab>('overview')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [busy, setBusy] = useState<BusyState>(null)
+export function AdminConsole({ currentUser, onBackToApp, onLogout }: { currentUser: UserInfo | null; onBackToApp: () => void; onLogout: () => void }) {
+  const [activeTab, setActiveTab] = useState<Tab>(getInitialTab)
+  const [mobileNav, setMobileNav] = useState(false)
+  const [busy, setBusy] = useState<Busy>(null)
   const [message, setMessage] = useState('')
-
+  const [modal, setModal] = useState<Modal>({ type: 'none' })
   const [stats, setStats] = useState<AdminStatsResponse | null>(null)
-
-  const [usersResponse, setUsersResponse] = useState<AdminListUsersResponse | null>(null)
-  const [userKeywordInput, setUserKeywordInput] = useState('')
-  const [userKeyword, setUserKeyword] = useState('')
-  const [userPage, setUserPage] = useState(1)
-
-  const [packagesResponse, setPackagesResponse] = useState<AdminListPackagesResponse | null>(null)
-  const [packageTypeFilter, setPackageTypeFilter] = useState('')
-  const [packagePage, setPackagePage] = useState(1)
-  const [editingPackageId, setEditingPackageId] = useState<string | null>(null)
-  const [packageForm, setPackageForm] = useState<AdminPackageForm>(emptyPackageForm)
-  const [billingSettings, setBillingSettings] = useState<BillingSettingsResponse | null>(null)
-  const [billingForm, setBillingForm] = useState<BillingSettingsForm>({
-    customRechargeUnitPriceCents: 20,
-    imageGeneratePointCost: 20,
-    checkinPoints: 3,
-    checkinCredits: 1,
-  })
-
-  const [tasksResponse, setTasksResponse] = useState<AdminListImageTasksResponse | null>(null)
-  const [taskStatusFilter, setTaskStatusFilter] = useState('')
+  const [tasks, setTasks] = useState<AdminListImageTasksResponse | null>(null)
+  const [taskStatus, setTaskStatus] = useState('')
+  const [taskKeyword, setTaskKeyword] = useState('')
   const [taskPage, setTaskPage] = useState(1)
-
-  const [ordersResponse, setOrdersResponse] = useState<AdminListRechargeOrdersResponse | null>(null)
-  const [orderStatusFilter, setOrderStatusFilter] = useState('')
-  const [orderPage, setOrderPage] = useState(1)
-
-  const [auditsResponse, setAuditsResponse] = useState<AdminListContentAuditsResponse | null>(null)
-  const [auditStatusFilter, setAuditStatusFilter] = useState('')
-  const [auditPage, setAuditPage] = useState(1)
-
-  const [logsResponse, setLogsResponse] = useState<AdminListActionLogsResponse | null>(null)
+  const [redeem, setRedeem] = useState<AdminListRedeemCodesResponse | null>(null)
+  const [redeemStatus, setRedeemStatus] = useState('')
+  const [redeemKeyword, setRedeemKeyword] = useState('')
+  const [redeemPage, setRedeemPage] = useState(1)
+  const [redeemForm, setRedeemForm] = useState({ count: '10', pointsAmount: '0', creditsAmount: '10', prefix: '', note: '' })
+  const [generatedCodes, setGeneratedCodes] = useState<AdminRedeemCodeItem[]>([])
+  const [prompts, setPrompts] = useState<AdminListPromptPlazaResponse | null>(null)
+  const [promptStatus, setPromptStatus] = useState<'approved' | 'pending' | 'rejected'>('approved')
+  const [packages, setPackages] = useState<AdminListPackagesResponse | null>(null)
+  const [packagePage, setPackagePage] = useState(1)
+  const [products, setProducts] = useState<AdminListProductsResponse | null>(null)
+  const [categories, setCategories] = useState<AdminListProductCategoriesResponse | null>(null)
+  const [productKeyword, setProductKeyword] = useState('')
+  const [productCategory, setProductCategory] = useState('')
+  const [productEnabled, setProductEnabled] = useState('')
+  const [productPage, setProductPage] = useState(1)
+  const [providerKeys, setProviderKeys] = useState<AdminListProviderKeysResponse | null>(null)
+  const [providerPage, setProviderPage] = useState(1)
+  const [announcements, setAnnouncements] = useState<AdminListAnnouncementsResponse | null>(null)
+  const [announcementPage, setAnnouncementPage] = useState(1)
+  const [billing, setBilling] = useState<BillingSettingsResponse | null>(null)
+  const [billingForm, setBillingForm] = useState<UpdateBillingSettingsRequest>(defaultBilling)
+  const [users, setUsers] = useState<AdminListUsersResponse | null>(null)
+  const [userKeyword, setUserKeyword] = useState('')
+  const [userStatus, setUserStatus] = useState('')
+  const [userPage, setUserPage] = useState(1)
+  const [cleanupForm, setCleanupForm] = useState<DataCleanupRequest>({ mode: 'days_ago', daysAgo: 30 })
+  const [cleanupResult, setCleanupResult] = useState<DataCleanupResponse | null>(null)
+  const [logs, setLogs] = useState<AdminListActionLogsResponse | null>(null)
   const [logTargetType, setLogTargetType] = useState('')
   const [logTargetId, setLogTargetId] = useState('')
   const [logPage, setLogPage] = useState(1)
-  const [pointDialog, setPointDialog] = useState<UserPointsDialogState>({
-    open: false,
-    user: null,
-    action: 'increase',
-    amount: '10',
-    remark: '后台人工调整',
-  })
-  const [userActivityDialog, setUserActivityDialog] = useState<UserActivityDialogState>({
-    open: false,
-    user: null,
-    response: null,
-    page: 1,
-    loading: false,
-    error: '',
-  })
-  const [taskDetailDialog, setTaskDetailDialog] = useState<TaskDetailDialogState>({
-    open: false,
-    task: null,
-  })
-
   const isAdmin = currentUser?.role === 'admin'
 
-  useEffect(() => {
-    if (currentUser && !isAdmin) {
-      onBackToApp()
+  useEffect(() => { if (currentUser && !isAdmin) onBackToApp() }, [currentUser, isAdmin, onBackToApp])
+  useEffect(() => { try { localStorage.setItem(STORAGE_KEY, activeTab) } catch {} }, [activeTab])
+  useEffect(() => { if (isAdmin) void loadTab(activeTab) }, [activeTab, isAdmin])
+  useEffect(() => { if (isAdmin) void Promise.all([loadOverview(), loadPrompts('pending')]) }, [isAdmin])
+
+  function errorText(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback }
+  async function run(key: string, fn: () => Promise<void>) { setBusy(key); try { await fn() } catch (error) { setMessage(errorText(error, '操作失败')) } finally { setBusy(null) } }
+  async function loadOverview() { try { setStats(await api.adminStats()) } catch (e) { setMessage(errorText(e, '概览加载失败')) } }
+  async function loadTasks(page = taskPage, status = taskStatus, keyword = taskKeyword) { try { const r = await api.adminListImageTasks(page, PAGE_SIZE, status, keyword); setTasks(r); setTaskPage(r.page) } catch (e) { setMessage(errorText(e, '任务加载失败')) } }
+  async function loadRedeem(page = redeemPage, status = redeemStatus, keyword = redeemKeyword) { try { const r = await api.adminListRedeemCodes(page, PAGE_SIZE, status, keyword); setRedeem(r); setRedeemPage(r.page) } catch (e) { setMessage(errorText(e, '兑换码加载失败')) } }
+  async function loadPrompts(status = promptStatus) { try { const r = await api.adminListPromptPlaza(1, 100, status); setPrompts({ ...r, items: r.items.map(i => ({ ...i, tags: Array.isArray(i.tags) ? i.tags : [] })) }); setPromptStatus(status as typeof promptStatus) } catch (e) { setMessage(errorText(e, '提示词广场加载失败')) } }
+  async function loadPackages(page = packagePage) { try { const r = await api.adminListPackages(page, PAGE_SIZE, ''); setPackages(r); setPackagePage(r.page) } catch (e) { setMessage(errorText(e, '商品套餐加载失败')) } }
+  async function loadProducts(page = productPage, keyword = productKeyword, categoryId = productCategory, enabled = productEnabled) { try { const [p, c] = await Promise.all([api.adminListProducts(page, PAGE_SIZE, keyword, categoryId, enabled), api.adminListProductCategories(1, 50)]); setProducts(p); setProductPage(p.page); setCategories(c) } catch (e) { setMessage(errorText(e, '商品管理加载失败')) } }
+  async function loadProviderKeys(page = providerPage) { try { const r = await api.adminListProviderKeys(page, 20); setProviderKeys(r); setProviderPage(r.page) } catch (e) { setMessage(errorText(e, 'API Key 加载失败')) } }
+  async function loadAnnouncements(page = announcementPage) { try { const r = await api.adminListAnnouncements(page, PAGE_SIZE); setAnnouncements(r); setAnnouncementPage(r.page) } catch (e) { setMessage(errorText(e, '公告加载失败')) } }
+  async function loadBilling() { try { const r = await api.adminGetBillingSettings(); setBilling(r); setBillingForm(r) } catch (e) { setMessage(errorText(e, '规则加载失败')) } }
+  async function loadUsers(page = userPage, keyword = userKeyword, status = userStatus) { try { const r = await api.adminListUsers(page, PAGE_SIZE, keyword, status); setUsers(r); setUserPage(r.page) } catch (e) { setMessage(errorText(e, '用户加载失败')) } }
+  async function loadLogs(page = logPage, targetType = logTargetType, targetId = logTargetId) { try { const r = await api.adminListActionLogs(page, PAGE_SIZE, targetType, targetId); setLogs(r); setLogPage(r.page) } catch (e) { setMessage(errorText(e, '操作日志加载失败')) } }
+  async function loadTab(tab: Tab) { if (tab === 'overview') return loadOverview(); if (tab === 'tasks') return loadTasks(); if (tab === 'redeemCodes') return loadRedeem(); if (tab === 'promptPlaza') return loadPrompts(); if (tab === 'packages') return loadPackages(); if (tab === 'products') return loadProducts(); if (tab === 'providerKeys') return loadProviderKeys(); if (tab === 'announcements') return loadAnnouncements(); if (tab === 'rules') return loadBilling(); if (tab === 'users') return loadUsers(); if (tab === 'logs') return loadLogs() }
+
+  async function refresh() { await run('refresh', async () => { await loadTab(activeTab); setMessage('已刷新') }) }
+  async function toggleGeneration() { await run('toggle-generation', async () => { const payload = { ...billingForm, imageGenerationEnabled: !billingForm.imageGenerationEnabled }; const r = await api.adminUpdateBillingSettings(payload); setBilling(r); setBillingForm(r); setMessage(payload.imageGenerationEnabled ? '已开启生图' : '已关闭生图') }) }
+  async function createRedeem() { const payload: AdminCreateRedeemCodesRequest = { count: Math.max(1, Number(redeemForm.count) || 1), pointsAmount: Math.max(0, Number(redeemForm.pointsAmount) || 0), creditsAmount: Math.max(0, Number(redeemForm.creditsAmount) || 0), prefix: redeemForm.prefix.trim() || undefined, note: redeemForm.note.trim() || undefined }; if (!payload.pointsAmount && !payload.creditsAmount) return setMessage('兑换码至少包含积分或福利次数'); await run('redeem-create', async () => { const r = await api.adminCreateRedeemCodes(payload); setGeneratedCodes(r.items); await loadRedeem(1); setMessage(`已生成 ${r.items.length} 个兑换码`) }) }
+  async function saveBilling() { await run('rules-save', async () => { const r = await api.adminUpdateBillingSettings({ ...billingForm }); setBilling(r); setBillingForm(r); setMessage('规则已更新') }) }
+  async function savePrompt(item: PromptPlazaItem | null, payload: AdminPromptPlazaPayload) { await run('prompt-save', async () => { item ? await api.adminUpdatePromptPlaza(item.id, payload) : await api.adminCreatePromptPlaza(payload); setModal({ type: 'none' }); await loadPrompts(promptStatus); setMessage(item ? '提示词已更新' : '提示词已创建') }) }
+  async function reviewPrompt(item: PromptPlazaItem, status: 'approved' | 'rejected', reason = '') { await run(`prompt-review-${item.id}`, async () => { await api.adminReviewPromptPlaza(item.id, status, reason); setModal({ type: 'none' }); await loadPrompts(promptStatus); setMessage(status === 'approved' ? '提示词已通过' : '提示词已驳回') }) }
+  async function deletePrompt(item: PromptPlazaItem, reason = '') { await run(`prompt-delete-${item.id}`, async () => { await api.adminDeletePromptPlaza(item.id, reason); setModal({ type: 'none' }); await loadPrompts(promptStatus); setMessage('提示词已删除') }) }
+  async function savePackage(item: AdminPackageItem | null, payload: AdminPackagePayload) { await run('package-save', async () => { item ? await api.adminUpdatePackage(item.id, payload) : await api.adminCreatePackage(payload); setModal({ type: 'none' }); await loadPackages(packagePage); setMessage(item ? '商品套餐已更新' : '商品套餐已创建') }) }
+  async function saveProduct(item: ProductItem | null, payload: AdminProductPayload) { await run('product-save', async () => { item ? await api.adminUpdateProduct(item.id, payload) : await api.adminCreateProduct(payload); setModal({ type: 'none' }); await loadProducts(productPage); setMessage(item ? '商品已更新' : '商品已创建') }) }
+  async function saveCategory(item: ProductCategoryItem | null, payload: AdminProductCategoryPayload) { await run('category-save', async () => { item ? await api.adminUpdateProductCategory(item.id, payload) : await api.adminCreateProductCategory(payload); setModal({ type: 'none' }); await loadProducts(productPage); setMessage(item ? '分类已更新' : '分类已创建') }) }
+  async function saveProviderKey(item: AdminProviderKeyItem | null, payload: AdminProviderKeyPayload) { await run('key-save', async () => { item ? await api.adminUpdateProviderKey(item.id, payload) : await api.adminCreateProviderKey(payload); setModal({ type: 'none' }); await loadProviderKeys(providerPage); setMessage(item ? 'API Key 已更新' : 'API Key 已创建') }) }
+  async function saveAnnouncement(item: AnnouncementItem | null, payload: AdminAnnouncementPayload) { await run('announcement-save', async () => { item ? await api.adminUpdateAnnouncement(item.id, payload) : await api.adminCreateAnnouncement(payload); setModal({ type: 'none' }); await loadAnnouncements(announcementPage); setMessage(item ? '公告已更新' : '公告已创建') }) }
+  async function openUserLogs(user: AdminUserItem, page = 1) { setModal({ type: 'userLogs', user, response: null, page, loading: true, error: '' }); try { const r = await api.adminListUserActivity(user.id, page, PAGE_SIZE); setModal({ type: 'userLogs', user, response: r, page, loading: false, error: '' }) } catch (e) { setModal({ type: 'userLogs', user, response: null, page, loading: false, error: errorText(e, '日志加载失败') }) } }
+  function askConfirm(data: ConfirmState) { setModal({ type: 'confirm', data }) }
+
+  if (!currentUser || !isAdmin) return <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-slate-700"><TopNotice message={message} onDismiss={() => setMessage('')} /><div className="rounded-2xl bg-white p-5 shadow-sm">正在进入管理员后台...</div></div>
+
+  return <div className="admin-shell min-h-screen bg-gradient-to-br from-[#f7f8ff] via-white to-emerald-50 text-slate-900"><TopNotice message={message} onDismiss={() => setMessage('')} /><div className="admin-layout flex min-h-screen"><Sidebar active={activeTab} open={mobileNav} user={currentUser} pending={prompts?.pending ?? 0} onClose={() => setMobileNav(false)} onNav={(tab) => { setActiveTab(tab); setMobileNav(false) }} /><div className="admin-content min-w-0 flex-1"><header className="admin-header sticky top-0 z-30 border-b border-slate-100 bg-white/85 px-4 py-3 backdrop-blur"><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><button className="icon-btn lg:hidden" onClick={() => setMobileNav(true)}><Menu className="h-4 w-4" /></button><div><div className="text-sm text-slate-500">Administrator</div><h1 className="text-xl font-bold">{tabs.find(t => t.id === activeTab)?.label}</h1></div></div><div className="flex flex-wrap gap-2"><Button onClick={refresh} loading={busy === 'refresh'}><RefreshCcw className="h-4 w-4" />刷新</Button><Button onClick={toggleGeneration} loading={busy === 'toggle-generation'}>{billingForm.imageGenerationEnabled ? '关闭生图' : '开启生图'}</Button><Button onClick={onBackToApp}><ArrowLeft className="h-4 w-4" />用户端</Button><Button onClick={onLogout}><LogOut className="h-4 w-4" />退出</Button></div></div></header><main className="admin-main p-3 sm:p-5 lg:p-6">
+    {activeTab === 'overview' && <Overview stats={stats} />}
+    {activeTab === 'tasks' && <Tasks data={tasks} status={taskStatus} keyword={taskKeyword} setStatus={setTaskStatus} setKeyword={setTaskKeyword} search={() => loadTasks(1, taskStatus, taskKeyword)} page={taskPage} setPage={(p) => loadTasks(p, taskStatus, taskKeyword)} open={(item) => setModal({ type: 'task', item })} />}
+    {activeTab === 'redeemCodes' && <Redeem data={redeem} status={redeemStatus} keyword={redeemKeyword} form={redeemForm} generated={generatedCodes} setStatus={setRedeemStatus} setKeyword={setRedeemKeyword} setForm={setRedeemForm} create={createRedeem} page={redeemPage} setPage={(p) => loadRedeem(p, redeemStatus, redeemKeyword)} search={() => loadRedeem(1, redeemStatus, redeemKeyword)} detail={(item) => setModal({ type: 'redeemCode', item })} del={(item) => askConfirm({ title: '删除兑换码', content: `确认删除兑换码 ${item.code}？`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeleteRedeemCode(item.id); setModal({ type: 'none' }); await loadRedeem(redeemPage) } })} />}
+    {activeTab === 'promptPlaza' && <PromptAdmin data={prompts} status={promptStatus} busy={busy} setStatus={(s) => loadPrompts(s)} create={() => setModal({ type: 'prompt', item: null })} edit={(item) => setModal({ type: 'prompt', item })} approve={(item) => reviewPrompt(item, 'approved')} reject={(item) => setModal({ type: 'promptReason', action: 'reject', item, reason: '' })} del={(item) => setModal({ type: 'promptReason', action: 'delete', item, reason: '' })} />}
+    {activeTab === 'packages' && <Packages data={packages} page={packagePage} setPage={loadPackages} create={() => setModal({ type: 'package', item: null })} edit={(item) => setModal({ type: 'package', item })} del={(item) => askConfirm({ title: '删除商品套餐', content: `确认删除「${item.name}」？`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeletePackage(item.id); setModal({ type: 'none' }); await loadPackages(packagePage) } })} />}
+    {activeTab === 'products' && <Products data={products} categories={categories?.items ?? []} keyword={productKeyword} category={productCategory} enabled={productEnabled} setKeyword={setProductKeyword} setCategory={setProductCategory} setEnabled={setProductEnabled} search={() => loadProducts(1, productKeyword, productCategory, productEnabled)} page={productPage} setPage={(p) => loadProducts(p, productKeyword, productCategory, productEnabled)} create={() => setModal({ type: 'product', item: null })} edit={(item) => setModal({ type: 'product', item })} del={(item) => askConfirm({ title: '删除商品', content: `确认删除商品「${item.name}」？`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeleteProduct(item.id); setModal({ type: 'none' }); await loadProducts(productPage) } })} createCat={() => setModal({ type: 'category', item: null })} editCat={(item) => setModal({ type: 'category', item })} delCat={(item) => askConfirm({ title: '删除分类', content: `确认删除分类「${item.name}」？如已绑定商品，后端会阻止删除。`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeleteProductCategory(item.id); setModal({ type: 'none' }); await loadProducts(productPage) } })} />}
+    {activeTab === 'providerKeys' && <ProviderKeys data={providerKeys} busy={busy} page={providerPage} setPage={loadProviderKeys} create={() => setModal({ type: 'providerKey', item: null })} edit={(item) => setModal({ type: 'providerKey', item })} useKey={(item) => run(`use-key-${item.id}`, async () => { await api.adminUseProviderKey(item.id); await loadProviderKeys(providerPage); setMessage('已切换使用中的 API Key') })} del={(item) => askConfirm({ title: '删除 API Key', content: `确认删除「${item.name}」？`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeleteProviderKey(item.id); setModal({ type: 'none' }); await loadProviderKeys(providerPage) } })} />}
+    {activeTab === 'announcements' && <Announcements data={announcements} page={announcementPage} setPage={loadAnnouncements} create={() => setModal({ type: 'announcement', item: null })} edit={(item) => setModal({ type: 'announcement', item })} del={(item) => askConfirm({ title: '删除公告', content: `确认删除公告「${item.title}」？`, danger: true, confirmText: '删除', onConfirm: async () => { await api.adminDeleteAnnouncement(item.id); setModal({ type: 'none' }); await loadAnnouncements(announcementPage) } })} />}
+    {activeTab === 'rules' && <Rules form={billingForm} setForm={setBillingForm} save={saveBilling} busy={busy === 'rules-save'} billing={billing} />}
+    {activeTab === 'users' && <UsersPage data={users} keyword={userKeyword} status={userStatus} setKeyword={setUserKeyword} setStatus={setUserStatus} search={() => loadUsers(1, userKeyword, userStatus)} page={userPage} setPage={(p) => loadUsers(p, userKeyword, userStatus)} toggle={(u) => run(`user-${u.id}`, async () => { await api.adminUpdateUserStatus(u.id, u.status === 1 ? 2 : 1); await loadUsers(userPage); setMessage(u.status === 1 ? '用户已禁用' : '用户已启用') })} points={(u) => setModal({ type: 'points', user: u, delta: '10', remark: '后台调整' })} logs={openUserLogs} />}
+    {activeTab === 'cleanup' && <Cleanup form={cleanupForm} setForm={setCleanupForm} result={cleanupResult} preview={() => run('cleanup-preview', async () => { setCleanupResult(await api.adminPreviewDataCleanup(cleanupForm)); setMessage('清理预览完成') })} execute={() => askConfirm({ title: '执行数据清理', content: '这是危险操作，请确认已经预览结果，并确定要执行清理。', danger: true, confirmText: '执行清理', onConfirm: async () => { await run('cleanup-execute', async () => { setCleanupResult(await api.adminExecuteDataCleanup(cleanupForm)); setModal({ type: 'none' }); setMessage('数据清理已执行') }) } })} busy={busy} />}
+    {activeTab === 'logs' && <Logs data={logs} targetType={logTargetType} targetId={logTargetId} setTargetType={setLogTargetType} setTargetId={setLogTargetId} search={() => loadLogs(1, logTargetType, logTargetId)} page={logPage} setPage={(p) => loadLogs(p, logTargetType, logTargetId)} open={(item) => setModal({ type: 'log', item })} />}
+  </main></div></div><AllModals state={modal} setState={setModal} busy={busy} categories={categories?.items ?? []} onSavePrompt={savePrompt} onReviewPrompt={reviewPrompt} onDeletePrompt={deletePrompt} onSavePackage={savePackage} onSaveProduct={saveProduct} onSaveCategory={saveCategory} onSaveProviderKey={saveProviderKey} onSaveAnnouncement={saveAnnouncement} onSavePoints={async () => { if (modal.type !== 'points') return; await run(`points-${modal.user.id}`, async () => { await api.adminAdjustPoints(modal.user.id, Math.trunc(Number(modal.delta) || 0), modal.remark || '后台调整'); setModal({ type: 'none' }); await loadUsers(userPage); setMessage('积分已调整') }) }} onOpenUserLogs={openUserLogs} /></div>
+}
+
+function Sidebar({ active, open, user, pending, onNav, onClose }: { active: Tab; open: boolean; user: UserInfo; pending: number; onNav: (tab: Tab) => void; onClose: () => void }) {
+  return <aside className={`admin-sidebar fixed inset-y-0 left-0 z-40 flex w-[284px] max-w-[86vw] flex-col border-r border-slate-100 bg-[#f0f2ff] p-4 shadow-xl transition-transform lg:sticky lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}><div className="flex items-center justify-between"><div className="flex items-center gap-2"><Sparkles className="h-6 w-6 text-emerald-500" /><div><div className="text-lg font-bold">管理员后台</div><div className="text-xs text-slate-500">兑换码与任务运营</div></div></div><button className="icon-btn lg:hidden" onClick={onClose}><X className="h-4 w-4" /></button></div><nav className="admin-nav mt-7 space-y-1 overflow-y-auto pr-1">{tabs.map(tab => <button key={tab.id} type="button" onClick={() => onNav(tab.id)} className={`flex w-full items-center gap-3 rounded-2xl px-4 py-2.5 text-left text-sm font-medium transition ${active === tab.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:bg-white/70'}`}>{tab.icon}<span className="flex-1">{tab.label}</span>{tab.id === 'promptPlaza' && pending > 0 ? <span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> : null}</button>)}</nav><div className="mt-auto rounded-3xl bg-white/80 p-4 shadow-sm"><div className="font-semibold">{user.username}</div><div className="truncate text-sm text-slate-500">{user.email}</div></div></aside>
+}
+
+function Overview({ stats }: { stats: AdminStatsResponse | null }) {
+  const [range, setRange] = useState<'24h' | '3d' | '7d'>('24h')
+  const trend = range === '24h' ? stats?.taskTrend24h : range === '3d' ? stats?.taskTrend3d : stats?.taskTrend7d
+  const points = normalizedTrendPoints(trend, stats)
+  const max = Math.max(1, ...points.map(p => p.success + p.failed))
+  const redeemAll = Number(stats?.redeemCodesActive ?? 0) + Number(stats?.redeemCodesUsed ?? 0) + Number(stats?.redeemCodesDisabled ?? 0)
+  return <div className="overview-page space-y-5"><div className="overview-metrics grid gap-4 md:grid-cols-2 xl:grid-cols-3"><OverviewCard icon={<Activity className="h-5 w-5" />} label="今日消耗" value={`${num(stats?.tasksPointsConsumedToday)} 积分 + ${num(stats?.tasksCreditsConsumedToday)} 次数`} sub="统计今日 0 点后的任务扣减" aside={`${num(stats?.tasksImagesGeneratedToday)}张`} /><OverviewCard icon={<Users className="h-5 w-5" />} label="今日活跃用户" value={`${num(stats?.tasksActiveUsersToday)} 人`} sub="今日使用生图功能的用户数量" /><OverviewCard icon={<Users className="h-5 w-5" />} label="今日新增用户" value={`${num(stats?.usersCreatedToday)} 人`} sub="今日新注册的普通用户数量" aside={`总用户 ${num(stats?.usersTotal)}`} /><OverviewCard icon={<Timer className="h-5 w-5" />} label="昨日消耗" value={`${num(stats?.tasksPointsConsumedYesterday)} 积分 + ${num(stats?.tasksCreditsConsumedYesterday)} 次数`} sub="统计昨日 0 点至今日 0 点的任务扣减" aside={`${num(stats?.tasksImagesGeneratedYesterday)}张`} /><OverviewCard icon={<Sparkles className="h-5 w-5" />} label="资源池" value={`${num(stats?.pointsBalanceTotal)} 积分 + ${num(stats?.creditsBalanceTotal)} 次数`} sub="当前用户积分与次数余额汇总" /><OverviewCard icon={<TrendingUp className="h-5 w-5" />} label="历史消耗" value={`${num(stats?.tasksPointsConsumedTotal)} 积分 + ${num(stats?.tasksCreditsConsumedTotal)} 次数`} sub="按历史任务实际扣减累计" aside={`${num(stats?.tasksImagesGeneratedTotal)}张`} /></div><section className="overview-chart rounded-[30px] border border-white/80 bg-white/90 p-4 shadow-sm sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-bold">任务次数趋势</h2><p className="mt-1 text-sm text-slate-500">成功与失败次数趋势，柱顶显示数值。</p></div><div className="flex rounded-full bg-white p-1 shadow-lg shadow-indigo-100/70">{(['24h','3d','7d'] as const).map(v => <button key={v} onClick={() => setRange(v)} className={`rounded-full px-4 py-2 text-sm font-semibold ${range === v ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>{v}</button>)}</div></div><div className="mt-10 flex items-center justify-between text-sm"><div className="flex gap-4"><span className="inline-flex items-center gap-2"><span className="h-2 w-5 rounded-full bg-emerald-400" />成功</span><span className="inline-flex items-center gap-2"><span className="h-2 w-5 rounded-full bg-rose-400" />失败</span></div><span className="text-slate-500">柱顶显示数值</span></div><div className="overview-bars mt-8 overflow-x-auto rounded-[26px] bg-white p-5">{points.length ? <div className="flex h-72 min-w-[760px] items-end gap-2 border-b border-slate-200 px-2">{points.map((p, index) => <div key={`${p.label}-${index}`} className="flex min-w-8 flex-1 flex-col items-center gap-2"><div className="flex h-52 items-end gap-1 border-b-0 border-slate-100"><TrendBar value={p.success} max={max} color="bg-emerald-400" /><TrendBar value={p.failed} max={max} color="bg-rose-400" /></div><span className="max-w-16 truncate text-xs text-slate-500">{p.label}</span></div>)}</div> : <Empty text="暂无趋势数据" />}</div></section><div className="grid gap-4 md:grid-cols-3"><RedeemSummary label="未使用兑换码" value={num(stats?.redeemCodesActive)} sub={`${num(stats?.redeemCodeActivePointsTotal)} 积分`} /><RedeemSummary label="已使用兑换码" value={num(stats?.redeemCodesUsed)} sub={`${num(stats?.redeemCodeUsedPointsTotal)} 积分`} /><RedeemSummary label="全部兑换码" value={num(redeemAll)} sub={`${num(stats?.redeemCodePointsTotal)} 积分`} /></div></div>
+}
+
+function Tasks(p: { data: AdminListImageTasksResponse | null; status: string; keyword: string; setStatus: (v: string) => void; setKeyword: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; open: (item: AdminImageTaskItem) => void }) {
+  return <Panel title="任务" actions={<Filter keyword={p.keyword} setKeyword={p.setKeyword} placeholder="搜索任务ID / 用户 / 提示词" select={p.status} setSelect={p.setStatus} options={[["","全部状态"],["generating","生成中"],["success","成功"],["failed","失败"]]} search={p.search} />}><ResponsiveTable headers={['任务','用户名','状态','消耗','来源','耗时','创建时间','操作']} rows={(p.data?.items ?? []).map(item => [<div className="min-w-[220px]"><div className="font-mono text-sm font-bold text-slate-800">{taskNo(item.id)}</div><div className="mt-1 max-w-[340px] truncate text-xs text-slate-500">{clip(item.prompt, 64) || '无提示词'}</div></div>, <div className="min-w-[88px]">{item.username || item.userId || '-'}</div>, <StatusPill value={item.status} />, <div className="text-sm">{item.costPoints}积分 / {item.costCredits}次</div>, <span className="text-slate-500">{taskSource(item)}</span>, <span className="font-mono text-xs">{durationText(item.createdAt, item.updatedAt)}</span>, date(item.createdAt), <Button small onClick={() => p.open(item)}><Eye className="h-3.5 w-3.5" />详情</Button>])} empty="暂无任务" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+}
+
+function Redeem(p: { data: AdminListRedeemCodesResponse | null; status: string; keyword: string; form: any; generated: AdminRedeemCodeItem[]; setStatus: (v: string) => void; setKeyword: (v: string) => void; setForm: (v: any) => void; create: () => void; page: number; setPage: (v: number) => void; search: () => void; detail: (item: AdminRedeemCodeItem) => void; del: (item: AdminRedeemCodeItem) => void }) {
+  return <div className="redeem-layout grid gap-5 xl:grid-cols-[360px,minmax(0,1fr)]"><Panel title="生成兑换码"><div className="space-y-3"><LabeledInput label="生成数量" value={p.form.count} onChange={v => p.setForm({ ...p.form, count: v })} /><LabeledInput label="每张积分" value={p.form.pointsAmount} onChange={v => p.setForm({ ...p.form, pointsAmount: v })} /><LabeledInput label="每张福利次数" value={p.form.creditsAmount} onChange={v => p.setForm({ ...p.form, creditsAmount: v })} /><LabeledInput label="前缀" value={p.form.prefix} onChange={v => p.setForm({ ...p.form, prefix: v })} /><TextAreaInput label="备注" value={p.form.note} onChange={v => p.setForm({ ...p.form, note: v })} /><Button primary onClick={p.create}><KeyRound className="h-4 w-4" />生成兑换码</Button>{p.generated.length ? <div className="rounded-2xl bg-slate-50 p-3 text-xs"><div className="mb-2 flex items-center justify-between gap-2"><span className="font-semibold">本次生成 {p.generated.length} 个</span><Button small onClick={() => copyText(p.generated.map(c => c.code).join('\n'))}>一键复制</Button></div><div className="max-h-48 space-y-1 overflow-auto rounded-xl bg-white/70 p-2">{p.generated.map(c => <div key={c.id} className="font-mono text-slate-700">{c.code}</div>)}</div></div> : null}</div></Panel><Panel title="兑换码" actions={<Filter keyword={p.keyword} setKeyword={p.setKeyword} placeholder="搜索兑换码 / 批次 / 备注" select={p.status} setSelect={p.setStatus} options={[["","全部状态"],["active","未使用"],["used","已使用"],["disabled","已禁用"],["expired","已过期"]]} search={p.search} />}><ResponsiveTable headers={['兑换码','积分','福利次数','状态','使用者','操作']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.code}</Mono>, item.pointsAmount, item.creditsAmount, <StatusPill value={item.status} />, item.usedBy || '-', <div className="flex flex-wrap gap-2"><Button small onClick={() => p.detail(item)}>详情</Button><Button small onClick={() => copyText(item.code)}>复制</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无兑换码" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel></div>
+}
+
+function PromptAdmin(p: { data: AdminListPromptPlazaResponse | null; status: 'approved' | 'pending' | 'rejected'; busy: Busy; setStatus: (v: 'approved' | 'pending' | 'rejected') => void; create: () => void; edit: (item: PromptPlazaItem) => void; approve: (item: PromptPlazaItem) => void; reject: (item: PromptPlazaItem) => void; del: (item: PromptPlazaItem) => void }) {
+  return <Panel title="提示词广场" actions={<div className="flex flex-wrap gap-2"><Select value={p.status} onChange={v => p.setStatus(v as any)} options={[["approved","已通过"],["pending","待审核"],["rejected","已驳回"]]} /><Button primary onClick={p.create}>新建提示词</Button></div>}><ResponsiveTable headers={['预览','标题','标签','上传人','状态','收藏','创建时间','操作']} rows={(p.data?.items ?? []).map(item => [item.previewThumbUrl || item.previewUrl ? <img src={item.previewThumbUrl || item.previewUrl} alt={item.title} className="h-14 w-14 rounded-2xl object-cover" /> : '-', <div><div className="font-semibold">{item.title}</div><div className="max-w-xl truncate text-xs text-slate-500">{item.prompt}</div></div>, <div className="flex flex-wrap gap-1">{item.tags?.map(t => <span key={t} className="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-700">#{t}</span>)}</div>, item.author || '-', <StatusPill value={item.status} />, item.favorites, date(item.createdAt), <div className="flex flex-wrap gap-2"><Button small onClick={() => p.edit(item)}>编辑</Button>{item.status !== 'approved' ? <Button small onClick={() => p.approve(item)} disabled={p.busy === `prompt-review-${item.id}`}>通过</Button> : null}<Button small danger onClick={() => p.reject(item)}>驳回</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无提示词" /></Panel>
+}
+
+function Packages(p: { data: AdminListPackagesResponse | null; page: number; setPage: (v: number) => void; create: () => void; edit: (item: AdminPackageItem) => void; del: (item: AdminPackageItem) => void }) {
+  return <Panel title="商品套餐配置" desc="维护前台兑换码/充值商品展示。" actions={<Button primary onClick={p.create}>新建商品套餐</Button>}><ResponsiveTable headers={['编码','名称','类型','福利次数','积分/价格','状态','排序','更新时间','操作']} rows={(p.data?.items ?? []).map(item => [item.code, item.name, item.packageType, item.creditsAmount, `${item.pointsCost}积分 / ${money(item.amountCents)}`, <StatusPill value={item.enabled ? '启用' : '停用'} />, item.sortOrder, date(item.updatedAt), <div className="flex gap-2"><Button small onClick={() => p.edit(item)}>编辑</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无商品套餐" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+}
+
+function Products(p: { data: AdminListProductsResponse | null; categories: ProductCategoryItem[]; keyword: string; category: string; enabled: string; setKeyword: (v: string) => void; setCategory: (v: string) => void; setEnabled: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; create: () => void; edit: (item: ProductItem) => void; del: (item: ProductItem) => void; createCat: () => void; editCat: (item: ProductCategoryItem) => void; delCat: (item: ProductCategoryItem) => void }) {
+  const catOptions: Array<[string, string]> = [['','全部分类'], ...p.categories.map(c => [c.id, c.name] as [string,string])]
+  return <div className="space-y-5"><Panel title="商品列表" actions={<div className="flex flex-wrap gap-2"><Filter keyword={p.keyword} setKeyword={p.setKeyword} placeholder="搜索商品 / 说明 / 分类" select={p.category} setSelect={p.setCategory} options={catOptions} search={p.search} /><Select value={p.enabled} onChange={p.setEnabled} options={[["","全部状态"],["true","启用"],["false","停用"]]} /><Button primary onClick={p.create}>新建商品</Button></div>}><ResponsiveTable headers={['图片','名称','价格','分类','状态','排序','更新时间','操作']} rows={(p.data?.items ?? []).map(item => [item.previewThumbUrl || item.previewUrl ? <img src={item.previewThumbUrl || item.previewUrl} alt={item.name} className="h-14 w-14 rounded-2xl object-cover" /> : '-', <div><div className="font-semibold">{item.name}</div><div className="max-w-md truncate text-xs text-slate-500">{item.shortDescription || item.description || '-'}</div></div>, money(item.amountCents), <div className="flex flex-wrap gap-1">{item.categories?.length ? item.categories.map(c => <span key={c.id} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-600">{c.name}</span>) : '未分类'}</div>, <StatusPill value={item.enabled ? '启用' : '停用'} />, item.sortOrder, date(item.updatedAt), <div className="flex gap-2"><Button small onClick={() => p.edit(item)}>编辑</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无商品" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel><Panel title="商品分类管理" actions={<Button primary onClick={p.createCat}>新建分类</Button>}><ResponsiveTable headers={['名称','描述','排序','状态','操作']} rows={p.categories.map(c => [c.name, c.description || '-', c.sortOrder, <StatusPill value={c.enabled ? '启用' : '停用'} />, <div className="flex gap-2"><Button small onClick={() => p.editCat(c)}>编辑</Button><Button small danger onClick={() => p.delCat(c)}>删除</Button></div>])} empty="暂无分类" /></Panel></div>
+}
+
+function ProviderKeys(p: { data: AdminListProviderKeysResponse | null; busy: Busy; page: number; setPage: (v: number) => void; create: () => void; edit: (item: AdminProviderKeyItem) => void; useKey: (item: AdminProviderKeyItem) => void; del: (item: AdminProviderKeyItem) => void }) {
+  return <Panel title="API Key 配置" desc="维护生图供应商 API Key、优先级和自动切换策略。" actions={<Button primary onClick={p.create}>新建 API Key</Button>}><ResponsiveTable headers={['名称','状态','使用状态','优先级','自动切换','调用统计','最近使用','最近错误','操作']} rows={(p.data?.items ?? []).map(item => [<div><div className="font-semibold">{item.name}</div><div className="text-xs text-slate-500">{item.provider} / {item.apiKeyMasked}</div></div>, <StatusPill value={item.status} />, <StatusPill value={item.isUsing ? '使用中' : '未使用'} />, item.priority, item.autoSwitchEnabled ? '开启' : '关闭', `成功 ${item.successCount} / 失败 ${item.failureCount}`, date(item.lastUsedAt), clip(item.lastError, 32) || '-', <div className="flex flex-wrap gap-2"><Button small disabled={item.isUsing || p.busy === `use-key-${item.id}`} onClick={() => p.useKey(item)}>{item.isUsing ? '使用中' : '使用'}</Button><Button small onClick={() => p.edit(item)}>编辑</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无 API Key" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? 20} onChange={p.setPage} /></Panel>
+}
+
+function Announcements(p: { data: AdminListAnnouncementsResponse | null; page: number; setPage: (v: number) => void; create: () => void; edit: (item: AnnouncementItem) => void; del: (item: AnnouncementItem) => void }) {
+  return <Panel title="公告管理" desc="维护用户端公告、置顶提示和个人公告。" actions={<div className="flex gap-2"><Button>公告记录</Button><Button primary onClick={p.create}>新建公告</Button></div>}><ResponsiveTable headers={['标题','类型','目标用户','状态','排序','更新时间','操作']} rows={(p.data?.items ?? []).map(item => [<div><div className="font-semibold">{item.title}</div><div className="max-w-xl truncate text-xs text-slate-500">{item.content}</div></div>, kindLabel(item.kind), item.targetUserId || '-', <StatusPill value={item.enabled ? '启用' : '停用'} />, item.sortOrder, date(item.updatedAt), <div className="flex gap-2"><Button small onClick={() => p.edit(item)}>编辑</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无公告" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+}
+
+function Rules({ form, setForm, save, busy, billing }: { form: UpdateBillingSettingsRequest; setForm: (v: UpdateBillingSettingsRequest) => void; save: () => void; busy: boolean; billing: BillingSettingsResponse | null }) {
+  const set = (key: keyof UpdateBillingSettingsRequest, value: number | boolean) => setForm({ ...form, [key]: value })
+  return <Panel title="积分与奖励规则" desc="配置生成消耗、签到、邀请和注册赠送规则。" actions={<Button primary onClick={save} loading={busy}><Save className="h-4 w-4" />保存规则</Button>}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><NumberField label="生图积分成本" value={form.imageGeneratePointCost} onChange={v => set('imageGeneratePointCost', v)} /><Toggle label="生图开关" checked={form.imageGenerationEnabled} onChange={v => set('imageGenerationEnabled', v)} /><Toggle label="邮件通知开关" checked={form.emailNotifyEnabled} onChange={v => set('emailNotifyEnabled', v)} /><NumberField label="邮件通知积分消耗" value={form.emailNotifyPointCost} onChange={v => set('emailNotifyPointCost', v)} /><NumberField label="签到奖励积分" value={form.checkinPoints} onChange={v => set('checkinPoints', v)} /><NumberField label="签到奖励福利次数" value={form.checkinCredits} onChange={v => set('checkinCredits', v)} /><NumberField label="邀请奖励积分" value={form.inviteRewardPoints} onChange={v => set('inviteRewardPoints', v)} /><NumberField label="邀请奖励福利次数" value={form.inviteRewardCredits} onChange={v => set('inviteRewardCredits', v)} /><NumberField label="注册赠送福利次数" value={form.registrationGiftCredits} onChange={v => set('registrationGiftCredits', v)} /></div><div className="mt-6 text-sm text-slate-500">当前生图状态：{billing?.imageGenerationEnabled ? '启用' : '停用'}</div></Panel>
+}
+
+function UsersPage(p: { data: AdminListUsersResponse | null; keyword: string; status: string; setKeyword: (v: string) => void; setStatus: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; toggle: (item: AdminUserItem) => void; points: (item: AdminUserItem) => void; logs: (item: AdminUserItem) => void }) {
+  return <Panel title="用户" actions={<Filter keyword={p.keyword} setKeyword={p.setKeyword} placeholder="搜索用户ID / 用户名 / 邮箱" select={p.status} setSelect={p.setStatus} options={[["","全部状态"],["1","启用"],["2","禁用"]]} search={p.search} />}><ResponsiveTable headers={['ID','用户','角色','状态','积分','免费次数','付费次数','注册时间','最近登录','操作']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.id}</Mono>, <div className="min-w-[150px]"><div className="font-semibold text-slate-900">{item.username}</div><div className="mt-0.5 text-xs text-slate-500">{item.email}</div></div>, item.role, <StatusPill value={item.status === 1 ? '启用' : '禁用'} />, item.pointsBalance, item.freeCredits ?? '-', item.paidCredits ?? '-', date(item.createdAt), date(item.lastLoginAt), <div className="flex flex-nowrap gap-2"><Button small onClick={() => p.points(item)}>调积分</Button><Button small onClick={() => p.logs(item)}>日志</Button><Button small danger={item.status === 1} onClick={() => p.toggle(item)}>{item.status === 1 ? '禁用' : '启用'}</Button></div>])} empty="暂无用户" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+}
+
+function Cleanup(p: { form: DataCleanupRequest; setForm: (v: DataCleanupRequest) => void; result: DataCleanupResponse | null; preview: () => void; execute: () => void; busy: Busy }) {
+  return <Panel title="数据清理" desc="危险操作，请先预览再执行。系统会保留仍在使用的资源。"><div className="grid gap-4 md:grid-cols-3"><label className="field-label">清理模式<Select value={p.form.mode} onChange={v => p.setForm({ ...p.form, mode: v as DataCleanupRequest['mode'] })} options={[["days_ago","按天数"],["date","按日期"]]} /></label>{p.form.mode === 'days_ago' ? <NumberField label="清理多少天前" value={p.form.daysAgo ?? 30} onChange={daysAgo => p.setForm({ ...p.form, daysAgo })} /> : <><LabeledInput label="开始日期" type="date" value={p.form.startDate ?? ''} onChange={startDate => p.setForm({ ...p.form, startDate })} /><LabeledInput label="结束日期" type="date" value={p.form.endDate ?? ''} onChange={endDate => p.setForm({ ...p.form, endDate })} /></>}</div><div className="mt-4 flex gap-2"><Button onClick={p.preview} loading={p.busy === 'cleanup-preview'}>预览</Button><Button danger onClick={p.execute} loading={p.busy === 'cleanup-execute'}>执行清理</Button></div>{p.result ? <div className="mt-5 rounded-3xl bg-slate-50 p-4"><div className="mb-3 font-semibold">{p.result.dryRun ? '预览结果' : '执行结果'}：记录 {p.result.recordsRemoved}，文件 {p.result.filesRemoved}，大小 {formatBytes(p.result.bytesRemoved)}</div><ResponsiveTable headers={['表名','数量','说明']} rows={p.result.tableStats.map(s => [s.table, s.count, s.note || '-'])} empty="暂无清理项" /></div> : null}</Panel>
+}
+
+function Logs(p: { data: AdminListActionLogsResponse | null; targetType: string; targetId: string; setTargetType: (v: string) => void; setTargetId: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; open: (item: AdminActionLogItem) => void }) {
+  return <Panel title="网站日志" desc="展示后台写入的全站操作日志，列表保留简略信息，详细变更请点详情查看。" actions={<div className="flex flex-wrap gap-2"><LabeledInput label="" value={p.targetType} onChange={p.setTargetType} placeholder="对象类型" /><LabeledInput label="" value={p.targetId} onChange={p.setTargetId} placeholder="对象编号" /><Button onClick={p.search}>搜索</Button></div>}><ResponsiveTable headers={['ID','操作人','操作内容','操作对象','简略信息','创建时间','详情']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.id}</Mono>, <span>管理员 #{item.adminId}</span>, logActionLabel(item.action), logTargetLabel(item), clip(item.remark, 56) || '-', date(item.createdAt), <Button small onClick={() => p.open(item)}>详情</Button>])} empty="暂无日志" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+}
+
+function AllModals(props: { state: Modal; setState: (m: Modal) => void; busy: Busy; categories: ProductCategoryItem[]; onSavePrompt: (item: PromptPlazaItem | null, payload: AdminPromptPlazaPayload) => void; onReviewPrompt: (item: PromptPlazaItem, status: 'approved' | 'rejected', reason?: string) => void; onDeletePrompt: (item: PromptPlazaItem, reason?: string) => void; onSavePackage: (item: AdminPackageItem | null, payload: AdminPackagePayload) => void; onSaveProduct: (item: ProductItem | null, payload: AdminProductPayload) => void; onSaveCategory: (item: ProductCategoryItem | null, payload: AdminProductCategoryPayload) => void; onSaveProviderKey: (item: AdminProviderKeyItem | null, payload: AdminProviderKeyPayload) => void; onSaveAnnouncement: (item: AnnouncementItem | null, payload: AdminAnnouncementPayload) => void; onSavePoints: () => void; onOpenUserLogs: (user: AdminUserItem, page: number) => void }) {
+  const s = props.state
+  if (s.type === 'none') return null
+  return createPortal(<div className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-sm"><div className="max-h-[88dvh] w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b px-5 py-4"><h2 className="text-lg font-bold">{modalTitle(s)}</h2><button className="icon-btn" onClick={() => props.setState({ type: 'none' })}><X className="h-4 w-4" /></button></div><div className="max-h-[72dvh] overflow-y-auto p-5">{renderModal(s, props)}</div></div></div>, document.body)
+}
+function renderModal(s: Modal, p: Parameters<typeof AllModals>[0]): ReactNode {
+  if (s.type === 'confirm') return <div className="space-y-5"><div className="text-slate-600">{s.data.content}</div><div className="flex justify-end gap-2"><Button onClick={() => p.setState({ type: 'none' })}>取消</Button><Button danger={s.data.danger} primary={!s.data.danger} onClick={s.data.onConfirm}>{s.data.confirmText || '确定'}</Button></div></div>
+  if (s.type === 'task') return <Detail rows={[["任务ID", s.item.id], ["用户", s.item.username || s.item.userId], ["状态", s.item.status], ["提示词", s.item.prompt], ["错误信息", s.item.errorMessage], ["图片", <TaskImages item={s.item} />], ["请求参数", pretty(s.item.requestParams)], ["创建时间", date(s.item.createdAt)], ["更新时间", date(s.item.updatedAt)]]} />
+  if (s.type === 'redeemCode') return <RedeemCodeDetail item={s.item} />
+  if (s.type === 'prompt') return <PromptForm item={s.item} save={payload => p.onSavePrompt(s.item, payload)} />
+  if (s.type === 'promptReason') return <ReasonForm state={s} setState={p.setState} submit={reason => s.action === 'reject' ? p.onReviewPrompt(s.item, 'rejected', reason) : p.onDeletePrompt(s.item, reason)} />
+  if (s.type === 'package') return <PackageForm item={s.item} save={payload => p.onSavePackage(s.item, payload)} />
+  if (s.type === 'product') return <ProductForm item={s.item} categories={p.categories} save={payload => p.onSaveProduct(s.item, payload)} />
+  if (s.type === 'category') return <CategoryForm item={s.item} save={payload => p.onSaveCategory(s.item, payload)} />
+  if (s.type === 'providerKey') return <ProviderKeyForm item={s.item} save={payload => p.onSaveProviderKey(s.item, payload)} />
+  if (s.type === 'announcement') return <AnnouncementForm item={s.item} save={payload => p.onSaveAnnouncement(s.item, payload)} />
+  if (s.type === 'points') return <PointsForm state={s} setState={p.setState} save={p.onSavePoints} />
+  if (s.type === 'userLogs') return <UserLogs state={s} page={(page) => p.onOpenUserLogs(s.user, page)} />
+  if (s.type === 'log') return <Detail rows={[["日志ID", s.item.id], ["操作人", `管理员 #${s.item.adminId}`], ["操作内容", logActionLabel(s.item.action)], ["操作对象", logTargetLabel(s.item)], ["简略信息", s.item.remark], ["变更前", <PreText value={pretty(s.item.beforeJson)} />], ["变更后", <PreText value={pretty(s.item.afterJson)} />], ["时间", date(s.item.createdAt)]]} />
+  return null
+}
+
+function RedeemCodeDetail({ item }: { item: AdminRedeemCodeItem }) {
+  return <Detail rows={[["兑换码", <Mono>{item.code}</Mono>], ["积分", item.pointsAmount], ["福利次数", item.creditsAmount], ["状态", <StatusPill value={item.status} />], ["使用者", item.usedBy || '-'], ["使用时间", date(item.usedAt)], ["创建时间", date(item.createdAt)], ["批次", item.batchNo || '-'], ["备注", item.note || '-'], ["创建者", item.createdBy || '-']]} />
+}
+
+function PromptForm({ item, save }: { item: PromptPlazaItem | null; save: (payload: AdminPromptPlazaPayload) => void }) { const [d, setD] = useState({ title: item?.title || '', prompt: item?.prompt || '', previewUrl: item?.previewUrl || '', tags: (item?.tags || []).join(','), author: item?.author || '', status: item?.status || 'approved' }); return <Form onSave={() => save({ title: d.title, prompt: d.prompt, previewUrl: d.previewUrl || undefined, tags: d.tags.split(/[,，\n]/).map(x => x.trim()).filter(Boolean).slice(0, 4), author: d.author || undefined, status: d.status as any })}><LabeledInput label="标题" value={d.title} onChange={v => setD({ ...d, title: v })} /><TextAreaInput label="提示词" value={d.prompt} onChange={v => setD({ ...d, prompt: v })} rows={6} /><UploadField label="预览图" value={d.previewUrl} onChange={v => setD({ ...d, previewUrl: v })} upload={api.adminUploadPromptPlazaImage} /><LabeledInput label="上传人" value={d.author} onChange={v => setD({ ...d, author: v })} /><TextAreaInput label="标签，逗号或换行分隔，最多4个" value={d.tags} onChange={v => setD({ ...d, tags: v })} /><Select value={d.status} onChange={v => setD({ ...d, status: v as PromptPlazaItem['status'] })} options={[["approved","已通过"],["pending","待审核"],["rejected","已驳回"]]} /></Form> }
+function PackageForm({ item, save }: { item: AdminPackageItem | null; save: (payload: AdminPackagePayload) => void }) { const [d, setD] = useState({ code: item?.code || '', name: item?.name || '', packageType: item?.packageType || 'recharge', creditsAmount: String(item?.creditsAmount ?? 0), pointsCost: String(item?.pointsCost ?? 0), amountCents: String(item?.amountCents ?? 0), bonusPoints: String(item?.bonusPoints ?? 0), productUrl: item?.productUrl || '', enabled: item?.enabled ?? true, sortOrder: String(item?.sortOrder ?? 0), note: item?.note || '' }); return <Form onSave={() => save({ code: d.code || undefined, name: d.name, packageType: d.packageType as any, creditsAmount: +d.creditsAmount || 0, pointsCost: +d.pointsCost || 0, amountCents: +d.amountCents || 0, bonusPoints: +d.bonusPoints || 0, productUrl: d.productUrl || undefined, enabled: d.enabled, sortOrder: +d.sortOrder || 0, note: d.note || undefined })}><LabeledInput label="编码" value={d.code} onChange={v => setD({ ...d, code: v })} /><LabeledInput label="名称" value={d.name} onChange={v => setD({ ...d, name: v })} /><LabeledInput label="福利次数" value={d.creditsAmount} onChange={v => setD({ ...d, creditsAmount: v })} /><LabeledInput label="积分价格" value={d.pointsCost} onChange={v => setD({ ...d, pointsCost: v })} /><LabeledInput label="金额，分" value={d.amountCents} onChange={v => setD({ ...d, amountCents: v })} /><LabeledInput label="赠送积分" value={d.bonusPoints} onChange={v => setD({ ...d, bonusPoints: v })} /><LabeledInput label="外部链接" value={d.productUrl} onChange={v => setD({ ...d, productUrl: v })} /><LabeledInput label="排序" value={d.sortOrder} onChange={v => setD({ ...d, sortOrder: v })} /><TextAreaInput label="备注" value={d.note} onChange={v => setD({ ...d, note: v })} /><Toggle label="启用" checked={d.enabled} onChange={v => setD({ ...d, enabled: v })} /></Form> }
+function ProductForm({ item, categories, save }: { item: ProductItem | null; categories: ProductCategoryItem[]; save: (payload: AdminProductPayload) => void }) {
+  const [d, setD] = useState({
+    name: item?.name || '',
+    shortDescription: item?.shortDescription || '',
+    description: item?.description || '',
+    previewUrl: item?.previewUrl || '',
+    amountCents: String(item?.amountCents ?? ''),
+    productUrl: item?.productUrl || '',
+    categoryIds: item?.categories?.map(c => c.id) || [],
+    sortOrder: String(item?.sortOrder ?? 0),
+    enabled: item?.enabled ?? true,
+  })
+  const toggle = (id: string) => setD({ ...d, categoryIds: d.categoryIds.includes(id) ? d.categoryIds.filter(x => x !== id) : [...d.categoryIds, id] })
+  const submit = () => {
+    const amountCents = Math.round(Number(d.amountCents) || 0)
+    const payload: AdminProductPayload = {
+      name: d.name,
+      shortDescription: d.shortDescription || undefined,
+      description: d.description || undefined,
+      previewUrl: d.previewUrl || undefined,
+      amountCents,
+      productUrl: d.productUrl || undefined,
+      categoryIds: d.categoryIds,
+      sortOrder: +d.sortOrder || 0,
+      enabled: d.enabled,
     }
-  }, [currentUser, isAdmin, onBackToApp])
-
-  useEffect(() => {
-    void refreshActiveTab()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab])
-
-  const currentPageLabel = useMemo(() => {
-    switch (activeTab) {
-      case 'overview':
-        return '概览'
-      case 'users':
-        return '用户'
-      case 'packages':
-        return '套餐'
-      case 'billing':
-        return '账本规则'
-      case 'tasks':
-        return '任务'
-      case 'orders':
-        return '订单'
-      case 'audits':
-        return '审核'
-      case 'logs':
-        return '操作日志'
-      default:
-        return ''
-    }
-  }, [activeTab])
-
-  async function refreshActiveTab() {
-    try {
-      switch (activeTab) {
-        case 'overview':
-          await loadOverview()
-          break
-        case 'users':
-          await loadUsers(userPage, userKeyword)
-          break
-        case 'packages':
-          await loadPackages(packagePage, packageTypeFilter)
-          break
-        case 'billing':
-          await loadBillingSettings()
-          break
-        case 'tasks':
-          await loadTasks(taskPage, taskStatusFilter)
-          break
-        case 'orders':
-          await loadOrders(orderPage, orderStatusFilter)
-          break
-        case 'audits':
-          await loadAudits(auditPage, auditStatusFilter)
-          break
-        case 'logs':
-          await loadLogs(logPage, logTargetType, logTargetId)
-          break
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '后台数据加载失败')
-    }
+    save(payload)
   }
-
-  async function loadOverview() {
-    setBusy('overview')
-    try {
-      const resp = await api.adminStats()
-      setStats(resp)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '概览数据加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadUsers(page = userPage, keyword = userKeyword) {
-    setBusy('users')
-    try {
-      const resp = await api.adminListUsers(page, PAGE_SIZE, keyword)
-      setUsersResponse(resp)
-      setUserPage(resp.page)
-      setUserKeyword(keyword)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '用户列表加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadPackages(page = packagePage, packageType = packageTypeFilter) {
-    setBusy('packages')
-    try {
-      const resp = await api.adminListPackages(page, PAGE_SIZE, packageType)
-      setPackagesResponse(resp)
-      setPackagePage(resp.page)
-      setPackageTypeFilter(packageType)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '套餐列表加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadBillingSettings() {
-    setBusy('billing')
-    try {
-      const resp = await api.adminGetBillingSettings()
-      setBillingSettings(resp)
-      setBillingForm(resp)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '账本规则加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function saveBillingSettings() {
-    const payload: BillingSettingsForm = {
-      customRechargeUnitPriceCents: Math.max(1, Math.floor(billingForm.customRechargeUnitPriceCents || 0)),
-      imageGeneratePointCost: Math.max(1, Math.floor(billingForm.imageGeneratePointCost || 0)),
-      checkinPoints: Math.max(0, Math.floor(billingForm.checkinPoints || 0)),
-      checkinCredits: Math.max(0, Math.floor(billingForm.checkinCredits || 0)),
-    }
-
-    setBusy('save-billing')
-    try {
-      const resp = await api.adminUpdateBillingSettings(payload)
-      setBillingSettings(resp)
-      setBillingForm(resp)
-      setMessage('账本规则已更新。')
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '账本规则保存失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadTasks(page = taskPage, status = taskStatusFilter) {
-    setBusy('tasks')
-    try {
-      const resp = await api.adminListImageTasks(page, PAGE_SIZE, status)
-      setTasksResponse(resp)
-      setTaskPage(resp.page)
-      setTaskStatusFilter(status)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '任务列表加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadOrders(page = orderPage, status = orderStatusFilter) {
-    setBusy('orders')
-    try {
-      const resp = await api.adminListRechargeOrders(page, PAGE_SIZE, status)
-      setOrdersResponse(resp)
-      setOrderPage(resp.page)
-      setOrderStatusFilter(status)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '订单列表加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadAudits(page = auditPage, status = auditStatusFilter) {
-    setBusy('audits')
-    try {
-      const resp = await api.adminListContentAudits(page, PAGE_SIZE, status)
-      setAuditsResponse(resp)
-      setAuditPage(resp.page)
-      setAuditStatusFilter(status)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '审核列表加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadLogs(page = logPage, targetType = logTargetType, targetId = logTargetId) {
-    setBusy('logs')
-    try {
-      const resp = await api.adminListActionLogs(page, PAGE_SIZE, targetType, targetId)
-      setLogsResponse(resp)
-      setLogPage(resp.page)
-      setLogTargetType(targetType)
-      setLogTargetId(targetId)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '操作日志加载失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  function startCreatePackage() {
-    setEditingPackageId(null)
-    setPackageForm(emptyPackageForm)
-    setActiveTab('packages')
-  }
-
-  function startEditPackage(item: AdminPackageItem) {
-    setEditingPackageId(item.id)
-    setPackageForm({
-      code: item.code,
-      name: item.name,
-      packageType: 'recharge',
-      creditsAmount: item.creditsAmount,
-      pointsCost: item.pointsCost,
-      amountCents: item.amountCents,
-      bonusPoints: item.bonusPoints,
-      enabled: item.enabled,
-      sortOrder: item.sortOrder,
-      note: item.note ?? '',
-    })
-    setActiveTab('packages')
-  }
-
-  function resetPackageForm() {
-    setEditingPackageId(null)
-    setPackageForm(emptyPackageForm)
-  }
-
-  async function savePackage() {
-    const packageCode = packageForm.code.trim()
-    const packageName = packageForm.name.trim()
-
-    try {
-      if (!editingPackageId && !packageCode) {
-        setMessage('请填写套餐编码。')
-        return
-      }
-      if (!packageName) {
-        setMessage('请填写套餐名称。')
-        return
-      }
-      if (packageForm.amountCents <= 0) {
-        setMessage('充值套餐需要填写价格。')
-        return
-      }
-
-      setBusy('save-package')
-      if (editingPackageId) {
-        await api.adminUpdatePackage(editingPackageId, {
-          name: packageName,
-          creditsAmount: packageForm.creditsAmount,
-          pointsCost: 0,
-          amountCents: packageForm.amountCents,
-          bonusPoints: packageForm.bonusPoints,
-          enabled: packageForm.enabled,
-          sortOrder: packageForm.sortOrder,
-          note: packageForm.note,
-        })
-        setMessage('套餐已更新。')
-      } else {
-        await api.adminCreatePackage({
-          code: packageCode,
-          name: packageName,
-          packageType: 'recharge',
-          creditsAmount: packageForm.creditsAmount,
-          pointsCost: 0,
-          amountCents: packageForm.amountCents,
-          bonusPoints: packageForm.bonusPoints,
-          enabled: packageForm.enabled,
-          sortOrder: packageForm.sortOrder,
-          note: packageForm.note,
-        })
-        setMessage('套餐已创建。')
-      }
-      await loadPackages(1, packageTypeFilter)
-      resetPackageForm()
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存套餐失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  function openAdjustPointsDialog(user: AdminUserItem, action: UserPointsAction) {
-    setPointDialog({
-      open: true,
-      user,
-      action,
-      amount: '10',
-      remark: '后台人工调整',
-    })
-  }
-
-  function closeAdjustPointsDialog() {
-    setPointDialog((current) => ({
-      ...current,
-      open: false,
-      user: null,
-    }))
-  }
-
-  async function submitPointAdjust() {
-    const user = pointDialog.user
-    if (!user) {
-      return
-    }
-
-    const amount = Number(pointDialog.amount)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setMessage('请输入有效的积分数量。')
-      return
-    }
-
-    const delta = pointDialog.action === 'increase' ? Math.floor(amount) : -Math.floor(amount)
-    const remark = pointDialog.remark.trim() || '后台人工调整'
-
-    try {
-      setBusy(`user-points:${user.id}`)
-      await api.adminAdjustPoints(user.id, delta, remark)
-      setMessage(`已${delta > 0 ? '增加' : '减少'}用户「${user.username}」积分 ${Math.abs(delta)}。`)
-      closeAdjustPointsDialog()
-      await loadUsers(userPage, userKeyword)
-      if (userActivityDialog.open && userActivityDialog.user?.id === user.id) {
-        await loadUserActivityPage(user, userActivityDialog.page)
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '调整积分失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function loadUserActivityPage(user: AdminUserItem, page = 1) {
-    try {
-      setUserActivityDialog((current) => ({
-        ...current,
-        open: true,
-        user,
-        page,
-        loading: true,
-        error: '',
-      }))
-      const resp = await api.adminListUserActivity(user.id, page, USER_ACTIVITY_PAGE_SIZE)
-      setUserActivityDialog({
-        open: true,
-        user,
-        response: resp,
-        page: resp.page,
-        loading: false,
-        error: '',
-      })
-    } catch (error) {
-      setUserActivityDialog((current) => ({
-        ...current,
-        loading: false,
-        error: error instanceof Error ? error.message : '用户日志加载失败',
-      }))
-    }
-  }
-
-  function openUserActivityDialog(user: AdminUserItem) {
-    void loadUserActivityPage(user, 1)
-  }
-
-  function closeUserActivityDialog() {
-    setUserActivityDialog({
-      open: false,
-      user: null,
-      response: null,
-      page: 1,
-      loading: false,
-      error: '',
-    })
-  }
-
-  function openTaskDetailDialog(task: AdminImageTaskItem) {
-    setTaskDetailDialog({
-      open: true,
-      task,
-    })
-  }
-
-  function closeTaskDetailDialog() {
-    setTaskDetailDialog({
-      open: false,
-      task: null,
-    })
-  }
-
-  async function disableUser(user: AdminUserItem) {
-    if (user.status === 2) {
-      setMessage(`用户「${user.username}」已经处于禁用状态。`)
-      return
-    }
-
-    const confirmed = window.confirm(`确定要禁用用户「${user.username}」吗？`)
-    if (!confirmed) {
-      return
-    }
-
-    try {
-      setBusy(`user-status:${user.id}`)
-      await api.adminUpdateUserStatus(user.id, 2)
-      setMessage(`已禁用用户「${user.username}」。`)
-      await loadUsers(userPage, userKeyword)
-      if (userActivityDialog.open && userActivityDialog.user?.id === user.id) {
-        await loadUserActivityPage(user, userActivityDialog.page)
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '禁用用户失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function deletePackage(item: AdminPackageItem) {
-    const confirmed = window.confirm(`确定要删除套餐「${item.name}」吗？删除后将从后台列表中移除。`)
-    if (!confirmed) {
-      return
-    }
-
-    try {
-      setBusy(`delete-package:${item.id}`)
-      await api.adminDeletePackage(item.id)
-      if (editingPackageId === item.id) {
-        resetPackageForm()
-      }
-      await loadPackages(packagePage, packageTypeFilter)
-      setMessage(`套餐「${item.name}」已删除。`)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '删除套餐失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function reviewAudit(item: AdminContentAuditItem, status: 'pass' | 'rejected') {
-    const defaultReason = status === 'pass' ? '管理员人工通过' : '管理员人工驳回'
-    const reason = window.prompt('请输入审核备注', item.reason || defaultReason)
-    if (reason === null) {
-      return
-    }
-
-    const payload: AdminReviewContentAuditRequest = {
-      status,
-      action: status === 'pass' ? 'allow' : 'reject',
-      reason: reason.trim() || defaultReason,
-    }
-
-    try {
-      setBusy(`audit-review:${item.id}`)
-      await api.adminReviewContentAudit(item.id, payload)
-      setMessage(`审核记录 #${item.id} 已更新。`)
-      await loadAudits(auditPage, auditStatusFilter)
-      await loadOverview()
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '审核更新失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function handleFilterSearch(kind: AdminTab) {
-    switch (kind) {
-      case 'users':
-        setUserPage(1)
-        await loadUsers(1, userKeywordInput)
-        break
-      case 'packages':
-        setPackagePage(1)
-        await loadPackages(1, packageTypeFilter)
-        break
-      case 'tasks':
-        setTaskPage(1)
-        await loadTasks(1, taskStatusFilter)
-        break
-      case 'orders':
-        setOrderPage(1)
-        await loadOrders(1, orderStatusFilter)
-        break
-      case 'audits':
-        setAuditPage(1)
-        await loadAudits(1, auditStatusFilter)
-        break
-      case 'logs':
-        setLogPage(1)
-        await loadLogs(1, logTargetType, logTargetId)
-        break
-      default:
-        break
-    }
-  }
-
-  function openUserSidePanel() {
-    setActiveTab('users')
-  }
-
-  if (!currentUser) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
-        <TopNotice message={message} onDismiss={() => setMessage('')} />
-        <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
-          <LoaderCircle className="h-4 w-4 animate-spin" />
-          正在进入管理员后台...
-        </div>
-      </div>
-    )
-  }
-
-  if (!isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
-        <TopNotice message={message} onDismiss={() => setMessage('')} />
-        <div className="max-w-md rounded-lg border border-slate-800 bg-slate-900 p-6 text-center">
-          <ShieldCheck className="mx-auto h-10 w-10 text-emerald-300" />
-          <h1 className="mt-4 text-lg font-semibold text-slate-50">没有管理员权限</h1>
-          <p className="mt-2 text-sm leading-6 text-slate-400">当前账号不是管理员，无法访问后台。</p>
-          <button
-            type="button"
-            onClick={onBackToApp}
-            className="mt-4 inline-flex items-center gap-2 rounded-md bg-violet-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回用户端
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <TopNotice message={message} onDismiss={() => setMessage('')} />
-      <div className="flex min-h-screen">
-        {sidebarOpen ? (
-          <button
-            type="button"
-            aria-label="关闭后台侧边栏"
-            onClick={() => setSidebarOpen(false)}
-            className="fixed inset-0 z-30 bg-slate-950/70 backdrop-blur-sm lg:hidden"
-          />
-        ) : null}
-
-        <AdminSidebar
-          collapsed={sidebarCollapsed}
-          open={sidebarOpen}
-          activeTab={activeTab}
-          onNavigate={(tab) => {
-            setActiveTab(tab)
-            setSidebarOpen(false)
-          }}
-          onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
-          onCloseMobile={() => setSidebarOpen(false)}
-          onBackToApp={onBackToApp}
-        />
-
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/95 px-4 py-3 backdrop-blur">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-              <div className="flex min-w-0 items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <button
-                  type="button"
-                  onClick={() => setSidebarOpen(true)}
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white lg:hidden ${
-                    sidebarOpen ? 'hidden' : ''
-                  }`}
-                  title="打开后台侧边栏"
-                >
-                  <Menu className="h-4 w-4" />
-                </button>
-
-                <div className="flex min-w-0 items-center gap-2">
-                  <ShieldCheck className="h-5 w-5 text-emerald-300" />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-slate-50">管理员后台</div>
-                    <div className="truncate text-xs text-slate-500">{currentPageLabel}</div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={refreshActiveTab}
-                  disabled={busy !== null}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                  刷新
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2 text-sm">
-                <span className="max-w-[34vw] truncate rounded-md border border-slate-800 bg-slate-900 px-2.5 py-2 text-slate-300 sm:max-w-none sm:px-3">
-                  {currentUser.username}
-                </span>
-                <button
-                  type="button"
-                  onClick={onBackToApp}
-                  className="inline-flex shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-2.5 py-2 text-slate-200 transition hover:border-slate-500 hover:text-white sm:px-3"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  返回
-                </button>
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="inline-flex shrink-0 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-2.5 py-2 text-slate-200 transition hover:border-slate-500 hover:text-white sm:px-3"
-                >
-                  <LogOut className="h-4 w-4" />
-                  退出
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <main className="flex-1 px-4 py-4 lg:px-6">
-
-            {activeTab === 'overview' ? (
-              <OverviewTab
-                stats={stats}
-                onOpenUsers={openUserSidePanel}
-                onCreatePackage={startCreatePackage}
-                busy={busy}
-              />
-            ) : null}
-
-            {activeTab === 'users' ? (
-              <UsersTab
-                response={usersResponse}
-                keywordInput={userKeywordInput}
-                busy={busy}
-                onKeywordInputChange={setUserKeywordInput}
-                onSearch={() => void handleFilterSearch('users')}
-                onPageChange={(page) => void loadUsers(page, userKeyword)}
-                onIncreasePoints={(user) => openAdjustPointsDialog(user, 'increase')}
-                onDecreasePoints={(user) => openAdjustPointsDialog(user, 'decrease')}
-                onDisableUser={(user) => void disableUser(user)}
-                onOpenActivity={(user) => openUserActivityDialog(user)}
-              />
-            ) : null}
-
-            {activeTab === 'packages' ? (
-              <PackagesTab
-                response={packagesResponse}
-                busy={busy}
-                filterValue={packageTypeFilter}
-                onFilterChange={(value) => setPackageTypeFilter(value)}
-                onSearch={() => void handleFilterSearch('packages')}
-                onPageChange={(page) => void loadPackages(page, packageTypeFilter)}
-                editingPackageId={editingPackageId}
-                form={packageForm}
-                onFormChange={setPackageForm}
-                onStartCreate={startCreatePackage}
-                onStartEdit={startEditPackage}
-                onReset={resetPackageForm}
-                onSave={() => void savePackage()}
-                onDelete={(item) => void deletePackage(item)}
-              />
-            ) : null}
-
-            {activeTab === 'billing' ? (
-              <BillingSettingsTab
-                settings={billingSettings}
-                form={billingForm}
-                busy={busy}
-                onFormChange={setBillingForm}
-                onSave={() => void saveBillingSettings()}
-                onReload={() => void loadBillingSettings()}
-              />
-            ) : null}
-
-            {activeTab === 'tasks' ? (
-              <TasksTab
-                response={tasksResponse}
-                busy={busy}
-                statusFilter={taskStatusFilter}
-                onStatusChange={setTaskStatusFilter}
-                onSearch={() => void handleFilterSearch('tasks')}
-                onPageChange={(page) => void loadTasks(page, taskStatusFilter)}
-                onOpenDetail={openTaskDetailDialog}
-              />
-            ) : null}
-
-            {activeTab === 'orders' ? (
-              <OrdersTab
-                response={ordersResponse}
-                busy={busy}
-                statusFilter={orderStatusFilter}
-                onStatusChange={setOrderStatusFilter}
-                onSearch={() => void handleFilterSearch('orders')}
-                onPageChange={(page) => void loadOrders(page, orderStatusFilter)}
-              />
-            ) : null}
-
-            {activeTab === 'audits' ? (
-              <AuditsTab
-                response={auditsResponse}
-                busy={busy}
-                statusFilter={auditStatusFilter}
-                onStatusChange={setAuditStatusFilter}
-                onSearch={() => void handleFilterSearch('audits')}
-                onPageChange={(page) => void loadAudits(page, auditStatusFilter)}
-                onReview={(item, status) => void reviewAudit(item, status)}
-              />
-            ) : null}
-
-            {activeTab === 'logs' ? (
-              <LogsTab
-                response={logsResponse}
-                busy={busy}
-                targetType={logTargetType}
-                targetId={logTargetId}
-                onTargetTypeChange={setLogTargetType}
-                onTargetIdChange={setLogTargetId}
-                onSearch={() => void handleFilterSearch('logs')}
-                onPageChange={(page) => void loadLogs(page, logTargetType, logTargetId)}
-              />
-            ) : null}
-          </main>
-        </div>
-      </div>
-
-      {pointDialog.open ? (
-        <PointAdjustDialog
-          dialog={pointDialog}
-          busy={busy}
-          onChange={setPointDialog}
-          onClose={closeAdjustPointsDialog}
-          onSubmit={() => void submitPointAdjust()}
-        />
-      ) : null}
-
-      {userActivityDialog.open ? (
-        <UserActivityDialog
-          dialog={userActivityDialog}
-          onClose={closeUserActivityDialog}
-          onPageChange={(page) => {
-            if (userActivityDialog.user) {
-              void loadUserActivityPage(userActivityDialog.user, page)
-            }
-          }}
-        />
-      ) : null}
-
-      {taskDetailDialog.open ? (
-        <TaskDetailDialog dialog={taskDetailDialog} onClose={closeTaskDetailDialog} />
-      ) : null}
-    </div>
-  )
+  return <Form onSave={submit}><LabeledInput label="商品名称" value={d.name} onChange={v => setD({ ...d, name: v })} /><LabeledInput label="商品价格，分（必填）" value={d.amountCents} onChange={v => setD({ ...d, amountCents: v })} /><TextAreaInput label="简短说明，可空" value={d.shortDescription} onChange={v => setD({ ...d, shortDescription: v })} /><TextAreaInput label="详细说明，可空" value={d.description} onChange={v => setD({ ...d, description: v })} rows={6} /><UploadField label="缩略图" value={d.previewUrl} onChange={v => setD({ ...d, previewUrl: v })} upload={api.adminUploadProductImage} /><LabeledInput label="外部购买链接，可空" value={d.productUrl} onChange={v => setD({ ...d, productUrl: v })} /><LabeledInput label="排序" value={d.sortOrder} onChange={v => setD({ ...d, sortOrder: v })} /><div><div className="mb-2 text-sm font-medium text-slate-600">商品分类，可多选</div><div className="flex flex-wrap gap-2">{categories.map(c => <button type="button" key={c.id} onClick={() => toggle(c.id)} className={d.categoryIds.includes(c.id) ? 'btn-primary' : 'btn'}>{c.name}</button>)}</div></div><Toggle label="启用" checked={d.enabled} onChange={v => setD({ ...d, enabled: v })} /></Form>
 }
+function CategoryForm({ item, save }: { item: ProductCategoryItem | null; save: (payload: AdminProductCategoryPayload) => void }) { const [d, setD] = useState({ name: item?.name || '', description: item?.description || '', sortOrder: String(item?.sortOrder ?? 0), enabled: item?.enabled ?? true }); return <Form onSave={() => save({ name: d.name, description: d.description || undefined, sortOrder: +d.sortOrder || 0, enabled: d.enabled })}><LabeledInput label="分类名称" value={d.name} onChange={v => setD({ ...d, name: v })} /><TextAreaInput label="分类描述" value={d.description} onChange={v => setD({ ...d, description: v })} /><LabeledInput label="排序" value={d.sortOrder} onChange={v => setD({ ...d, sortOrder: v })} /><Toggle label="启用" checked={d.enabled} onChange={v => setD({ ...d, enabled: v })} /></Form> }
+function ProviderKeyForm({ item, save }: { item: AdminProviderKeyItem | null; save: (payload: AdminProviderKeyPayload) => void }) { const [d, setD] = useState({ name: item?.name || '', provider: item?.provider || 'mentalout', batchServiceUrl: item?.batchServiceUrl || 'https://image.mentalout.top', apiBaseUrl: item?.apiBaseUrl || 'https://chunfeng.mentalout.top', apiKey: '', status: (item?.status as AdminProviderKeyPayload['status']) || 'active', priority: String(item?.priority ?? 0), autoSwitchEnabled: item?.autoSwitchEnabled ?? true }); return <Form onSave={() => save({ name: d.name, provider: d.provider, batchServiceUrl: d.batchServiceUrl, apiBaseUrl: d.apiBaseUrl, apiKey: d.apiKey || undefined, status: d.status, priority: +d.priority || 0, autoSwitchEnabled: d.autoSwitchEnabled })}><LabeledInput label="名称" value={d.name} onChange={v => setD({ ...d, name: v })} /><LabeledInput label="provider" value={d.provider} onChange={v => setD({ ...d, provider: v })} /><LabeledInput label="batchServiceUrl" value={d.batchServiceUrl} onChange={v => setD({ ...d, batchServiceUrl: v })} /><LabeledInput label="apiBaseUrl" value={d.apiBaseUrl} onChange={v => setD({ ...d, apiBaseUrl: v })} /><LabeledInput label={item ? 'apiKey，留空不修改' : 'apiKey'} value={d.apiKey} onChange={v => setD({ ...d, apiKey: v })} /><Select value={d.status || 'active'} onChange={v => setD({ ...d, status: v as any })} options={[["active","active"],["disabled","disabled"],["error","error"],["low_balance","low_balance"]]} /><LabeledInput label="优先级" value={d.priority} onChange={v => setD({ ...d, priority: v })} /><Toggle label="自动切换" checked={d.autoSwitchEnabled} onChange={v => setD({ ...d, autoSwitchEnabled: v })} /></Form> }
 
-function AdminSidebar({
-  collapsed,
-  open,
-  activeTab,
-  onNavigate,
-  onToggleCollapsed,
-  onCloseMobile,
-  onBackToApp,
-}: {
-  collapsed: boolean
-  open: boolean
-  activeTab: AdminTab
-  onNavigate: (tab: AdminTab) => void
-  onToggleCollapsed: () => void
-  onCloseMobile: () => void
-  onBackToApp: () => void
-}) {
-  const railWidthClass = collapsed ? 'lg:w-16' : 'lg:w-68'
-  const labelClass = collapsed ? 'lg:hidden' : ''
-
-  return (
-    <aside
-      className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-800 bg-slate-950 transition-all duration-200 lg:static lg:z-10 lg:h-screen lg:translate-x-0 ${railWidthClass} ${
-        open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-      }`}
-    >
-      <div className="flex h-20 items-center gap-2 border-b border-slate-800 px-3">
-        <button
-          type="button"
-          onClick={onCloseMobile}
-          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white lg:hidden"
-          title="关闭后台侧边栏"
-        >
-          <PanelLeftClose className="h-5 w-5" />
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white"
-          title={collapsed ? '展开侧边栏' : '收起侧边栏'}
-        >
-          {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
-        </button>
-
-        <div className={`${labelClass} min-w-0`}>
-          <div className="truncate text-sm font-semibold text-slate-50">管理控制台</div>
-          <div className="truncate text-xs text-slate-500">AI 生图平台</div>
-        </div>
-      </div>
-
-      <nav className={`flex-1 space-y-3 ${collapsed ? 'px-2 py-4' : 'px-3 py-5'}`}>
-        {adminTabs.map((item) => {
-          const active = activeTab === item.id
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onNavigate(item.id)}
-              className={`flex h-12 w-full items-center gap-3 rounded-md px-3 text-left text-sm transition ${
-                active
-                  ? 'bg-emerald-400 text-slate-950'
-                  : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-              } ${collapsed ? 'lg:justify-center lg:px-0' : ''}`}
-              title={item.label}
-            >
-              <span className="shrink-0">{item.icon}</span>
-              <span className={labelClass}>{item.label}</span>
-            </button>
-          )
-        })}
-      </nav>
-
-      <div className="border-t border-slate-800 p-3">
-        <button
-          type="button"
-          onClick={onBackToApp}
-          className={`flex h-12 w-full items-center gap-3 rounded-md border border-slate-700 bg-slate-900 px-3 text-left text-sm text-slate-200 transition hover:border-slate-500 hover:text-white ${
-            collapsed ? 'lg:justify-center lg:px-0' : ''
-          }`}
-        >
-          <ArrowLeft className="h-4 w-4 shrink-0" />
-          <span className={labelClass}>返回用户端</span>
-        </button>
-      </div>
-    </aside>
-  )
+function AnnouncementForm({ item, save }: { item: AnnouncementItem | null; save: (payload: AdminAnnouncementPayload) => void }) { const [d, setD] = useState({ title: item?.title || '', content: item?.content || '', imageUrl: item?.imageUrl || '', kind: item?.kind || 'normal', targetUserId: item?.targetUserId || '', enabled: item?.enabled ?? true, sortOrder: String(item?.sortOrder ?? 0) }); return <Form onSave={() => save({ title: d.title, content: d.content, imageUrl: d.imageUrl || undefined, kind: d.kind as any, targetUserId: d.kind === 'personal' ? d.targetUserId || undefined : undefined, enabled: d.enabled, sortOrder: +d.sortOrder || 0 })}><LabeledInput label="标题" value={d.title} onChange={v => setD({ ...d, title: v })} /><Select value={d.kind} onChange={v => setD({ ...d, kind: v as AnnouncementItem['kind'] })} options={[["normal","普通公告"],["pinned","置顶公告"],["personal","个人公告"]]} />{d.kind === 'personal' ? <LabeledInput label="目标用户ID" value={d.targetUserId} onChange={v => setD({ ...d, targetUserId: v })} /> : null}<UploadField label="公告图片" value={d.imageUrl} onChange={v => setD({ ...d, imageUrl: v })} upload={f => api.adminUploadAnnouncementImage(f, 'announcement')} /><LabeledInput label="排序" value={d.sortOrder} onChange={v => setD({ ...d, sortOrder: v })} /><TextAreaInput label="内容" value={d.content} onChange={v => setD({ ...d, content: v })} rows={8} /><Toggle label="启用" checked={d.enabled} onChange={v => setD({ ...d, enabled: v })} /></Form> }
+function PointsForm({ state, setState, save }: { state: Extract<Modal, { type: 'points' }>; setState: (m: Modal) => void; save: () => void }) { return <Form onSave={save}><Detail rows={[["用户", `${state.user.username} / ${state.user.id}`], ["当前积分", state.user.pointsBalance]]} /><LabeledInput label="调整积分，可正可负" value={state.delta} onChange={v => setState({ ...state, delta: v })} /><TextAreaInput label="备注" value={state.remark} onChange={v => setState({ ...state, remark: v })} /></Form> }
+function ReasonForm({ state, setState, submit }: { state: Extract<Modal, { type: 'promptReason' }>; setState: (m: Modal) => void; submit: (reason: string) => void }) { return <div className="space-y-4"><div className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-700">请填写原因。该原因会作为个人公告发送给上传用户。</div><TextAreaInput label={state.action === 'reject' ? '驳回理由' : '删除原因'} value={state.reason} onChange={v => setState({ ...state, reason: v })} /><Detail rows={[["提示词标题", state.item.title], ["提示词内容", state.item.prompt]]} /><div className="flex justify-end gap-2"><Button onClick={() => setState({ type: 'none' })}>取消</Button><Button danger onClick={() => submit(state.reason)}>确定</Button></div></div> }
+function UserLogs({ state, page }: { state: Extract<Modal, { type: 'userLogs' }>; page: (p: number) => void }) { if (state.loading) return <Empty text="日志加载中..." />; if (state.error) return <Empty text={state.error} />; return <div><ResponsiveTable headers={['类型','标题','描述','变化','时间']} rows={(state.response?.items ?? []).map(i => [i.recordType, i.title, i.description, `${i.deltaPoints ?? 0}积分 / ${i.deltaCredits ?? 0}次数`, date(i.createdAt)])} empty="暂无用户日志" />{state.response ? <Pagination page={state.page} total={state.response.total} pageSize={state.response.pageSize} onChange={page} /> : null}</div> }
+function TaskImages({ item }: { item: AdminImageTaskItem }) {
+  const images = taskImagePairs(item)
+  if (!images.length) return <span className="text-slate-400">暂无图片</span>
+  return <div className="grid gap-3 sm:grid-cols-2">{images.map((image, index) => <div key={`${image.original}-${index}`} className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm"><img src={image.thumb || image.original} alt={`生成图片 ${index + 1}`} className="h-44 w-full object-cover" /><div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-500"><span>图片 {index + 1}，默认显示缩略图</span><a href={image.original} target="_blank" rel="noreferrer" className="rounded-full border border-slate-200 px-3 py-1 font-semibold text-indigo-600 hover:bg-indigo-50">查看原图</a></div></div>)}</div>
 }
-
-function OverviewTab({
-  stats,
-  busy,
-  onOpenUsers,
-  onCreatePackage,
-}: {
-  stats: AdminStatsResponse | null
-  busy: BusyState
-  onOpenUsers: () => void
-  onCreatePackage: () => void
-}) {
-  const items = [
-    { label: '用户总数', value: stats?.usersTotal ?? 0 },
-    { label: '禁用用户', value: stats?.usersDisabled ?? 0 },
-    { label: '任务总数', value: stats?.tasksTotal ?? 0 },
-    { label: '生成中', value: stats?.tasksGenerating ?? 0 },
-    { label: '成功任务', value: stats?.tasksSuccess ?? 0 },
-    { label: '失败任务', value: stats?.tasksFailed ?? 0 },
-    { label: '已支付订单', value: stats?.ordersPaid ?? 0 },
-    { label: '拦截审核', value: stats?.auditRejected ?? 0 },
-    { label: '积分总量', value: stats?.pointsBalanceTotal ?? 0 },
-    { label: '免费次数', value: stats?.freeCreditsTotal ?? 0 },
-    { label: '充值次数', value: stats?.paidCreditsTotal ?? 0 },
-  ]
-
-  return (
-    <section className="space-y-4">
-      <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-50">后台概览</h1>
-          <p className="mt-1 text-sm text-slate-400">用户、套餐、任务、订单和审核的统一入口。</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={onOpenUsers}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white"
-          >
-            <Users className="h-4 w-4" />
-            用户管理
-          </button>
-          <button
-            type="button"
-            onClick={onCreatePackage}
-            className="inline-flex items-center gap-2 rounded-md bg-emerald-400 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300"
-          >
-            <Package className="h-4 w-4" />
-            新建套餐
-          </button>
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {items.map((item) => (
-          <StatTile key={item.label} label={item.label} value={String(item.value)} />
-        ))}
-      </div>
-
-      <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 text-sm leading-6 text-slate-300">
-        <div className="flex items-center gap-2 text-slate-100">
-          <BadgeCheck className="h-4 w-4 text-emerald-300" />
-          管理说明
-        </div>
-        <p className="mt-2 text-slate-400">
-          后台支持用户状态控制、积分调整、套餐配置、任务查看、订单查看、内容审核复审和操作留痕。
-          页面中的所有列表都可以按页切换，筛选条件会直接作用在后端查询上。
-        </p>
-        {busy ? <p className="mt-2 text-xs text-slate-500">当前正在加载 {busy}。</p> : null}
-      </div>
-    </section>
-  )
-}
-
-function UsersTab({
-  response,
-  keywordInput,
-  busy,
-  onKeywordInputChange,
-  onSearch,
-  onPageChange,
-  onIncreasePoints,
-  onDecreasePoints,
-  onDisableUser,
-  onOpenActivity,
-}: {
-  response: AdminListUsersResponse | null
-  keywordInput: string
-  busy: BusyState
-  onKeywordInputChange: (value: string) => void
-  onSearch: () => void
-  onPageChange: (page: number) => void
-  onIncreasePoints: (user: AdminUserItem) => void
-  onDecreasePoints: (user: AdminUserItem) => void
-  onDisableUser: (user: AdminUserItem) => void
-  onOpenActivity: (user: AdminUserItem) => void
-}) {
-  const items = response?.items ?? []
-
-  return (
-    <SectionShell
-      title="用户管理"
-      description="查询用户、调整状态和积分。"
-      toolbar={
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3">
-            <Search className="h-4 w-4 text-slate-500" />
-            <input
-              value={keywordInput}
-              onChange={(event) => onKeywordInputChange(event.target.value)}
-              placeholder="按用户名或邮箱搜索"
-              className="w-56 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={onSearch}
-            className="inline-flex items-center gap-2 rounded-md bg-emerald-400 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300"
-          >
-            <Filter className="h-4 w-4" />
-            搜索
-          </button>
-        </div>
-      }
-    >
-      <TableShell columns="minmax(90px, 120px) minmax(220px, 1.2fr) minmax(160px, 180px) minmax(150px, 180px) minmax(130px, 160px) minmax(150px, 180px) minmax(200px, 220px)">
-        <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
-          <tr className="[&>th]:px-3 [&>th]:py-3 [&>th]:text-left">
-            <th>ID</th>
-            <th>用户</th>
-            <th>角色/状态</th>
-            <th>积分/次数</th>
-            <th>签到</th>
-            <th>注册时间</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-800 text-sm">
-          {items.length ? (
-            items.map((user) => (
-              <tr
-                key={user.id}
-                className="cursor-pointer align-top transition hover:bg-slate-900/60 [&>td]:px-3 [&>td]:py-3"
-                onClick={() => onOpenActivity(user)}
-                title="查看用户日志"
-              >
-                <td className="whitespace-nowrap text-slate-500">#{user.id}</td>
-                <td>
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-slate-100">{user.username}</div>
-                    <div className="mt-1 truncate text-xs text-slate-500">{user.email}</div>
-                  </div>
-                </td>
-                <td>
-                  <div className="flex flex-wrap gap-2">
-                    <span className={`rounded-md px-2 py-1 text-xs ${user.status === 1 ? 'bg-emerald-400/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
-                      {user.status === 1 ? '正常' : '禁用'}
-                    </span>
-                    <span className="rounded-md bg-violet-500/15 px-2 py-1 text-xs text-violet-200">
-                      {getUserRoleLabel(user.role)}
-                    </span>
-                  </div>
-                </td>
-                <td className="text-slate-300">
-                  <div>积分 {user.pointsBalance}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    免费 {user.freeCredits} / 充值 {user.paidCredits}
-                  </div>
-                </td>
-                <td className="text-slate-300">
-                  <div>连续 {user.checkinStreak} 天</div>
-                  <div className="mt-1 text-xs text-slate-500">{formatDateTime(user.lastCheckinAt)}</div>
-                </td>
-                <td className="whitespace-nowrap text-slate-400">{formatDateTime(user.createdAt)}</td>
-                <td>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        onIncreasePoints(user)
-                      }}
-                      disabled={busy === `user-points:${user.id}`}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      增加
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        onDecreasePoints(user)
-                      }}
-                      disabled={busy === `user-points:${user.id}`}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                      减少
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        onDisableUser(user)
-                      }}
-                      disabled={busy === `user-status:${user.id}` || user.status === 2}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Ban className="h-3.5 w-3.5" />
-                      {user.status === 2 ? '已禁用' : '禁用'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        onOpenActivity(user)
-                      }}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      查看日志
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={7}>
-                <EmptyState text="暂无用户数据" />
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </TableShell>
-
-      <PaginationBar
-        page={response?.page ?? 1}
-        pageSize={response?.pageSize ?? PAGE_SIZE}
-        total={response?.total ?? 0}
-        onPageChange={onPageChange}
-      />
-    </SectionShell>
-  )
-}
-
-function BillingSettingsTab({
-  settings,
-  form,
-  busy,
-  onFormChange,
-  onSave,
-  onReload,
-}: {
-  settings: BillingSettingsResponse | null
-  form: BillingSettingsForm
-  busy: BusyState
-  onFormChange: Dispatch<SetStateAction<BillingSettingsForm>>
-  onSave: () => void
-  onReload: () => void
-}) {
-  return (
-    <SectionShell
-      title="账本规则"
-      description="配置自定义充值价格、生图积分兜底扣费和每日签到奖励。"
-      toolbar={
-        <button
-          type="button"
-          onClick={onReload}
-          disabled={busy === 'billing'}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {busy === 'billing' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-          重新加载
-        </button>
-      }
-    >
-      <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-          <div className="grid gap-3">
-            <FieldLabel label="自定义充值单次价格（分）">
-              <input
-                type="number"
-                min={1}
-                value={form.customRechargeUnitPriceCents}
-                onChange={(event) =>
-                  onFormChange((current) => ({
-                    ...current,
-                    customRechargeUnitPriceCents: Number(event.target.value),
-                  }))
-                }
-                className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-              />
-            </FieldLabel>
-            <FieldLabel label="生图积分兜底扣费（积分/张）">
-              <input
-                type="number"
-                min={1}
-                value={form.imageGeneratePointCost}
-                onChange={(event) =>
-                  onFormChange((current) => ({ ...current, imageGeneratePointCost: Number(event.target.value) }))
-                }
-                className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-              />
-            </FieldLabel>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <FieldLabel label="签到赠送积分">
-                <input
-                  type="number"
-                  min={0}
-                  value={form.checkinPoints}
-                  onChange={(event) =>
-                    onFormChange((current) => ({ ...current, checkinPoints: Number(event.target.value) }))
-                  }
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                />
-              </FieldLabel>
-              <FieldLabel label="签到赠送次数">
-                <input
-                  type="number"
-                  min={0}
-                  value={form.checkinCredits}
-                  onChange={(event) =>
-                    onFormChange((current) => ({ ...current, checkinCredits: Number(event.target.value) }))
-                  }
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                />
-              </FieldLabel>
-            </div>
-
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={busy === 'save-billing'}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-400 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy === 'save-billing' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              保存规则
-            </button>
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <RuleCard label="当前单次价格" value={`${((settings?.customRechargeUnitPriceCents ?? form.customRechargeUnitPriceCents) / 100).toFixed(2)} 元 / 次`} />
-          <RuleCard label="过夜转积分" value="剩余次数 × 当日单次价格（分）" />
-          <RuleCard label="扣费顺序" value="优先扣次数，不足再扣积分" />
-          <RuleCard label="积分价值" value="1 积分 = 0.01 元" />
-        </div>
-      </div>
-    </SectionShell>
-  )
-}
-
-function RuleCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-2 text-sm font-medium text-slate-100">{value}</div>
-    </div>
-  )
-}
-
-function PackagesTab({
-  response,
-  busy,
-  filterValue,
-  onFilterChange,
-  onSearch,
-  onPageChange,
-  editingPackageId,
-  form,
-  onFormChange,
-  onStartCreate,
-  onStartEdit,
-  onReset,
-  onSave,
-  onDelete,
-}: {
-  response: AdminListPackagesResponse | null
-  busy: BusyState
-  filterValue: string
-  onFilterChange: (value: string) => void
-  onSearch: () => void
-  onPageChange: (page: number) => void
-  editingPackageId: string | null
-  form: AdminPackageForm
-  onFormChange: Dispatch<SetStateAction<AdminPackageForm>>
-  onStartCreate: () => void
-  onStartEdit: (item: AdminPackageItem) => void
-  onReset: () => void
-  onSave: () => void
-  onDelete: (item: AdminPackageItem) => void
-}) {
-  const items = response?.items ?? []
-  const isRedeem = false
-
-  return (
-    <SectionShell
-      title="套餐配置"
-      description="维护充值档位和积分兑换档位。"
-      toolbar={
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={filterValue}
-            onChange={(event) => onFilterChange(event.target.value)}
-            className="h-10 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-          >
-            <option value="">全部充值套餐</option>
-            <option value="recharge">充值套餐</option>
-          </select>
-          <button
-            type="button"
-            onClick={onSearch}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white"
-          >
-            <Filter className="h-4 w-4" />
-            筛选
-          </button>
-          <button
-            type="button"
-            onClick={onStartCreate}
-            className="inline-flex items-center gap-2 rounded-md bg-emerald-400 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300"
-          >
-            <Package className="h-4 w-4" />
-            新建
-          </button>
-        </div>
-      }
-    >
-      <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium text-slate-50">{editingPackageId ? '编辑套餐' : '新建套餐'}</div>
-              <div className="mt-1 text-xs text-slate-500">套餐切换时，字段会自动适配档位类型。</div>
-            </div>
-            <button
-              type="button"
-              onClick={onReset}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-200 transition hover:border-slate-500"
-            >
-              <RefreshCcw className="h-3.5 w-3.5" />
-              重置
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-3">
-            {!editingPackageId ? (
-              <FieldLabel label="套餐编码">
-                <input
-                  value={form.code}
-                  onChange={(event) => onFormChange((current) => ({ ...current, code: event.target.value }))}
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                  placeholder="recharge-100"
-                />
-              </FieldLabel>
-            ) : null}
-
-            <FieldLabel label="套餐名称">
-              <input
-                value={form.name}
-                onChange={(event) => onFormChange((current) => ({ ...current, name: event.target.value }))}
-                className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                placeholder="例如：100 次充值包"
-              />
-            </FieldLabel>
-
-            {!editingPackageId ? (
-              <FieldLabel label="套餐类型">
-                <select
-                  value={form.packageType}
-                  onChange={(event) =>
-                    onFormChange((current) => ({
-                      ...current,
-                      packageType: 'recharge',
-                      amountCents: current.amountCents || 1999,
-                      pointsCost: 0,
-                      bonusPoints: current.bonusPoints || 0,
-                    }))
-                  }
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                >
-                  <option value="recharge">充值档位</option>
-                </select>
-              </FieldLabel>
-            ) : null}
-
-            <FieldLabel label="次数">
-              <input
-                type="number"
-                min={1}
-                value={form.creditsAmount}
-                onChange={(event) =>
-                  onFormChange((current) => ({ ...current, creditsAmount: Number(event.target.value) }))
-                }
-                className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-              />
-            </FieldLabel>
-
-            {isRedeem ? (
-              <FieldLabel label="积分消耗">
-                <input
-                  type="number"
-                  min={1}
-                  value={form.pointsCost}
-                  onChange={(event) =>
-                    onFormChange((current) => ({ ...current, pointsCost: Number(event.target.value) }))
-                  }
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                />
-              </FieldLabel>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <FieldLabel label="价格（分）">
-                  <input
-                    type="number"
-                    min={0}
-                    value={form.amountCents}
-                    onChange={(event) =>
-                      onFormChange((current) => ({ ...current, amountCents: Number(event.target.value) }))
-                    }
-                    className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                  />
-                </FieldLabel>
-                <FieldLabel label="赠送积分">
-                  <input
-                    type="number"
-                    min={0}
-                    value={form.bonusPoints}
-                    onChange={(event) =>
-                      onFormChange((current) => ({ ...current, bonusPoints: Number(event.target.value) }))
-                    }
-                    className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                  />
-                </FieldLabel>
-              </div>
-            )}
-
-            <FieldLabel label="排序">
-              <input
-                type="number"
-                value={form.sortOrder}
-                onChange={(event) => onFormChange((current) => ({ ...current, sortOrder: Number(event.target.value) }))}
-                className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-              />
-            </FieldLabel>
-
-            <FieldLabel label="备注">
-              <input
-                value={form.note ?? ''}
-                onChange={(event) => onFormChange((current) => ({ ...current, note: event.target.value }))}
-                className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-                placeholder="用途说明"
-              />
-            </FieldLabel>
-
-            <label className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">
-              <input
-                type="checkbox"
-                checked={form.enabled ?? true}
-                onChange={(event) => onFormChange((current) => ({ ...current, enabled: event.target.checked }))}
-              />
-              启用
-            </label>
-
-            <div className="text-xs leading-6 text-slate-500">
-              {isRedeem
-                ? '积分兑换档位只需要填写次数和积分消耗。'
-                : '充值档位只需要填写次数、价格和赠送积分。'}
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={onSave}
-                disabled={busy === 'save-package'}
-                className="inline-flex items-center gap-2 rounded-md bg-emerald-400 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {busy === 'save-package' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-          <div className="mb-3 text-sm text-slate-400">点击条目即可加载到编辑区。</div>
-          <TableShell columns="minmax(100px, 140px) minmax(180px, 1fr) minmax(120px, 160px) minmax(120px, 160px) minmax(100px, 120px) minmax(120px, 140px)">
-            <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
-              <tr className="[&>th]:px-3 [&>th]:py-3 [&>th]:text-left">
-                <th>编码</th>
-                <th>名称</th>
-                <th>类型</th>
-                <th>次数/价格</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800 text-sm">
-              {items.length ? (
-                items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="cursor-pointer align-top transition hover:bg-slate-900/70 [&>td]:px-3 [&>td]:py-3"
-                    onClick={() => onStartEdit(item)}
-                  >
-                    <td className="whitespace-nowrap text-slate-400">#{item.code}</td>
-                    <td className="min-w-0">
-                      <div className="truncate font-medium text-slate-100">{item.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">{item.note || '-'}</div>
-                    </td>
-                    <td>
-                      <span className="rounded-md bg-violet-500/15 px-2 py-1 text-xs text-violet-200">
-                        {getPackageTypeLabel(item.packageType)}
-                      </span>
-                    </td>
-                    <td className="text-slate-300">
-                      <div>次数 {item.creditsAmount}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {item.packageType === 'redeem' ? `积分 ${item.pointsCost}` : `金额 ${(item.amountCents / 100).toFixed(2)} 元 / 赠送 ${item.bonusPoints}`}
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`rounded-md px-2 py-1 text-xs ${item.enabled ? 'bg-emerald-400/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
-                        {item.enabled ? '启用' : '停用'}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onStartEdit(item)
-                          }}
-                          className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-emerald-400"
-                        >
-                          <Edit3 className="h-3.5 w-3.5" />
-                          编辑
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onDelete(item)
-                          }}
-                          disabled={busy === `delete-package:${item.id}`}
-                          className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {busy === `delete-package:${item.id}` ? (
-                            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3.5 w-3.5" />
-                          )}
-                          删除
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6}>
-                    <EmptyState text="暂无套餐数据" />
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </TableShell>
-
-          <PaginationBar
-            page={response?.page ?? 1}
-            pageSize={response?.pageSize ?? PAGE_SIZE}
-            total={response?.total ?? 0}
-            onPageChange={onPageChange}
-          />
-        </div>
-      </div>
-    </SectionShell>
-  )
-}
-
-function TasksTab({
-  response,
-  busy,
-  statusFilter,
-  onStatusChange,
-  onSearch,
-  onPageChange,
-  onOpenDetail,
-}: {
-  response: AdminListImageTasksResponse | null
-  busy: BusyState
-  statusFilter: string
-  onStatusChange: (value: string) => void
-  onSearch: () => void
-  onPageChange: (page: number) => void
-  onOpenDetail: (task: AdminImageTaskItem) => void
-}) {
-  const items = response?.items ?? []
-
-  return (
-    <SectionShell
-      title="任务管理"
-      description="查看全站任务进度、结果和失败原因。"
-      toolbar={
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={statusFilter}
-            onChange={(event) => onStatusChange(event.target.value)}
-            className="h-10 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-          >
-            <option value="">全部状态</option>
-            <option value="generating">生成中</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
-          </select>
-          <button
-            type="button"
-            onClick={onSearch}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white"
-          >
-            <Filter className="h-4 w-4" />
-            筛选
-          </button>
-        </div>
-      }
-    >
-      <TableShell columns="minmax(90px, 120px) minmax(100px, 130px) minmax(120px, 150px) minmax(130px, 160px) minmax(140px, 170px) minmax(180px, 200px) minmax(100px, 120px)">
-        <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
-          <tr className="[&>th]:px-3 [&>th]:py-3 [&>th]:text-left">
-            <th>ID</th>
-            <th>用户</th>
-            <th>状态</th>
-            <th>消耗</th>
-            <th>来源</th>
-            <th>时间</th>
-            <th>详情</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-800 text-sm">
-          {items.length ? (
-            items.map((task) => (
-              <tr key={task.id} className="align-top [&>td]:px-3 [&>td]:py-3">
-                <td className="whitespace-nowrap text-slate-500">#{task.id}</td>
-                <td className="text-slate-300">#{task.userId}</td>
-                <td>
-                  <span className={`rounded-md px-2 py-1 text-xs ${getTaskStatusClass(task.status)}`}>
-                    {getImageTaskStatusLabel(task.status)}
-                  </span>
-                </td>
-                <td className="text-slate-300">
-                  <div>{task.costCredits || task.costPoints} 次</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    免费 {task.freeCreditsCost} / 充值 {task.paidCreditsCost}
-                  </div>
-                </td>
-                <td className="text-slate-300">{getCreditSourceLabel(task.creditSource)}</td>
-                <td className="whitespace-nowrap text-slate-400">{formatDateTime(task.createdAt)}</td>
-                <td>
-                  <button
-                    type="button"
-                    onClick={() => onOpenDetail(task)}
-                    className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-violet-400 hover:text-white"
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                    详情
-                  </button>
-                </td>
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={7}>
-                <EmptyState text="暂无任务数据" />
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </TableShell>
-
-      <PaginationBar
-        page={response?.page ?? 1}
-        pageSize={response?.pageSize ?? PAGE_SIZE}
-        total={response?.total ?? 0}
-        onPageChange={onPageChange}
-      />
-
-      {busy === 'tasks' ? <div className="mt-3 text-xs text-slate-500">正在加载任务列表...</div> : null}
-    </SectionShell>
-  )
-}
-
-function OrdersTab({
-  response,
-  busy,
-  statusFilter,
-  onStatusChange,
-  onSearch,
-  onPageChange,
-}: {
-  response: AdminListRechargeOrdersResponse | null
-  busy: BusyState
-  statusFilter: string
-  onStatusChange: (value: string) => void
-  onSearch: () => void
-  onPageChange: (page: number) => void
-}) {
-  const items = response?.items ?? []
-
-  return (
-    <SectionShell
-      title="订单管理"
-      description="查看充值订单与支付状态。"
-      toolbar={
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={statusFilter}
-            onChange={(event) => onStatusChange(event.target.value)}
-            className="h-10 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-          >
-            <option value="">全部状态</option>
-            <option value="pending">待支付</option>
-            <option value="paid">已支付</option>
-            <option value="canceled">已取消</option>
-            <option value="refunded">已退款</option>
-          </select>
-          <button
-            type="button"
-            onClick={onSearch}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white"
-          >
-            <Filter className="h-4 w-4" />
-            筛选
-          </button>
-        </div>
-      }
-    >
-      <TableShell columns="minmax(140px, 180px) minmax(100px, 130px) minmax(200px, 1.3fr) minmax(120px, 150px) minmax(140px, 160px) minmax(120px, 140px) minmax(150px, 180px) minmax(160px, 180px)">
-        <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
-          <tr className="[&>th]:px-3 [&>th]:py-3 [&>th]:text-left">
-            <th>订单号</th>
-            <th>用户</th>
-            <th>套餐</th>
-            <th>金额</th>
-            <th>次数/积分</th>
-            <th>状态</th>
-            <th>支付时间</th>
-            <th>创建时间</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-800 text-sm">
-          {items.length ? (
-            items.map((order) => (
-              <tr key={order.id} className="align-top [&>td]:px-3 [&>td]:py-3">
-                <td className="whitespace-nowrap text-slate-300">{order.orderNo}</td>
-                <td className="text-slate-300">#{order.userId}</td>
-                <td>
-                  <div className="font-medium text-slate-100">{order.packageName}</div>
-                  <div className="mt-1 text-xs text-slate-500">{order.packageCode}</div>
-                </td>
-                <td className="text-slate-300">{(order.amountCents / 100).toFixed(2)} 元</td>
-                <td className="text-slate-300">
-                  <div>{order.creditsAmount} 次</div>
-                  <div className="mt-1 text-xs text-slate-500">赠送 {order.bonusPoints} 积分</div>
-                </td>
-                <td>
-                  <span className={`rounded-md px-2 py-1 text-xs ${getOrderStatusClass(order.status)}`}>
-                    {getRechargeOrderStatusLabel(order.status)}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap text-slate-400">{formatDateTime(order.paidAt)}</td>
-                <td className="whitespace-nowrap text-slate-400">{formatDateTime(order.createdAt)}</td>
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={8}>
-                <EmptyState text="暂无订单数据" />
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </TableShell>
-
-      <PaginationBar
-        page={response?.page ?? 1}
-        pageSize={response?.pageSize ?? PAGE_SIZE}
-        total={response?.total ?? 0}
-        onPageChange={onPageChange}
-      />
-
-      {busy === 'orders' ? <div className="mt-3 text-xs text-slate-500">正在加载订单列表...</div> : null}
-    </SectionShell>
-  )
-}
-
-function AuditsTab({
-  response,
-  busy,
-  statusFilter,
-  onStatusChange,
-  onSearch,
-  onPageChange,
-  onReview,
-}: {
-  response: AdminListContentAuditsResponse | null
-  busy: BusyState
-  statusFilter: string
-  onStatusChange: (value: string) => void
-  onSearch: () => void
-  onPageChange: (page: number) => void
-  onReview: (item: AdminContentAuditItem, status: 'pass' | 'rejected') => void
-}) {
-  const items = response?.items ?? []
-
-  return (
-    <SectionShell
-      title="内容审核"
-      description="查看自动审核结果，并可由管理员复审。"
-      toolbar={
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={statusFilter}
-            onChange={(event) => onStatusChange(event.target.value)}
-            className="h-10 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none"
-          >
-            <option value="">全部状态</option>
-            <option value="pass">通过</option>
-            <option value="rejected">拒绝</option>
-          </select>
-          <button
-            type="button"
-            onClick={onSearch}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white"
-          >
-            <Filter className="h-4 w-4" />
-            筛选
-          </button>
-        </div>
-      }
-    >
-      <TableShell columns="minmax(80px, 110px) minmax(100px, 130px) minmax(150px, 190px) minmax(320px, 1.5fr) minmax(130px, 160px) minmax(170px, 220px) minmax(180px, 220px) minmax(180px, 220px) minmax(180px, 220px)">
-        <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
-          <tr className="[&>th]:px-3 [&>th]:py-3 [&>th]:text-left">
-            <th>ID</th>
-            <th>用户</th>
-            <th>业务</th>
-            <th>内容</th>
-            <th>状态</th>
-            <th>审核信息</th>
-            <th>创建时间</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-800 text-sm">
-          {items.length ? (
-            items.map((item) => (
-              <tr key={item.id} className="align-top [&>td]:px-3 [&>td]:py-3">
-                <td className="whitespace-nowrap text-slate-500">#{item.id}</td>
-                <td className="text-slate-300">#{item.userId}</td>
-                <td>
-                  <div className="font-medium text-slate-100">{item.bizType}</div>
-                  <div className="mt-1 text-xs text-slate-500">{item.bizId || '-'}</div>
-                </td>
-                <td>
-                  <div className="line-clamp-3 text-slate-200">{item.content}</div>
-                  {item.matchedKeywords?.length ? (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {item.matchedKeywords.map((keyword) => (
-                        <span key={keyword} className="rounded-md bg-slate-800 px-2 py-1 text-[11px] text-slate-300">
-                          {keyword}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </td>
-                <td>
-                  <span className={`rounded-md px-2 py-1 text-xs ${item.status === 'rejected' ? 'bg-rose-500/15 text-rose-300' : 'bg-emerald-400/15 text-emerald-300'}`}>
-                    {getAuditStatusLabel(item.status)}
-                  </span>
-                </td>
-                <td className="text-slate-300">
-                  <div>{item.action}</div>
-                  <div className="mt-1 text-xs text-slate-500">{item.reason || '-'}</div>
-                  <div className="mt-1 text-xs text-slate-500">审核人 {item.reviewerUserId || '-'}</div>
-                  <div className="mt-1 text-xs text-slate-500">{formatDateTime(item.reviewedAt)}</div>
-                </td>
-                <td className="whitespace-nowrap text-slate-400">{formatDateTime(item.createdAt)}</td>
-                <td>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onReview(item, 'pass')}
-                      disabled={busy === `audit-review:${item.id}`}
-                      className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 px-2 py-1 text-xs text-emerald-300 transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      通过
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onReview(item, 'rejected')}
-                      disabled={busy === `audit-review:${item.id}`}
-                      className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <XCircle className="h-3.5 w-3.5" />
-                      驳回
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={8}>
-                <EmptyState text="暂无审核记录" />
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </TableShell>
-
-      <PaginationBar
-        page={response?.page ?? 1}
-        pageSize={response?.pageSize ?? PAGE_SIZE}
-        total={response?.total ?? 0}
-        onPageChange={onPageChange}
-      />
-    </SectionShell>
-  )
-}
-
-function LogsTab({
-  response,
-  busy,
-  targetType,
-  targetId,
-  onTargetTypeChange,
-  onTargetIdChange,
-  onSearch,
-  onPageChange,
-}: {
-  response: AdminListActionLogsResponse | null
-  busy: BusyState
-  targetType: string
-  targetId: string
-  onTargetTypeChange: (value: string) => void
-  onTargetIdChange: (value: string) => void
-  onSearch: () => void
-  onPageChange: (page: number) => void
-}) {
-  const items = response?.items ?? []
-
-  return (
-    <SectionShell
-      title="操作日志"
-      description="记录管理员的配置修改、套餐管理和审核动作。"
-      toolbar={
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3">
-            <Filter className="h-4 w-4 text-slate-500" />
-            <input
-              value={targetType}
-              onChange={(event) => onTargetTypeChange(event.target.value)}
-              placeholder="目标类型"
-              className="w-28 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
-            />
-          </div>
-          <div className="flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3">
-            <Search className="h-4 w-4 text-slate-500" />
-            <input
-              value={targetId}
-              onChange={(event) => onTargetIdChange(event.target.value)}
-              placeholder="目标 ID"
-              className="w-28 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={onSearch}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white"
-          >
-            <Filter className="h-4 w-4" />
-            筛选
-          </button>
-        </div>
-      }
-    >
-      <TableShell columns="minmax(90px, 120px) minmax(90px, 120px) minmax(160px, 220px) minmax(150px, 180px) minmax(120px, 140px) minmax(220px, 1fr)">
-        <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
-          <tr className="[&>th]:px-3 [&>th]:py-3 [&>th]:text-left">
-            <th>ID</th>
-            <th>管理员</th>
-            <th>动作</th>
-            <th>目标</th>
-            <th>备注</th>
-            <th>时间 / 详情</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-800 text-sm">
-          {items.length ? (
-            items.map((item) => (
-              <tr key={item.id} className="align-top [&>td]:px-3 [&>td]:py-3">
-                <td className="whitespace-nowrap text-slate-500">#{item.id}</td>
-                <td className="text-slate-300">#{item.adminId}</td>
-                <td className="text-slate-200">{item.action}</td>
-                <td className="text-slate-300">
-                  <div>{item.targetType}</div>
-                  <div className="mt-1 text-xs text-slate-500">{item.targetId}</div>
-                </td>
-                <td className="text-slate-300">{item.remark || '-'}</td>
-                <td>
-                  <div className="text-slate-400">{formatDateTime(item.createdAt)}</div>
-                  <details className="mt-2 rounded-md border border-slate-800 bg-slate-950 p-2 text-xs text-slate-400">
-                    <summary className="cursor-pointer select-none text-slate-300">查看 JSON</summary>
-                    <div className="mt-2 space-y-2">
-                      {item.beforeJson ? <pre className="overflow-x-auto whitespace-pre-wrap break-words">{item.beforeJson}</pre> : null}
-                      {item.afterJson ? <pre className="overflow-x-auto whitespace-pre-wrap break-words">{item.afterJson}</pre> : null}
-                    </div>
-                  </details>
-                </td>
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={6}>
-                <EmptyState text="暂无操作日志" />
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </TableShell>
-
-      <PaginationBar
-        page={response?.page ?? 1}
-        pageSize={response?.pageSize ?? PAGE_SIZE}
-        total={response?.total ?? 0}
-        onPageChange={onPageChange}
-      />
-
-      {busy === 'logs' ? <div className="mt-3 text-xs text-slate-500">正在加载操作日志...</div> : null}
-    </SectionShell>
-  )
-}
-
-function ModalShell({
-  title,
-  description,
-  children,
-  onClose,
-  maxWidthClass = 'max-w-2xl',
-}: {
-  title: string
-  description?: string
-  children: ReactNode
-  onClose: () => void
-  maxWidthClass?: string
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
-      <button
-        type="button"
-        aria-label="关闭弹窗"
-        onClick={onClose}
-        className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm"
-      />
-      <section
-        className={`relative z-10 max-h-[88vh] w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-panel ${maxWidthClass}`}
-      >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-slate-50">{title}</h2>
-            {description ? <p className="mt-1 text-sm leading-6 text-slate-400">{description}</p> : null}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-950 text-slate-300 transition hover:border-slate-500 hover:text-white"
-            title="关闭"
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="max-h-[calc(88vh-84px)] overflow-y-auto px-5 py-4">{children}</div>
-      </section>
-    </div>
-  )
-}
-
-function PointAdjustDialog({
-  dialog,
-  busy,
-  onChange,
-  onClose,
-  onSubmit,
-}: {
-  dialog: UserPointsDialogState
-  busy: BusyState
-  onChange: Dispatch<SetStateAction<UserPointsDialogState>>
-  onClose: () => void
-  onSubmit: () => void
-}) {
-  const isIncrease = dialog.action === 'increase'
-  const user = dialog.user
-
-  return (
-    <ModalShell
-      title={isIncrease ? '增加积分' : '减少积分'}
-      description={user ? `正在调整用户「${user.username}」的积分。` : undefined}
-      onClose={onClose}
-      maxWidthClass="max-w-lg"
-    >
-      <form
-        className="space-y-4"
-        onSubmit={(event) => {
-          event.preventDefault()
-          onSubmit()
-        }}
-      >
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
-          <div>当前积分：{user?.pointsBalance ?? '-'}</div>
-          <div className="mt-1 text-xs text-slate-500">请输入正整数，系统会按当前动作自动增加或减少。</div>
-        </div>
-
-        <FieldLabel label="积分数量">
-          <input
-            autoFocus
-            type="number"
-            min={1}
-            step={1}
-            value={dialog.amount}
-            onChange={(event) => onChange((current) => ({ ...current, amount: event.target.value }))}
-            className="h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-            placeholder="请输入积分数量"
-          />
-        </FieldLabel>
-
-        <FieldLabel label="备注">
-          <input
-            value={dialog.remark}
-            onChange={(event) => onChange((current) => ({ ...current, remark: event.target.value }))}
-            className="h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-            placeholder="例如：后台人工调整"
-          />
-        </FieldLabel>
-
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-700 px-4 text-sm text-slate-200 transition hover:border-slate-500 hover:text-white"
-          >
-            取消
-          </button>
-          <button
-            type="submit"
-            disabled={busy === `user-points:${user?.id ?? ''}`}
-            className={`inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
-              isIncrease
-                ? 'bg-emerald-400 text-slate-950 hover:bg-emerald-300'
-                : 'bg-amber-400 text-slate-950 hover:bg-amber-300'
-            }`}
-          >
-            {busy === `user-points:${user?.id ?? ''}` ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
-            确认{isIncrease ? '增加' : '减少'}
-          </button>
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-function UserActivityDialog({
-  dialog,
-  onClose,
-  onPageChange,
-}: {
-  dialog: UserActivityDialogState
-  onClose: () => void
-  onPageChange: (page: number) => void
-}) {
-  const user = dialog.user
-  const items = dialog.response?.items ?? []
-
-  return (
-    <ModalShell
-      title="用户日志"
-      description={user ? `${user.username} / ${user.email}` : undefined}
-      onClose={onClose}
-      maxWidthClass="max-w-3xl"
-    >
-      <div className="space-y-4">
-        {user ? (
-          <div className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300 sm:grid-cols-3">
-            <div>
-              <div className="text-xs text-slate-500">积分</div>
-              <div className="mt-1 text-slate-100">{user.pointsBalance}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">免费次数</div>
-              <div className="mt-1 text-slate-100">{user.freeCredits}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">充值次数</div>
-              <div className="mt-1 text-slate-100">{user.paidCredits}</div>
-            </div>
-          </div>
-        ) : null}
-
-        {dialog.error ? (
-          <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-            {dialog.error}
-          </div>
-        ) : null}
-
-        {dialog.loading ? (
-          <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
-            <LoaderCircle className="h-4 w-4 animate-spin" />
-            正在加载用户日志...
-          </div>
-        ) : items.length ? (
-          <div className="space-y-3">
-            {items.map((item) => (
-              <UserActivityRow key={`${item.recordType}-${item.id}`} item={item} />
-            ))}
-          </div>
-        ) : (
-          <EmptyState text="暂无用户日志" />
-        )}
-
-        <PaginationBar
-          page={dialog.response?.page ?? dialog.page}
-          pageSize={dialog.response?.pageSize ?? USER_ACTIVITY_PAGE_SIZE}
-          total={dialog.response?.total ?? 0}
-          onPageChange={onPageChange}
-        />
-      </div>
-    </ModalShell>
-  )
-}
-
-function UserActivityRow({ item }: { item: UserActivityItem }) {
-  return (
-    <div className="flex gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-[11px] text-slate-400">
-        {item.imageUrl ? (
-          <img src={item.imageUrl} alt={item.title} className="h-full w-full object-cover" />
-        ) : (
-          activityRecordShortLabel(item.recordType)
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-slate-100">{item.title}</div>
-            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{item.description}</p>
-          </div>
-          <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs text-slate-300">
-            {activityRecordLabel(item.recordType)}
-          </span>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-          <span>{formatDateTime(item.createdAt)}</span>
-          <span>{activityRecordValue(item)}</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TaskDetailDialog({
-  dialog,
-  onClose,
-}: {
-  dialog: TaskDetailDialogState
-  onClose: () => void
-}) {
-  const task = dialog.task
-  const imageURLs = task ? collectTaskImageURLs(task) : []
-  const requestOptions = task ? buildTaskRequestOptions(task) : []
-  const requestParamsText = task ? formatTaskRequestParams(task.requestParams) : ''
-
-  return (
-    <ModalShell
-      title="任务详情"
-      description={task ? `任务 #${task.id} / 用户 #${task.userId}` : undefined}
-      onClose={onClose}
-      maxWidthClass="max-w-4xl"
-    >
-      {task ? (
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatTile label="状态" value={getImageTaskStatusLabel(task.status)} />
-            <StatTile label="消耗次数" value={String(task.costCredits || task.costPoints)} />
-            <StatTile label="消耗来源" value={getCreditSourceLabel(task.creditSource)} />
-            <StatTile label="创建时间" value={formatDateTime(task.createdAt)} />
-          </div>
-
-          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-            <div className="mb-2 text-xs text-slate-500">提示词</div>
-            <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-100">{task.prompt || '-'}</p>
-          </div>
-
-          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-            <div className="mb-3 text-sm font-medium text-slate-100">生成选项</div>
-            {requestOptions.length ? (
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {requestOptions.map((item) => (
-                  <div key={item.label} className="min-w-0 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2">
-                    <div className="text-xs text-slate-500">{item.label}</div>
-                    <div className="mt-1 break-words text-sm text-slate-100">{item.value}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState text="没有记录生成选项" />
-            )}
-          </div>
-
-          <details className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-            <summary className="cursor-pointer text-sm font-medium text-slate-100">完整请求 JSON</summary>
-            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-300">
-              {requestParamsText || '-'}
-            </pre>
-          </details>
-
-          {task.errorMessage ? (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm leading-6 text-rose-200">
-              <div className="mb-1 flex items-center gap-2 font-medium">
-                <AlertTriangle className="h-4 w-4" />
-                失败原因
-              </div>
-              {task.errorMessage}
-            </div>
-          ) : null}
-
-          <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="text-sm font-medium text-slate-100">生成图片</div>
-              {task.provider ? <span className="text-xs text-slate-500">服务商：{task.provider}</span> : null}
-            </div>
-            {imageURLs.length ? (
-              <div className={`grid gap-3 ${imageURLs.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
-                {imageURLs.map((imageUrl, index) => (
-                  <a
-                    key={imageUrl}
-                    href={imageUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="group overflow-hidden rounded-md border border-slate-800 bg-slate-900"
-                  >
-                    <img
-                      src={imageUrl}
-                      alt={`生成图片 ${index + 1}`}
-                      className="max-h-[420px] w-full object-contain transition group-hover:opacity-90"
-                    />
-                    <div className="border-t border-slate-800 px-3 py-2 text-xs text-slate-500">打开图片 {index + 1}</div>
-                  </a>
-                ))}
-              </div>
-            ) : (
-              <div className="flex min-h-[220px] flex-col items-center justify-center rounded-md border border-dashed border-slate-700 bg-slate-900/50 p-4 text-center text-sm text-slate-500">
-                <ImageIcon className="mb-3 h-8 w-8 text-slate-600" />
-                暂无生成图片。
-              </div>
-            )}
-          </div>
-
-          <div className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300 sm:grid-cols-3">
-            <div>
-              <div className="text-xs text-slate-500">免费次数消耗</div>
-              <div className="mt-1 text-slate-100">{task.freeCreditsCost}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">充值次数消耗</div>
-              <div className="mt-1 text-slate-100">{task.paidCreditsCost}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">旧积分字段</div>
-              <div className="mt-1 text-slate-100">{task.costPoints}</div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <EmptyState text="没有可展示的任务详情" />
-      )}
-    </ModalShell>
-  )
-}
-
-function SectionShell({
-  title,
-  description,
-  toolbar,
-  children,
-}: {
-  title: string
-  description: string
-  toolbar?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <section className="space-y-4">
-      <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-50">{title}</h1>
-          <p className="mt-1 text-sm text-slate-400">{description}</p>
-        </div>
-        {toolbar}
-      </div>
-      {children}
-    </section>
-  )
-}
-
-function TableShell({
-  columns,
-  children,
-}: {
-  columns: string
-  children: ReactNode
-}) {
-  return (
-    <div className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/70">
-      <div className="overflow-x-auto">
-        <table className="min-w-full" style={{ gridTemplateColumns: columns }}>
-          {children}
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function FieldLabel({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-2 block text-xs text-slate-500">{label}</span>
-      {children}
-    </label>
-  )
-}
-
-function StatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-2 text-lg font-semibold text-slate-100">{value}</div>
-    </div>
-  )
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div className="rounded-md border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-500">{text}</div>
-}
-
-function PaginationBar({
-  page,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  page: number
-  pageSize: number
-  total: number
-  onPageChange: (page: number) => void
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const canPrev = page > 1
-  const canNext = page < totalPages
-
-  return (
-    <div className="mt-4 flex flex-col gap-3 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="text-xs text-slate-500">
-        第 {page} / {totalPages} 页，共 {total} 条
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onPageChange(Math.max(1, page - 1))}
-          disabled={!canPrev}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          上一页
-        </button>
-        <button
-          type="button"
-          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-          disabled={!canNext}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          下一页
-          <ChevronRight className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function collectTaskImageURLs(task: AdminImageTaskItem): string[] {
-  const candidates = [...(task.imageUrls ?? []), task.imageUrl ?? '']
-  return Array.from(new Set(candidates.map((item) => item.trim()).filter(Boolean)))
-}
-
-type TaskRequestSnapshot = {
-  prompt?: string
-  size?: string
-  style?: string
-  count?: number
-  quality?: string
-  outputFormat?: string
-  referenceImageUrl?: string
-}
-
-function parseTaskRequestParams(raw?: string): TaskRequestSnapshot | null {
-  if (!raw?.trim()) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as TaskRequestSnapshot
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
-  } catch {
-    return null
+function Form({ children, onSave }: { children: ReactNode; onSave: () => void }) { return <div className="space-y-4">{children}<div className="flex justify-end gap-2"><Button primary onClick={onSave}>保存</Button></div></div> }
+function UploadField({ label, value, onChange, upload }: { label: string; value: string; onChange: (v: string) => void; upload: (file: File) => Promise<{ imageUrl: string }> }) { const [loading, setLoading] = useState(false); return <div><LabeledInput label={label} value={value} onChange={onChange} /><label className="mt-2 inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50">{loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}上传本地图片<input className="hidden" type="file" accept="image/*" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; setLoading(true); try { const r = await upload(file); onChange(r.imageUrl) } finally { setLoading(false); e.target.value = '' } }} /></label></div> }
+
+function Panel({ title, desc, actions, children }: { title: string; desc?: string; actions?: ReactNode; children: ReactNode }) { return <section className="admin-panel rounded-[28px] border border-white/80 bg-white/90 p-4 shadow-sm sm:p-5"><div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-bold">{title}</h2>{desc ? <p className="mt-1 text-sm text-slate-500">{desc}</p> : null}</div>{actions}</div>{children}</section> }
+function MetricCard({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) { return <div className="admin-metric rounded-[26px] bg-white/90 p-4 shadow-sm sm:p-5"><div className="text-sm text-slate-500">{label}</div><div className="mt-3 text-2xl font-bold">{value}</div>{sub ? <div className="mt-2 text-sm text-slate-500">{sub}</div> : null}</div> }
+function OverviewCard({ icon, label, value, sub, aside }: { icon: ReactNode; label: string; value: ReactNode; sub?: ReactNode; aside?: ReactNode }) { return <div className="overview-card rounded-[26px] bg-white/90 p-4 shadow-sm sm:p-5"><div className="flex items-start justify-between gap-3"><div className="text-emerald-500">{icon}</div><div className="text-sm text-slate-500">{label}</div></div><div className="mt-4 text-2xl font-black tracking-tight text-slate-950">{value}</div><div className="mt-2 flex items-end justify-between gap-3 text-sm"><span className="text-slate-500">{sub}</span>{aside ? <span className="font-bold text-emerald-600">{aside}</span> : null}</div></div> }
+function RedeemSummary({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) { return <div className="overview-redeem-card rounded-[22px] bg-white/90 p-4 shadow-sm"><div className="text-sm text-slate-500">{label}</div><div className="mt-2 flex items-end justify-between gap-3"><span className="text-2xl font-black text-slate-800">{value}</span>{sub ? <span className="text-sm font-semibold text-emerald-600">{sub}</span> : null}</div></div> }
+function TrendBar({ value, max, color }: { value: number; max: number; color: string }) { return <div className="flex h-full w-4 items-end justify-center"><div className={`relative w-3 rounded-full ${color}`} style={{ height: value ? Math.max(6, (value / max) * 190) : 3 }}><span className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs font-bold text-slate-800">{value}</span></div></div> }
+function ResponsiveTable({ headers, rows, empty }: { headers: string[]; rows: ReactNode[][]; empty: string }) { return <div className="admin-table-wrap overflow-hidden rounded-3xl border border-slate-100 bg-white"><div className="overflow-x-auto"><table className="admin-table min-w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{headers.map(h => <th key={h} className="whitespace-nowrap px-4 py-3 font-semibold">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.length ? rows.map((row, i) => <tr key={i}>{row.map((cell, j) => <td key={j} className="whitespace-nowrap px-4 py-3 align-middle text-slate-700">{cell}</td>)}</tr>) : <tr><td colSpan={headers.length} className="p-8"><Empty text={empty} /></td></tr>}</tbody></table></div></div> }
+function Pagination({ page, total, pageSize, onChange }: { page: number; total: number; pageSize: number; onChange: (p: number) => void }) { const pages = Math.max(1, Math.ceil(total / Math.max(1, pageSize))); return <div className="mt-4 flex items-center justify-between text-sm text-slate-500"><span>共 {total} 条 / 第 {page} 页</span><div className="flex gap-2"><Button disabled={page <= 1} onClick={() => onChange(page - 1)}>上一页</Button><Button disabled={page >= pages} onClick={() => onChange(page + 1)}>下一页</Button></div></div> }
+function StatusPill({ value }: { value: string }) { const v = statusText(value); const green = ['success','approved','active','启用','正常','使用中','可用','未使用'].includes(value) || ['成功','已通过','启用','正常','使用中','可用','未使用'].includes(v); const red = ['failed','rejected','disabled','error','禁用','停用'].includes(value) || ['失败','已驳回','禁用','停用'].includes(v); return <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${green ? 'bg-emerald-100 text-emerald-700' : red ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>{v}</span> }
+function Button({ children, onClick, primary, danger, disabled, loading, small }: { children: ReactNode; onClick?: () => void; primary?: boolean; danger?: boolean; disabled?: boolean; loading?: boolean; small?: boolean }) { return <button type="button" disabled={disabled || loading} onClick={onClick} className={`${primary ? 'btn-primary' : danger ? 'btn-danger' : 'btn'} ${small ? 'px-3 py-1.5 text-xs' : ''} disabled:opacity-50`}>{loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{children}</button> }
+function Filter({ keyword, setKeyword, placeholder, select, setSelect, options, search }: { keyword: string; setKeyword: (v: string) => void; placeholder: string; select: string; setSelect: (v: string) => void; options: Array<[string, string]>; search: () => void }) { return <div className="flex flex-wrap gap-2"><Select value={select} onChange={setSelect} options={options} /><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input className="input pl-9" value={keyword} onChange={e => setKeyword(e.target.value)} placeholder={placeholder} /></div><Button primary onClick={search}>搜索</Button></div> }
+function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: Array<[string, string]> }) { return <select className="input" value={value} onChange={e => onChange(e.target.value)}>{options.map(([v, label]) => <option key={v} value={v}>{label}</option>)}</select> }
+function LabeledInput({ label, value, onChange, type = 'text', placeholder }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) { return <label className="block"><span className="mb-1 block text-sm font-medium text-slate-600">{label}</span><input className="input w-full" type={type} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} /></label> }
+function TextAreaInput({ label, value, onChange, rows = 4 }: { label: string; value: string; onChange: (v: string) => void; rows?: number }) { return <label className="block"><span className="mb-1 block text-sm font-medium text-slate-600">{label}</span><textarea className="input min-h-28 w-full resize-y" rows={rows} value={value} onChange={e => onChange(e.target.value)} /></label> }
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) { return <LabeledInput label={label} value={String(value)} onChange={v => onChange(Number(v) || 0)} /> }
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) { return <label className="flex items-center justify-between rounded-2xl border border-slate-100 p-3 text-sm"><span>{label}</span><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /></label> }
+function Empty({ text }: { text: string }) { return <div className="w-full py-8 text-center text-sm text-slate-400">{text}</div> }
+function Mono({ children }: { children: ReactNode }) { return <span className="font-mono text-xs">{children}</span> }
+function Detail({ rows }: { rows: Array<[string, ReactNode]> }) { return <dl className="space-y-3">{rows.filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => <div key={k} className="rounded-2xl bg-slate-50 p-3"><dt className="text-xs font-semibold text-slate-500">{k}</dt><dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-700">{v}</dd></div>)}</dl> }
+function PreText({ value }: { value: string }) { return value ? <pre className="max-h-72 overflow-auto rounded-xl bg-slate-900 p-3 text-xs leading-5 text-slate-100">{value}</pre> : <span>-</span> }
+
+function modalTitle(s: Modal): string {
+  switch (s.type) {
+    case 'confirm': return s.data.title
+    case 'task': return '任务详情'
+    case 'redeemCode': return '兑换码详情'
+    case 'prompt': return s.item ? '编辑提示词' : '新建提示词'
+    case 'promptReason': return s.action === 'reject' ? '驳回提示词' : '删除提示词'
+    case 'package': return s.item ? '编辑商品套餐' : '新建商品套餐'
+    case 'product': return s.item ? '编辑商品' : '新建商品'
+    case 'category': return s.item ? '编辑商品分类' : '新建商品分类'
+    case 'providerKey': return s.item ? '编辑 API Key' : '新建 API Key'
+    case 'announcement': return s.item ? '编辑公告' : '新建公告'
+    case 'points': return '调整积分'
+    case 'userLogs': return '用户日志'
+    case 'log': return '日志详情'
+    default: return ''
   }
 }
-
-function buildTaskRequestOptions(task: AdminImageTaskItem): Array<{ label: string; value: string }> {
-  const parsed = parseTaskRequestParams(task.requestParams)
-  if (!parsed) {
-    return []
+function num(v: unknown): string { const n = Number(v ?? 0); return Number.isFinite(n) ? n.toLocaleString() : '0' }
+function date(v?: string | null): string { if (!v) return '-'; const d = new Date(v); return Number.isNaN(d.getTime()) ? v : d.toLocaleString('zh-CN', { hour12: false }) }
+function money(cents: number): string { return `${(Number(cents || 0) / 100).toFixed(2)} 元` }
+function clip(v: unknown, len = 24): string { const s = String(v || ''); return s.length > len ? `${s.slice(0, len)}...` : s }
+function pretty(v: unknown): string { if (!v) return ''; try { return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v, null, 2) } catch { return String(v) } }
+function kindLabel(kind: AnnouncementItem['kind']): string { if (kind === 'pinned') return '置顶'; if (kind === 'personal') return '个人公告'; return '普通' }
+function statusText(v: string): string { const map: Record<string, string> = { success: '成功', failed: '失败', generating: '生成中', running: '进行中', approved: '已通过', rejected: '已驳回', pending: '待审核', active: '可用', used: '已使用', disabled: '已禁用', expired: '已过期', low_balance: '余额低', error: '异常' }; return map[v] || v }
+function logActionLabel(action: string): string {
+  const map: Record<string, string> = {
+    'product.create': '新建商品',
+    'product.update': '修改商品',
+    'product.delete': '删除商品',
+    'product_category.create': '新建商品分类',
+    'product_category.update': '修改商品分类',
+    'product_category.delete': '删除商品分类',
+    'billing_package.create': '新建商品套餐',
+    'billing_package.update': '修改商品套餐',
+    'billing_package.delete': '删除商品套餐',
+    'prompt_plaza.review': '审核提示词',
+    'prompt_plaza.create': '新建提示词',
+    'prompt_plaza.update': '修改提示词',
+    'prompt_plaza.delete': '删除提示词',
+    'redeem_code.create': '生成兑换码',
+    'redeem_code.delete': '删除兑换码',
+    'announcement.create': '新建公告',
+    'announcement.update': '修改公告',
+    'announcement.delete': '删除公告',
+    'provider_key.create': '新建 API Key',
+    'provider_key.update': '修改 API Key',
+    'provider_key.delete': '删除 API Key',
+    'user.status': '修改用户状态',
+    'user.points_adjust': '调整用户积分',
   }
-
-  return [
-    { label: '提示词', value: parsed.prompt || task.prompt || '-' },
-    { label: '图片尺寸', value: formatTaskOptionValue(parsed.size, taskOptionLabels.size) },
-    { label: '生成张数', value: parsed.count ? `${parsed.count} 张` : '-' },
-    { label: '风格', value: formatTaskOptionValue(parsed.style, taskOptionLabels.style) },
-    { label: '质量', value: formatTaskOptionValue(parsed.quality, taskOptionLabels.quality) },
-    { label: '输出格式', value: formatTaskOptionValue(parsed.outputFormat, taskOptionLabels.outputFormat) },
-    { label: '参考图片', value: parsed.referenceImageUrl || '-' },
-  ]
+  return map[action] || action.replace(/\./g, ' / ')
 }
-
-function formatTaskRequestParams(raw?: string): string {
-  if (!raw?.trim()) {
-    return ''
+function logTargetLabel(item: AdminActionLogItem): string {
+  const typeLabel: Record<string, string> = {
+    product: '商品',
+    product_category: '商品分类',
+    billing_package: '商品套餐',
+    prompt_plaza: '提示词广场',
+    redeem_code: '兑换码',
+    announcement: '公告',
+    provider_key: 'API Key',
+    user: '用户',
   }
-
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
-  }
+  const label = typeLabel[item.targetType] || item.targetType
+  return `${label} #${item.targetId}`
 }
-
-const taskOptionLabels = {
-  size: {
-    '1024x1024': '1024 x 1024',
-    '768x1344': '768 x 1344',
-    '1344x768': '1344 x 768',
-  },
-  style: {
-    '': '无',
-    realistic: '写实',
-    anime: '动漫',
-    cinematic: '电影感',
-    sketch: '素描',
-    watercolor: '水彩',
-  },
-  quality: {
-    '': '默认',
-    auto: '自动',
-    low: '低',
-    medium: '中',
-    high: '高',
-  },
-  outputFormat: {
-    '': '默认',
-    default: '默认',
-    jpeg: 'JPEG',
-    webp: 'WebP',
-    png: 'PNG',
-  },
-} satisfies Record<string, Record<string, string>>
-
-function formatTaskOptionValue(value: string | undefined, labels: Record<string, string>): string {
-  const trimmed = value?.trim() ?? ''
-  if (Object.prototype.hasOwnProperty.call(labels, trimmed)) {
-    return labels[trimmed]
-  }
-
-  return trimmed || '-'
+function paramSummary(raw?: string): string { if (!raw) return '-'; try { const p = JSON.parse(raw); return [p.size, p.count ? `${p.count}张` : '', p.quality, p.outputFormat].filter(Boolean).join(' / ') || '-' } catch { return '-' } }
+function taskNo(id: string): string { const s = String(id || '').trim(); const m = s.match(/\d+$/); return `#${m ? m[0] : clip(s, 10)}` }
+function taskSource(item: AdminImageTaskItem): string { return (item.creditSource || item.provider || '-').toString() }
+function durationText(createdAt?: string | null, updatedAt?: string | null): string { if (!createdAt || !updatedAt) return '-'; const start = new Date(createdAt).getTime(); const end = new Date(updatedAt).getTime(); if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '-'; const seconds = Math.round((end - start) / 1000); if (seconds < 60) return `${seconds}s`; const minutes = Math.floor(seconds / 60); const rest = seconds % 60; return rest ? `${minutes}m${rest}s` : `${minutes}m` }
+function taskImagePairs(item: AdminImageTaskItem): Array<{ original: string; thumb?: string }> {
+  const originals = uniqueImageUrls([...(item.imageUrls || []), item.imageUrl])
+  const thumbs = uniqueImageUrls([...(item.thumbnailUrls || []), item.thumbnailUrl])
+  const thumbByKey = new Map(thumbs.map(url => [imageDedupeKey(url), url]))
+  const source = originals.length ? originals : thumbs
+  return source.map(original => ({ original, thumb: thumbByKey.get(imageDedupeKey(original)) })).filter(image => image.original)
 }
-
-function activityRecordLabel(recordType: UserActivityItem['recordType']) {
-  switch (recordType) {
-    case 'image_task':
-      return '生图任务'
-    case 'recharge_order':
-      return '充值订单'
-    case 'points_log':
-      return '积分流水'
-    case 'credit_log':
-      return '次数流水'
-    default:
-      return '记录'
-  }
+function normalizedTrendPoints(trend: AdminStatsResponse['taskTrend24h'] | undefined, stats: AdminStatsResponse | null): Array<{ label: string; success: number; failed: number }> {
+  const points = (trend ?? []).filter(point => point && (Number(point.success) > 0 || Number(point.failed) > 0))
+  if (points.length) return points
+  const success = Number(stats?.tasksSuccess ?? 0)
+  const failed = Number(stats?.tasksFailed ?? 0)
+  if (success > 0 || failed > 0) return [{ label: '历史累计', success, failed }]
+  return trend ?? []
 }
-
-function activityRecordShortLabel(recordType: UserActivityItem['recordType']) {
-  switch (recordType) {
-    case 'image_task':
-      return '任务'
-    case 'recharge_order':
-      return '订单'
-    case 'points_log':
-      return '积分'
-    case 'credit_log':
-      return '次数'
-    default:
-      return '记录'
+function uniqueImageUrls(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>()
+  const urls: string[] = []
+  for (const value of values) {
+    const url = String(value || '').trim()
+    if (!url) continue
+    const key = imageDedupeKey(url)
+    if (seen.has(key)) continue
+    seen.add(key)
+    urls.push(url)
   }
+  return urls
 }
-
-function activityRecordValue(item: UserActivityItem) {
-  switch (item.recordType) {
-    case 'image_task':
-      return `${item.creditsAmount ?? 0} 次`
-    case 'recharge_order':
-      return `${((item.amountCents ?? 0) / 100).toFixed(2)} 元`
-    case 'points_log':
-      return `${(item.deltaPoints ?? 0) >= 0 ? '+' : ''}${item.deltaPoints ?? 0} 积分`
-    case 'credit_log':
-      return `免费 ${(item.deltaFreeCredits ?? 0) >= 0 ? '+' : ''}${item.deltaFreeCredits ?? 0} / 充值 ${
-        (item.deltaPaidCredits ?? 0) >= 0 ? '+' : ''
-      }${item.deltaPaidCredits ?? 0}`
-    default:
-      return ''
-  }
+function imageDedupeKey(value: string): string {
+  let pathValue = value
+  try { pathValue = new URL(value, 'http://local.invalid').pathname } catch {}
+  pathValue = pathValue.replace(/\/thumbs\//g, '/').replace(/\\/g, '/')
+  return pathValue.replace(/\.(jpe?g|png|webp|gif|bmp|avif)$/i, '')
 }
+function formatBytes(v: number): string { if (!v) return '0 B'; if (v < 1024) return `${v} B`; if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`; return `${(v / 1024 / 1024).toFixed(1)} MB` }
+function toNumbers<T extends Record<string, unknown>>(obj: T): T { const out: Record<string, unknown> = { ...obj }; for (const key of Object.keys(out)) { const value = out[key]; if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) out[key] = Number(value) } return out as T }
+async function copyText(text: string) { try { await navigator.clipboard.writeText(text) } catch {} }
 
-function getUserRoleLabel(role: string): string {
-  switch (role) {
-    case 'admin':
-      return '管理员'
-    case 'user':
-      return '普通用户'
-    default:
-      return role || '未知'
-  }
-}
-
-function getPackageTypeLabel(value: string): string {
-  switch (value) {
-    case 'recharge':
-      return '充值档位'
-    case 'redeem':
-      return '积分兑换'
-    default:
-      return value || '未知'
-  }
-}
-
-function getImageTaskStatusLabel(status: string): string {
-  switch (status) {
-    case 'generating':
-    case 'running':
-      return '生成中'
-    case 'success':
-      return '成功'
-    case 'failed':
-      return '失败'
-    case 'idle':
-      return '待开始'
-    default:
-      return status || '未知'
-  }
-}
-
-function getTaskStatusClass(status: string): string {
-  switch (status) {
-    case 'success':
-      return 'bg-emerald-400/15 text-emerald-300'
-    case 'failed':
-      return 'bg-rose-500/15 text-rose-300'
-    case 'generating':
-    case 'running':
-      return 'bg-amber-500/15 text-amber-300'
-    default:
-      return 'bg-slate-800 text-slate-300'
-  }
-}
-
-function getOrderStatusClass(status: string): string {
-  switch (status) {
-    case 'paid':
-      return 'bg-emerald-400/15 text-emerald-300'
-    case 'pending':
-      return 'bg-amber-500/15 text-amber-300'
-    case 'canceled':
-      return 'bg-slate-800 text-slate-300'
-    case 'refunded':
-      return 'bg-rose-500/15 text-rose-300'
-    default:
-      return 'bg-slate-800 text-slate-300'
-  }
-}
-
-function getRechargeOrderStatusLabel(status: string): string {
-  switch (status) {
-    case 'pending':
-      return '待支付'
-    case 'paid':
-      return '已支付'
-    case 'canceled':
-      return '已取消'
-    case 'refunded':
-      return '已退款'
-    default:
-      return status || '未知'
-  }
-}
-
-function getCreditSourceLabel(value: string): string {
-  switch (value) {
-    case 'free':
-      return '免费次数'
-    case 'paid':
-      return '充值次数'
-    case 'mixed':
-      return '混合消耗'
-    default:
-      return value || '未知'
-  }
-}
-
-function getAuditStatusLabel(value: string): string {
-  switch (value) {
-    case 'pass':
-      return '通过'
-    case 'rejected':
-      return '拒绝'
-    default:
-      return value || '未知'
-  }
-}
-
-function formatDateTime(value?: string | null): string {
-  if (!value) {
-    return '-'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date)
-}
+const adminStyle = document.createElement('style')
+adminStyle.textContent = `.admin-shell{height:100vh;overflow:hidden}.admin-layout{height:100vh;overflow:hidden}.admin-sidebar{height:100vh;flex:0 0 284px;background:linear-gradient(180deg,#eef1ff 0%,#f8fbff 100%);box-shadow:18px 0 45px rgba(99,102,241,.08)}.admin-content{height:100vh;display:flex;flex-direction:column;overflow:hidden;min-width:0}.admin-header{flex:0 0 auto;min-height:76px}.admin-main{flex:1;overflow:auto;max-width:1680px;width:100%;margin:0 auto;box-sizing:border-box}.admin-panel{min-width:0;box-shadow:0 18px 48px rgba(15,23,42,.06);backdrop-filter:blur(12px);overflow:hidden}.admin-metric{box-shadow:0 16px 42px rgba(15,23,42,.055);min-height:132px}.admin-table-wrap{max-width:100%;box-shadow:0 12px 34px rgba(15,23,42,.04)}.admin-table{width:100%}.admin-table th{height:50px}.admin-table td{height:56px}.admin-nav{max-height:calc(100vh - 190px)}.redeem-layout{align-items:start;grid-template-columns:340px minmax(0,1fr)}.redeem-layout>*{min-width:0}.redeem-layout .admin-table{min-width:1040px}.redeem-layout .admin-panel{padding:1.25rem}.overview-page{position:relative}.overview-page:before{content:"";position:fixed;inset:76px 0 0 284px;pointer-events:none;background:radial-gradient(circle at 8% 8%,rgba(99,102,241,.17),transparent 31%),radial-gradient(circle at 92% 86%,rgba(20,184,166,.18),transparent 28%);z-index:-1}.overview-card{min-height:118px;box-shadow:0 20px 52px rgba(15,23,42,.055);backdrop-filter:blur(10px)}.overview-chart{box-shadow:0 24px 70px rgba(15,23,42,.07);backdrop-filter:blur(12px)}.overview-bars{box-shadow:inset 0 1px 0 rgba(148,163,184,.16)}.overview-redeem-card{min-height:94px;box-shadow:0 18px 48px rgba(15,23,42,.055)}.btn,.btn-primary,.btn-danger,.icon-btn{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;border-radius:999px;font-weight:700;transition:.15s;white-space:nowrap;line-height:1}.btn{border:1px solid #e2e8f0;background:rgba(255,255,255,.86);color:#334155;padding:.62rem 1rem;box-shadow:0 10px 26px rgba(15,23,42,.035)}.btn:hover{background:white;transform:translateY(-1px)}.btn-primary{border:1px solid #6366f1;background:#6366f1;color:white;padding:.62rem 1rem;box-shadow:0 14px 30px rgba(99,102,241,.24)}.btn-primary:hover{background:#5558ef;transform:translateY(-1px)}.btn-danger{border:1px solid #fecdd3;background:#fff1f2;color:#be123c;padding:.62rem 1rem}.icon-btn{border:1px solid #e2e8f0;background:white;color:#334155;padding:.62rem;box-shadow:0 10px 24px rgba(15,23,42,.04)}.input{border:1px solid #e2e8f0;background:rgba(255,255,255,.9);border-radius:1rem;padding:.68rem .95rem;color:#1e293b;outline:none;min-height:2.75rem;box-shadow:0 10px 24px rgba(15,23,42,.025)}.input:focus{border-color:#818cf8;box-shadow:0 0 0 3px rgba(99,102,241,.12)}.field-label{display:block;font-size:.875rem;font-weight:500;color:#475569}@media (min-width:1024px){.admin-main{padding-top:1.75rem}.admin-panel{border-radius:30px}.admin-table td{padding-top:.68rem;padding-bottom:.68rem}}@media (max-width:1440px) and (min-width:1024px){.admin-sidebar{flex-basis:250px;width:250px}.overview-page:before{left:250px}.admin-main{padding-left:1rem;padding-right:1rem}.redeem-layout{grid-template-columns:310px minmax(0,1fr);gap:1rem}.admin-table th,.admin-table td{padding-left:.72rem;padding-right:.72rem}.btn,.btn-primary,.btn-danger{padding:.56rem .85rem}.input{min-height:2.55rem}}@media (max-width:1180px) and (min-width:1024px){.redeem-layout{grid-template-columns:1fr}.redeem-layout .admin-table{min-width:980px}}@media (max-width:1023px){.admin-shell,.admin-layout,.admin-content{height:auto;min-height:100vh;overflow:visible}.admin-header{position:sticky}.admin-header>div{align-items:flex-start}.admin-header>div>div:last-child{margin-left:auto;max-width:100%;justify-content:flex-end;overflow-x:auto;padding-bottom:.25rem}.admin-main{overflow:visible;padding-bottom:2rem}.admin-sidebar{height:100vh}.admin-panel{border-radius:24px}.overview-page:before{inset:70px 0 0 0}.admin-table{min-width:760px}.admin-table th,.admin-table td{height:auto}.btn,.btn-primary,.btn-danger{padding:.58rem .86rem;font-size:.875rem}.input{width:100%;min-width:0}}@media (max-width:640px){.admin-header .icon-btn{flex:0 0 auto}.admin-header>div{display:grid;grid-template-columns:auto 1fr;align-items:start}.admin-header>div>div:first-of-type{min-width:0}.admin-header>div>div:last-child{grid-column:1 / -1;margin-left:auto;justify-content:flex-end;flex-wrap:nowrap;width:100%;padding-left:2.5rem}.admin-header .btn{padding:.52rem .72rem}.admin-main{padding:.75rem}.admin-panel{padding:1rem;border-radius:22px}.admin-metric{min-height:108px}.overview-card{min-height:108px}.overview-chart{padding:1rem;border-radius:24px}.overview-bars{padding:.75rem}.overview-bars>div{min-width:620px}.overview-redeem-card{min-height:84px}.admin-table{min-width:680px}.admin-table th,.admin-table td{padding:.72rem .85rem}.redeem-layout{grid-template-columns:1fr!important}.redeem-layout .admin-table{min-width:900px}.admin-nav{max-height:calc(100vh - 170px)}}`
+if (typeof document !== 'undefined' && !document.getElementById('admin-console-inline-style')) { adminStyle.id = 'admin-console-inline-style'; document.head.appendChild(adminStyle) }

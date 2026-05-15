@@ -1,12 +1,13 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, ReactNode } from 'react'
+import type { ChangeEvent, ClipboardEvent, DragEvent, ReactNode } from 'react'
 import {
+  ArrowUpDown,
   BadgeCheck,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
-  CreditCard,
   Download,
   Eye,
   EyeOff,
@@ -22,13 +23,18 @@ import {
   LogIn,
   LogOut,
   Mail,
+  Megaphone,
   Menu,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCcw,
   ReceiptText,
   Send,
+  Search,
   Sparkles,
+  ShoppingBag,
+  Sun,
   Timer,
   Upload,
   UserRound,
@@ -44,6 +50,7 @@ import {
   getStoredToken,
   saveStoredToken,
 } from '@/api/client'
+import type { DownloadedFile } from '@/api/client'
 import { AdminConsole } from './admin/AdminConsole'
 import { TopNotice } from './components/TopNotice'
 import type {
@@ -52,28 +59,32 @@ import type {
   AdminImageTaskItem,
   AdminPackageItem,
   AdminPackagePayload,
-  AdminRechargeOrderItem,
   AdminStatsResponse,
   AdminUserItem,
+  AnnouncementItem,
   BillingSettingsResponse,
+  InviteInfoResponse,
   ListCreditLogsResponse,
   ListPointsLogsResponse,
   ListUserActivityResponse,
   CreditLogItem,
   AuthResponse,
+  CaptchaResponse,
   ImageTaskDetailResponse,
   ImageTaskItem,
   PackageItem,
+  ProductCategoryItem,
+  ProductItem,
   PointsLogItem,
   PointsResponse,
-  RechargeOrderItem,
   UploadImageResponse,
   UserActivityItem,
   UserInfo,
 } from '@/types/api'
 
 type AuthMode = 'login' | 'register'
-type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts'
+type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
+type UserTheme = 'light' | 'dark'
 type FlowLogType = 'points' | 'credits'
 type FlowLogDetail =
   | { type: 'points'; item: PointsLogItem }
@@ -88,7 +99,8 @@ type BusyAction =
   | 'refresh'
   | `retry:${string}`
   | `purchase:${string}`
-  | `confirm-recharge:${string}`
+  | 'copy-invite-link'
+  | 'redeem-code'
   | 'change-password'
   | null
 
@@ -97,6 +109,15 @@ type ReferenceImageSource = 'none' | 'local' | 'network'
 type GenerationStatus = 'idle' | 'running' | 'success' | 'failed'
 
 const REGISTRATION_ENABLED = String(import.meta.env.VITE_REGISTRATION_ENABLED ?? 'true').toLowerCase() !== 'false'
+const USER_THEME_STORAGE_KEY = 'image2-user-theme'
+const ACTIVE_PAGE_STORAGE_KEY = 'image2-active-page'
+const BRAND_ICON_URL = '/brand-avatar.jpg'
+const ICP_RECORD_NUMBER = '粤ICP备2026057742号'
+const ICP_RECORD_URL = 'https://beian.miit.gov.cn/'
+const POLICE_RECORD_NUMBER = '粤公网安备44050702001607号'
+const POLICE_RECORD_URL = 'https://beian.mps.gov.cn/#/query/webSearch?code=44050702001607'
+const APP_PAGES: AppPage[] = ['home', 'orders', 'profile', 'flows', 'recharge', 'prompts', 'products']
+const REGISTRATION_DAILY_LIMIT_MESSAGE = '当日注册额度已达到上限，请0点后再尝试'
 
 interface GenerationProgress {
   taskId: string | null
@@ -104,6 +125,7 @@ interface GenerationProgress {
   status: GenerationStatus
   startedAt: number | null
   elapsedSeconds: number
+  imageElapsedSeconds: number[]
   total: number
   completed: number
   success: number
@@ -121,6 +143,7 @@ interface TaskRequestSnapshot {
   quality?: string
   outputFormat?: string
   referenceImageUrl?: string
+  emailNotifyOnComplete?: boolean
 }
 
 interface PromptGalleryItem {
@@ -128,11 +151,18 @@ interface PromptGalleryItem {
   title: string
   prompt: string
   previewUrl: string
+  previewThumbUrl?: string
+  tags: string[]
   author: string
   status: 'approved' | 'pending' | 'rejected'
   favorites: number
   createdAt: string
+  approvedAt?: string
+  serialNo?: string
+  isFavorited?: boolean
 }
+
+type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
 
 interface PasswordChangeForm {
   currentPassword: string
@@ -146,6 +176,19 @@ interface WechatSaveGuideState {
   title: string
 }
 
+type RechargeConfirmDialogState =
+  | {
+      open: false
+    }
+  | {
+      open: true
+      kind: 'package'
+      title: string
+      lines: string[]
+      confirmLabel: string
+      href?: string
+    }
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -153,6 +196,23 @@ function escapeXml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;')
+}
+
+function readStoredUserTheme(): UserTheme {
+  try {
+    return window.localStorage.getItem(USER_THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
+function readStoredActivePage(): AppPage {
+  try {
+    const value = window.localStorage.getItem(ACTIVE_PAGE_STORAGE_KEY)
+    return APP_PAGES.includes(value as AppPage) ? (value as AppPage) : 'home'
+  } catch {
+    return 'home'
+  }
 }
 
 function createPromptPreviewArt(options: {
@@ -217,70 +277,22 @@ const appNavItems: Array<{
   { page: 'orders', label: '日志', icon: <History className="h-4 w-4" /> },
   { page: 'flows', label: '流水', icon: <Wallet className="h-4 w-4" /> },
   { page: 'profile', label: '个人', icon: <UserRound className="h-4 w-4" /> },
-  { page: 'recharge', label: '充值', icon: <CreditCard className="h-4 w-4" /> },
+  { page: 'recharge', label: '兑换码', icon: <KeyRound className="h-4 w-4" /> },
+  { page: 'products', label: '商品', icon: <ShoppingBag className="h-4 w-4" /> },
 ]
 
-const featuredPromptItems: PromptGalleryItem[] = [
-  {
-    id: 'gallery-city-fox',
-    title: '机械狐狸城市屋顶',
-    prompt: '一只站在城市屋顶上的机械狐狸，电影感光影，雨夜霓虹，金属细节，高级质感',
-    previewUrl: createPromptPreviewArt({
-      title: '机械狐狸城市屋顶',
-      subtitle: '雨夜霓虹 · 电影感光影',
-      accent: '#7c3aed',
-      accentSoft: '#38bdf8',
-      motif: 'fox',
-    }),
-    author: '系统推荐',
-    status: 'approved',
-    favorites: 128,
-    createdAt: '2026-05-01T10:00:00+08:00',
-  },
-  {
-    id: 'gallery-product-light',
-    title: '高级产品棚拍光影',
-    prompt: '一款未来感智能设备，黑色磨砂材质，柔和棚拍光，极简背景，商业广告摄影',
-    previewUrl: createPromptPreviewArt({
-      title: '高级产品棚拍光影',
-      subtitle: '极简背景 · 商业广告摄影',
-      accent: '#db2777',
-      accentSoft: '#f59e0b',
-      motif: 'product',
-    }),
-    author: '系统推荐',
-    status: 'approved',
-    favorites: 86,
-    createdAt: '2026-05-01T11:30:00+08:00',
-  },
-  {
-    id: 'gallery-anime-room',
-    title: '治愈系动画房间',
-    prompt: '温暖的动画风格房间，午后阳光穿过窗帘，桌上有书和咖啡，柔和色彩，细节丰富',
-    previewUrl: createPromptPreviewArt({
-      title: '治愈系动画房间',
-      subtitle: '午后阳光 · 柔和色彩',
-      accent: '#10b981',
-      accentSoft: '#a855f7',
-      motif: 'room',
-    }),
-    author: '系统推荐',
-    status: 'approved',
-    favorites: 64,
-    createdAt: '2026-05-02T09:20:00+08:00',
-  },
-]
+const featuredPromptItems: PromptGalleryItem[] = []
 
 const sizeOptions = [
   { value: '1024x1024', label: '1024x1024 方图' },
   { value: '1024x1536', label: '1024x1536 竖图' },
   { value: '1536x1024', label: '1536x1024 横图' },
-  { value: '2048x2048', label: '2048x2048 高清方图' },
-  { value: '2048x1152', label: '2048x1152 宽屏' },
-  { value: '3840x2160', label: '3840x2160 4K 横屏' },
-  { value: '2160x3840', label: '2160x3840 4K 竖屏' },
-  { value: 'auto', label: '自动' },
+  { value: '2048x2048', label: '2048x2048 2K 方图' },
+  { value: '2048x1152', label: '2048x1152 2K 横图' },
+  { value: '3840x2160', label: '3840x2160 4K 横图' },
+  { value: '2160x3840', label: '2160x3840 4K 竖图' },
   { value: 'custom', label: '自定义尺寸' },
+  { value: 'auto', label: '自动' },
 ]
 
 const styleOptions = [
@@ -314,6 +326,7 @@ const emptyGenerationProgress: GenerationProgress = {
   status: 'idle',
   startedAt: null,
   elapsedSeconds: 0,
+  imageElapsedSeconds: [],
   total: 1,
   completed: 0,
   success: 0,
@@ -325,28 +338,36 @@ const emptyGenerationProgress: GenerationProgress = {
 
 const emptyPreview: ImageTaskDetailResponse = {
   taskId: '-',
+  requestedCount: 0,
   prompt: '还没有生成任务，先提交一条提示词。',
   imageUrl: '',
-  costPoints: 1,
-  costCredits: 1,
+  costPoints: 0,
+  costCredits: 0,
   freeCreditsCost: 0,
   paidCreditsCost: 0,
   creditSource: 'free',
   status: 'idle',
   requestParams: '',
   createdAt: '',
+  updatedAt: '',
 }
 
 const HISTORY_PAGE_SIZE = 5
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
-const RECHARGE_ORDER_PAGE_SIZE = 5
+const CUSTOM_SIZE_MAX_SIDE = 3840
+const CUSTOM_SIZE_MIN_PIXELS = 655360
+const CUSTOM_SIZE_MAX_PIXELS = 8294400
+const HIGH_QUALITY_MAX_PIXELS = 4194304
+const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
+const HIGH_QUALITY_SIZE_LIMIT_MESSAGE = '4K 或超大尺寸使用高质量时，上游失败率较高；如果失败会自动退回消耗，可改用“自动”或“中”质量提升成功率。'
 
 function App() {
   const [mode, setMode] = useState<AuthMode>(() =>
     REGISTRATION_ENABLED && window.location.pathname === '/register' ? 'register' : 'login',
   )
-  const [activePage, setActivePage] = useState<AppPage>('home')
+  const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
+  const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [busy, setBusy] = useState<BusyAction>(null)
@@ -355,12 +376,18 @@ function App() {
   const [authForm, setAuthForm] = useState({
     email: '',
     code: '',
+    captchaCode: '',
     username: '',
+    inviteCode: readInviteCodeFromLocation(),
     account: '',
     password: '',
     confirmPassword: '',
   })
   const [authFormSeed, setAuthFormSeed] = useState(0)
+  const [captcha, setCaptcha] = useState<CaptchaResponse | null>(null)
+  const [emailCodeCountdown, setEmailCodeCountdown] = useState(0)
+  const [emailCaptchaPassUntil, setEmailCaptchaPassUntil] = useState(0)
+  const [registrationDailyLimitReached, setRegistrationDailyLimitReached] = useState(false)
   const [changePasswordForm, setChangePasswordForm] = useState<PasswordChangeForm>({
     currentPassword: '',
     newPassword: '',
@@ -377,17 +404,18 @@ function App() {
   const [referenceImageURL, setReferenceImageURL] = useState('')
   const [referenceImageName, setReferenceImageName] = useState('')
   const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
+  const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
   const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
   const [showRegisterPassword, setShowRegisterPassword] = useState(false)
   const [showChangePassword, setShowChangePassword] = useState(false)
   const [referenceImageUploading, setReferenceImageUploading] = useState(false)
+  const [promptDragActive, setPromptDragActive] = useState(false)
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
   const [adminOpen, setAdminOpen] = useState(() => window.location.pathname.startsWith('/admin'))
   const [adminStats, setAdminStats] = useState<AdminStatsResponse | null>(null)
   const [adminUsers, setAdminUsers] = useState<AdminUserItem[]>([])
   const [adminTasks, setAdminTasks] = useState<AdminImageTaskItem[]>([])
-  const [adminOrders, setAdminOrders] = useState<AdminRechargeOrderItem[]>([])
   const [adminAudits, setAdminAudits] = useState<AdminContentAuditItem[]>([])
   const [adminActionLogs, setAdminActionLogs] = useState<AdminActionLogItem[]>([])
   const [adminPackages, setAdminPackages] = useState<AdminPackageItem[]>([])
@@ -407,10 +435,12 @@ function App() {
   const [creditLogTotal, setCreditLogTotal] = useState(0)
   const [packages, setPackages] = useState<PackageItem[]>([])
   const [billingSettings, setBillingSettings] = useState<BillingSettingsResponse | null>(null)
-  const [customRechargeCount, setCustomRechargeCount] = useState(10)
-  const [rechargeOrders, setRechargeOrders] = useState<RechargeOrderItem[]>([])
-  const [rechargeOrderPage, setRechargeOrderPage] = useState(1)
-  const [rechargeOrderTotal, setRechargeOrderTotal] = useState(0)
+  const [inviteInfo, setInviteInfo] = useState<InviteInfoResponse | null>(null)
+  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
+  const [announcementDialogOpen, setAnnouncementDialogOpen] = useState(false)
+  const [activeAnnouncementId, setActiveAnnouncementId] = useState<string | null>(null)
+  const [redeemCodeInput, setRedeemCodeInput] = useState('')
+  const [activeRechargePackageCode, setActiveRechargePackageCode] = useState('')
   const [preview, setPreview] = useState<ImageTaskDetailResponse>(emptyPreview)
   const [previewImageIndex, setPreviewImageIndex] = useState(0)
   const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
@@ -419,24 +449,92 @@ function App() {
     imageUrl: '',
     title: '',
   })
-  const [favoritePromptIds, setFavoritePromptIds] = useState<string[]>(['gallery-city-fox'])
-  const [submittedPrompts, setSubmittedPrompts] = useState<PromptGalleryItem[]>([])
+  const [rechargeConfirmDialog, setRechargeConfirmDialog] = useState<RechargeConfirmDialogState>({
+    open: false,
+  })
+  const [serverPromptItems, setServerPromptItems] = useState<PromptGalleryItem[]>([])
+  const [myPromptItems, setMyPromptItems] = useState<PromptGalleryItem[]>([])
+  const [products, setProducts] = useState<ProductItem[]>([])
+  const [productCategories, setProductCategories] = useState<ProductCategoryItem[]>([])
+  const [productKeyword, setProductKeyword] = useState('')
+  const [activeProductCategoryId, setActiveProductCategoryId] = useState('')
+  const [activeProduct, setActiveProduct] = useState<ProductItem | null>(null)
   const [promptSubmission, setPromptSubmission] = useState({
     title: '',
     prompt: '',
     previewUrl: '',
+    tags: [''],
   })
   const previewTaskIdRef = useRef(emptyPreview.taskId)
   const pollingTaskIdsRef = useRef<Set<string>>(new Set())
+  const checkinInFlightRef = useRef(false)
+  const downloadFileCacheRef = useRef<Map<string, DownloadedFile>>(new Map())
+  const downloadPendingRef = useRef<Map<string, Promise<DownloadedFile>>>(new Map())
 
   const isAuthed = token.length > 0
   const isAdmin = currentUser?.role === 'admin'
   const canRegister = REGISTRATION_ENABLED
   const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId)
-  const promptGalleryItems = useMemo(
-    () => [...submittedPrompts, ...featuredPromptItems],
-    [submittedPrompts],
+  const checkedInToday = isSameShanghaiDay(points?.lastCheckinAt ?? null)
+  const imageGenerationEnabled = billingSettings?.imageGenerationEnabled ?? true
+  const emailNotifyPointCost = Math.max(0, Math.floor(Number(billingSettings?.emailNotifyPointCost ?? 0)))
+  const emailNotifyAvailable = Boolean(
+    isAuthed &&
+      currentUser?.email &&
+      (billingSettings?.emailNotifyEnabled ?? false) &&
+      emailNotifyPointCost > 0,
   )
+  const promptGalleryItems = useMemo(
+    () =>
+      [...serverPromptItems, ...featuredPromptItems].map((item) => ({
+        ...item,
+        tags: normalizePromptTags(item.tags ?? []),
+        approvedAt: item.approvedAt ?? (item.status === 'approved' ? item.createdAt : undefined),
+      })),
+    [serverPromptItems],
+  )
+  const favoritePromptIds = useMemo(() => promptGalleryItems.filter((item) => item.isFavorited).map((item) => item.id), [promptGalleryItems])
+  const unreadAnnouncementCount = announcements.filter((item) => !item.isRead).length
+  const forcedAnnouncement = announcements.find((item) => item.kind === 'pinned' && !item.isRead) ?? null
+  const activeAnnouncement = announcements.find((item) => item.id === activeAnnouncementId) ?? forcedAnnouncement ?? announcements[0] ?? null
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(USER_THEME_STORAGE_KEY, userTheme)
+    } catch {
+      // Ignore storage errors; the visual state still works for the current session.
+    }
+  }, [userTheme])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage)
+    } catch {
+      // Ignore storage errors; page state still works for the current session.
+    }
+  }, [activePage])
+
+  useEffect(() => {
+    if (!emailNotifyAvailable && emailNotifyOnComplete) {
+      setEmailNotifyOnComplete(false)
+    }
+  }, [emailNotifyAvailable, emailNotifyOnComplete])
+
+  useEffect(() => {
+    if (!isAuthed || !forcedAnnouncement) {
+      return
+    }
+    setActiveAnnouncementId(forcedAnnouncement.id)
+    setAnnouncementDialogOpen(true)
+  }, [forcedAnnouncement, isAuthed])
+
+  useEffect(() => {
+    if (!announcementDialogOpen || !activeAnnouncementId) {
+      return
+    }
+    void markNormalAnnouncementRead(activeAnnouncementId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAnnouncementId, announcementDialogOpen])
 
   useEffect(() => {
     if (isAuthed && adminOpen && currentUser && currentUser.role !== 'admin') {
@@ -450,8 +548,26 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!isAuthed) return
+    void loadProductsPage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthed, productKeyword, activeProductCategoryId])
+
+  useEffect(() => {
     previewTaskIdRef.current = preview.taskId
   }, [preview.taskId])
+
+  useEffect(() => {
+    const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
+    if (!isAuthed || isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
+      return
+    }
+
+    imageURLs.forEach((_, index) => {
+      void prefetchImageDownload(preview.taskId, index)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthed, preview.taskId, preview.status, preview.imageUrl, preview.imageUrls])
 
   useEffect(() => {
     if (isAuthed) {
@@ -479,13 +595,16 @@ function App() {
       setCreditLogItems([])
       setCreditLogPage(1)
       setCreditLogTotal(0)
-      setRechargeOrders([])
-      setRechargeOrderPage(1)
-      setRechargeOrderTotal(0)
+      setInviteInfo(null)
+      setAnnouncements([])
+      setAnnouncementDialogOpen(false)
+      setActiveAnnouncementId(null)
       setPreview(emptyPreview)
       setPreviewImageIndex(0)
       setPreviewDetailOpen(false)
       setWechatSaveGuide({ open: false, imageUrl: '', title: '' })
+      downloadFileCacheRef.current.clear()
+      downloadPendingRef.current.clear()
       pollingTaskIdsRef.current.clear()
       setGenerationProgresses([])
     }
@@ -551,6 +670,25 @@ function App() {
   }, [canRegister])
 
   useEffect(() => {
+    if (mode === 'register' && REGISTRATION_ENABLED) {
+      void refreshCaptcha(false)
+      return
+    }
+    setCaptcha(null)
+    setRegistrationDailyLimitReached(false)
+  }, [mode])
+
+  useEffect(() => {
+    if (emailCodeCountdown <= 0) {
+      return
+    }
+    const timer = window.setInterval(() => {
+      setEmailCodeCountdown((current) => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [emailCodeCountdown])
+
+  useEffect(() => {
     if (!hasRunningGeneration) {
       return
     }
@@ -566,6 +704,7 @@ function App() {
           return {
             ...item,
             elapsedSeconds,
+            imageElapsedSeconds: buildImageElapsedSeconds(item.total, elapsedSeconds, item.imageElapsedSeconds),
             running: Math.max(0, item.total - item.completed),
           }
         }),
@@ -628,10 +767,11 @@ function App() {
             return
           }
 
-          const imageURLs = normalizeImageURLs(detail.imageUrls, detail.imageUrl)
+          const detailCount = getPreviewRequestedCount(detail, 1)
+          const imageURLs = limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount || detailCount)
           const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
           const isFinal = detail.status === 'success' || detail.status === 'failed'
-          const finalCount = Math.max(1, imageURLs.length || 1)
+          const finalCount = Math.max(1, imageURLs.length || detailCount)
           const nextMessage =
             detail.status === 'failed'
               ? detail.errorMessage ?? '生成失败'
@@ -643,9 +783,12 @@ function App() {
             current.taskId === taskId
               ? {
                   ...current,
+                  requestedCount: detail.requestedCount || detailCount,
                   prompt: detail.prompt,
                   imageUrl: detail.imageUrl,
                   imageUrls: imageURLs,
+                  thumbnailUrl: detail.thumbnailUrl,
+                  thumbnailUrls: detail.thumbnailUrls,
                   costPoints: detail.costPoints,
                   costCredits: detail.costCredits,
                   freeCreditsCost: detail.freeCreditsCost,
@@ -655,6 +798,7 @@ function App() {
                   requestParams: detail.requestParams,
                   errorMessage: detail.errorMessage,
                   createdAt: detail.createdAt,
+                  updatedAt: detail.updatedAt,
                 }
               : current,
           )
@@ -663,9 +807,12 @@ function App() {
               item.id === taskId
                 ? {
                     ...item,
+                    requestedCount: detail.requestedCount || detailCount,
                     prompt: detail.prompt,
                     imageUrl: detail.imageUrl,
                     imageUrls: imageURLs,
+                    thumbnailUrl: detail.thumbnailUrl,
+                    thumbnailUrls: detail.thumbnailUrls,
                     costPoints: detail.costPoints,
                     costCredits: detail.costCredits,
                     freeCreditsCost: detail.freeCreditsCost,
@@ -675,13 +822,14 @@ function App() {
                     requestParams: detail.requestParams,
                     errorMessage: detail.errorMessage,
                     createdAt: detail.createdAt,
+                    updatedAt: detail.updatedAt,
                   }
                 : item,
             ),
           )
 
           if (isFinal) {
-          const finalPreview = detailToPreview(detail)
+            const finalPreview = detailToPreview(detail)
             setPreview((current) => (current.taskId === taskId ? finalPreview : current))
             if (previewTaskIdRef.current === taskId) {
               setPreviewImageIndex(0)
@@ -691,6 +839,7 @@ function App() {
               prompt: detail.prompt,
               status: detail.status === 'failed' ? 'failed' : 'success',
               elapsedSeconds,
+              imageElapsedSeconds: buildImageElapsedSeconds(finalCount, elapsedSeconds, current.imageElapsedSeconds),
               total: finalCount,
               completed: finalCount,
               success: detail.status === 'failed' ? 0 : finalCount,
@@ -709,6 +858,7 @@ function App() {
             ...current,
             prompt: detail.prompt,
             elapsedSeconds,
+            imageElapsedSeconds: buildImageElapsedSeconds(current.total, elapsedSeconds, current.imageElapsedSeconds),
             total: Math.max(1, current.total),
             completed: 0,
             success: 0,
@@ -720,7 +870,7 @@ function App() {
           if (!pollingTaskIdsRef.current.has(taskId)) {
             return
           }
-          if (error instanceof APIError && error.status === 401) {
+          if (shouldForceLogout(error)) {
             handleLogout()
             return
           }
@@ -728,6 +878,7 @@ function App() {
           updateGenerationProgress(taskId, (current) => ({
             ...current,
             elapsedSeconds: Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
+            imageElapsedSeconds: buildImageElapsedSeconds(current.total, Math.max(0, Math.floor((Date.now() - startedAt) / 1000)), current.imageElapsedSeconds),
             attempt,
             message: `轮询状态失败：${errorMessage}`,
           }))
@@ -746,8 +897,21 @@ function App() {
         api.listPackages('recharge'),
         api.getBillingSettings(),
       ])
-      setPackages(rechargeResult.items.filter((item) => item.packageType === 'recharge' && item.enabled))
+      setPackages((rechargeResult.items ?? []).filter((item) => item.packageType === 'recharge' && item.enabled))
       setBillingSettings(settingsResult)
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  async function loadProductsPage() {
+    try {
+      const [productResult, categoryResult] = await Promise.all([
+        api.listProducts(productKeyword, activeProductCategoryId),
+        api.listProductCategories(),
+      ])
+      setProducts(productResult.items ?? [])
+      setProductCategories(categoryResult.items ?? [])
     } catch (error) {
       console.error(error)
     }
@@ -759,15 +923,36 @@ function App() {
       if (showBusy) {
         setBusy('refresh')
       }
-      const [meResult, pointsResult, historyResult, activityResult, pointsLogResult, creditLogResult, rechargeResult, latestResult] = await Promise.all([
+      const [
+        meResult,
+        pointsResult,
+        historyResult,
+        activityResult,
+        pointsLogResult,
+        creditLogResult,
+        inviteResult,
+        latestResult,
+        announcementsResult,
+        promptPlazaResult,
+        myPromptPlazaResult,
+        productsResult,
+        productCategoriesResult,
+        settingsResult,
+      ] = await Promise.all([
         api.getMe(),
         api.getPoints(),
         api.listImageTasks(historyPage, HISTORY_PAGE_SIZE),
         api.listUserActivity(activityPage, ACTIVITY_PAGE_SIZE),
         api.listPointsLogs(pointsLogPage, FLOW_LOG_PAGE_SIZE),
         api.listCreditLogs(creditLogPage, FLOW_LOG_PAGE_SIZE),
-        api.listRechargeOrders(rechargeOrderPage, RECHARGE_ORDER_PAGE_SIZE),
+        api.getInviteInfo(),
         api.listImageTasks(1, HISTORY_PAGE_SIZE),
+        api.listAnnouncements().catch(() => null),
+        api.listPromptPlazaForUser().catch(() => null),
+        api.listMyPromptPlaza().catch(() => null),
+        api.listProducts().catch(() => null),
+        api.listProductCategories().catch(() => null),
+        api.getBillingSettings().catch(() => null),
       ])
       setCurrentUser(meResult)
       setPoints(pointsResult)
@@ -783,9 +968,30 @@ function App() {
       setCreditLogItems(creditLogResult.items)
       setCreditLogPage(creditLogResult.page)
       setCreditLogTotal(creditLogResult.total)
-      setRechargeOrders(rechargeResult.items)
-      setRechargeOrderPage(rechargeResult.page)
-      setRechargeOrderTotal(rechargeResult.total)
+      setInviteInfo(inviteResult)
+      if (settingsResult) {
+        setBillingSettings(settingsResult)
+      }
+      if (announcementsResult) {
+        setAnnouncements(announcementsResult.items)
+        const unreadPinned = announcementsResult.items.find((item) => item.kind === 'pinned' && !item.isRead)
+        if (unreadPinned) {
+          setActiveAnnouncementId(unreadPinned.id)
+          setAnnouncementDialogOpen(true)
+        }
+      }
+      if (promptPlazaResult) {
+        setServerPromptItems(promptPlazaResult.items.map(normalizePromptGalleryItem))
+      }
+      if (myPromptPlazaResult) {
+        setMyPromptItems(myPromptPlazaResult.items.map(normalizePromptGalleryItem))
+      }
+      if (productsResult) {
+        setProducts(productsResult.items ?? [])
+      }
+      if (productCategoriesResult) {
+        setProductCategories(productCategoriesResult.items ?? [])
+      }
       const runningTasks = latestResult.items.filter((item) => item.status === 'generating' || item.status === 'running')
       if (runningTasks.length > 0) {
         setGenerationProgresses((current) => {
@@ -801,10 +1007,10 @@ function App() {
         })
       }
     } catch (error) {
-      if (error instanceof APIError && error.status === 401) {
+      if (shouldForceLogout(error)) {
         handleLogout()
         if (updateMessage) {
-          setMessage('登录已过期，请重新登录。')
+          setMessage(error instanceof APIError && error.status === 403 ? '账号已被禁用，请联系管理员。' : '登录已过期，请重新登录。')
         }
       } else {
         if (updateMessage) {
@@ -886,7 +1092,7 @@ function App() {
       setCreditLogPage(pageResult.page)
       setCreditLogTotal(pageResult.total)
     } catch (error) {
-      handleApiError(error, '次数流水加载失败')
+      handleApiError(error, '福利次数流水加载失败')
     } finally {
       if (showBusy) {
         setBusy(null)
@@ -894,28 +1100,43 @@ function App() {
     }
   }
 
-  async function loadRechargeOrderPage(page: number, options: { showBusy?: boolean } = {}) {
-    const { showBusy = false } = options
+  async function refreshCaptcha(showMessage = false) {
+    if (!REGISTRATION_ENABLED || mode !== 'register') {
+      return
+    }
+
     try {
-      if (showBusy) {
-        setBusy('refresh')
+      const result = await api.getCaptcha()
+      setCaptcha(result)
+      setRegistrationDailyLimitReached(false)
+      setEmailCaptchaPassUntil(0)
+      setAuthForm((current) => ({ ...current, captchaCode: '' }))
+      if (showMessage) {
+        setMessage('图形验证码已刷新。')
       }
-      const pageResult = await api.listRechargeOrders(page, RECHARGE_ORDER_PAGE_SIZE)
-      setRechargeOrders(pageResult.items)
-      setRechargeOrderPage(pageResult.page)
-      setRechargeOrderTotal(pageResult.total)
     } catch (error) {
-      handleApiError(error, '充值订单加载失败')
-    } finally {
-      if (showBusy) {
-        setBusy(null)
+      setCaptcha(null)
+      if (isRegistrationDailyLimitError(error)) {
+        setRegistrationDailyLimitReached(true)
+        setMessage(REGISTRATION_DAILY_LIMIT_MESSAGE)
+        return
       }
+      setMessage(error instanceof Error ? error.message : '图形验证码加载失败')
     }
   }
 
   async function handleSendCode() {
+    if (registrationDailyLimitReached) {
+      setMessage(REGISTRATION_DAILY_LIMIT_MESSAGE)
+      return
+    }
     if (!authForm.email.trim()) {
       setMessage('请先填写邮箱。')
+      return
+    }
+    const hasCaptchaPass = Date.now() < emailCaptchaPassUntil
+    if (!hasCaptchaPass && (!captcha?.captchaId || !authForm.captchaCode.trim())) {
+      setMessage('请先输入图形验证码。')
       return
     }
     if (!REGISTRATION_ENABLED) {
@@ -928,16 +1149,20 @@ function App() {
       const result = await api.sendEmailCode({
         email: authForm.email,
         scene: 'register',
+        captchaId: hasCaptchaPass ? undefined : captcha?.captchaId,
+        captchaCode: hasCaptchaPass ? undefined : authForm.captchaCode,
       })
-      if (result.debugCode) {
-        setAuthForm((current) => ({ ...current, code: result.debugCode ?? current.code }))
-      }
-      setMessage(
-        result.debugCode
-          ? `验证码已生成，开发态验证码是 ${result.debugCode}。`
-          : `验证码已发送，过期时间 ${result.expiresIn} 秒。`,
-      )
+      setAuthForm((current) => ({ ...current, code: '' }))
+      setEmailCaptchaPassUntil(Date.now() + result.expiresIn * 1000)
+      setEmailCodeCountdown(60)
+      setMessage(`验证码已发送，请查收最新一封邮件。有效时间 ${Math.floor(result.expiresIn / 60)} 分钟。`)
     } catch (error) {
+      if (isRegistrationDailyLimitError(error)) {
+        setRegistrationDailyLimitReached(true)
+        setCaptcha(null)
+        setMessage(REGISTRATION_DAILY_LIMIT_MESSAGE)
+        return
+      }
       setMessage(error instanceof Error ? error.message : '发送验证码失败')
     } finally {
       setBusy(null)
@@ -967,6 +1192,7 @@ function App() {
           code: authForm.code,
           username: authForm.username,
           password: authForm.password,
+          inviteCode: authForm.inviteCode.trim() || undefined,
         })
       } else {
         if (!authForm.account || !authForm.password) {
@@ -985,11 +1211,14 @@ function App() {
       setAdminOpen(result.user.role === 'admin')
       setPoints({
         balance: result.user.pointsBalance,
+        creditsBalance: getTotalCredits(result.user),
         freeCredits: result.user.freeCredits,
         paidCredits: result.user.paidCredits,
-        totalCredits: result.user.totalCredits,
+        totalCredits: getTotalCredits(result.user),
         streak: result.user.checkinStreak,
         lastCheckinAt: result.user.lastCheckinAt ?? null,
+        checkinPointsTotal: 0,
+        checkinCreditsTotal: 0,
         recentLogs: [],
         recentCreditLogs: [],
       })
@@ -1007,19 +1236,40 @@ function App() {
       setMessage('请先登录，再执行签到。')
       return
     }
+    if (checkinInFlightRef.current || checkedInToday) {
+      setMessage('今天已经签到过了。')
+      return
+    }
 
     try {
+      checkinInFlightRef.current = true
       setBusy('checkin')
       const result = await api.checkin()
+      const gainedPoints = Number(result.gainedPoints ?? 0)
+      const gainedCredits = Number(result.gainedCredits ?? 0)
+      setPoints((current) => ({
+        balance: Number(result.pointsBalance ?? current?.balance ?? 0),
+        creditsBalance: getTotalCredits(result, current?.totalCredits ?? 0),
+        freeCredits: Number(result.freeCredits ?? current?.freeCredits ?? 0),
+        paidCredits: Number(result.paidCredits ?? current?.paidCredits ?? 0),
+        totalCredits: getTotalCredits(result, current?.totalCredits ?? 0),
+        streak: Number(result.streak ?? current?.streak ?? 0),
+        lastCheckinAt: result.lastCheckinAt ?? current?.lastCheckinAt ?? null,
+        checkinPointsTotal: Number(current?.checkinPointsTotal ?? 0) + (result.checkedIn ? gainedPoints : 0),
+        checkinCreditsTotal: Number(current?.checkinCreditsTotal ?? 0) + (result.checkedIn ? gainedCredits : 0),
+        recentLogs: current?.recentLogs ?? [],
+        recentCreditLogs: current?.recentCreditLogs ?? [],
+      }))
       setMessage(
         result.checkedIn
-          ? `签到成功，获得 ${result.gainedPoints} 积分和 ${result.gainedCredits} 次生图次数。`
+          ? `签到成功，获得 ${gainedPoints} 积分和 ${gainedCredits} 福利次数。`
           : '今天已经签到过了。',
       )
       await loadDashboard()
     } catch (error) {
       handleApiError(error, '签到失败')
     } finally {
+      checkinInFlightRef.current = false
       setBusy(null)
     }
   }
@@ -1066,101 +1316,110 @@ function App() {
 
   async function handlePurchase(packageCode: string) {
     if (!isAuthed) {
-      setMessage('请先登录，再创建充值订单。')
+      setMessage('请先登录后再购买兑换码商品。')
       return
     }
 
     const selectedPackage = packages.find((item) => item.code === packageCode)
     if (!selectedPackage) {
-      setMessage('充值套餐不存在或已停用。')
+      setMessage('兑换码商品不存在或已停用。')
+      return
+    }
+    if (!selectedPackage.productUrl) {
+      setMessage('该兑换码商品暂未配置购买链接，请联系管理员处理。')
+      return
+    }
+    setActiveRechargePackageCode(packageCode)
+
+    setRechargeConfirmDialog({
+      open: true,
+      kind: 'package',
+      title: `确认购买 ${selectedPackage.name}`,
+      lines: [
+        `到账积分：${selectedPackage.bonusPoints} 积分`,
+        `赠送福利次数：${selectedPackage.creditsAmount} 福利次数`,
+        `商品价格：${(selectedPackage.amountCents / 100).toFixed(2)} 元`,
+        '确认后将跳转至兑换码购买平台。购买完成后，请按平台提示获取兑换码，并返回本站完成兑换。',
+      ],
+      confirmLabel: '确定',
+      href: selectedPackage.productUrl,
+    })
+  }
+
+  async function confirmPackageRecharge(packageCode: string) {
+    const selectedPackage = packages.find((item) => item.code === packageCode)
+    if (!selectedPackage?.productUrl) {
+      setRechargeConfirmDialog({ open: false })
+      setMessage('该兑换码商品暂未配置购买链接，请联系管理员处理。')
       return
     }
 
-    const confirmed = window.confirm(
-      [
-        `确认购买：${selectedPackage.name}`,
-        `到账次数：${selectedPackage.creditsAmount} 次`,
-        `支付金额：${(selectedPackage.amountCents / 100).toFixed(2)} 元`,
-        `赠送积分：${selectedPackage.bonusPoints} 积分`,
-      ].join('\n'),
-    )
-    if (!confirmed) {
+    window.open(selectedPackage.productUrl, '_blank', 'noopener,noreferrer')
+    setRechargeConfirmDialog({ open: false })
+    setMessage('已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
+  }
+
+  function handleProductPurchase(item: ProductItem) {
+    if (!item.productUrl) {
+      setMessage('该商品暂未配置购买链接，请稍后再试。')
       return
     }
-
+    setActiveProduct(null)
+    setRechargeConfirmDialog({
+      open: true,
+      kind: 'package',
+      title: '确认前往购买',
+      lines: [
+        item.name,
+        `商品价格：${money(item.amountCents)}`,
+        item.categories.length ? `分类：${item.categories.map((entry) => entry.name).join(' / ')}` : '分类：未分类',
+        '确认后将跳转到外部购买平台。',
+        '如需继续购买，请点击确定。',
+      ],
+      confirmLabel: '确定',
+      href: item.productUrl,
+    })
+  }
+  async function handleCopyInviteLink(link: string) {
+    if (!link) {
+      setMessage('暂无可复制的邀请码链接。')
+      return
+    }
     try {
-      setBusy(`purchase:${packageCode}`)
-      const result = await api.createRechargeOrder({ rechargeType: 'package', packageCode })
-      setMessage(
-        `订单已创建，订单号 ${result.orderNo}。待支付成功后将入账 ${result.creditsAmount} 次充值次数${
-          result.bonusPoints > 0 ? `，并额外赠送 ${result.bonusPoints} 积分` : ''
-        }。`,
-      )
-      await loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })
-    } catch (error) {
-      handleApiError(error, '创建充值订单失败')
+      setBusy('copy-invite-link')
+      await navigator.clipboard.writeText(link)
+      setMessage('邀请链接已复制。')
+    } catch {
+      setMessage('复制失败，请手动选中邀请链接复制。')
     } finally {
       setBusy(null)
     }
   }
 
-  async function handleCustomRecharge() {
+  async function handleRedeemCode() {
     if (!isAuthed) {
-      setMessage('请先登录，再创建充值订单。')
+      setMessage('请先登录后再兑换兑换码。')
       return
     }
 
-    const countValue = Math.max(1, Math.floor(customRechargeCount || 0))
-    const unitPriceCents = billingSettings?.customRechargeUnitPriceCents ?? 20
-    const amountCents = countValue * unitPriceCents
-    const confirmed = window.confirm(
-      [
-        '确认自定义充值',
-        `充值次数：${countValue} 次`,
-        `单次价格：${(unitPriceCents / 100).toFixed(2)} 元`,
-        `支付金额：${(amountCents / 100).toFixed(2)} 元`,
-        '提示：自定义充值不赠送积分。',
-      ].join('\n'),
-    )
-    if (!confirmed) {
+    const code = redeemCodeInput.trim()
+    if (!code) {
+      setMessage('请输入有效兑换码。')
       return
     }
 
     try {
-      setBusy('purchase:custom')
-      const result = await api.createRechargeOrder({ rechargeType: 'custom', count: countValue })
-      setMessage(`订单已创建，订单号 ${result.orderNo}。自定义充值 ${result.creditsAmount} 次，不赠送积分。`)
-      await loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })
-    } catch (error) {
-      handleApiError(error, '创建自定义充值订单失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function handleConfirmRechargeOrder(order: RechargeOrderItem) {
-    if (!isAuthed) {
-      setMessage('请先登录，再确认支付。')
-      return
-    }
-
-    try {
-      setBusy(`confirm-recharge:${order.orderNo}`)
-      const result = await api.confirmRechargeOrder(order.orderNo, {
-        providerTradeNo: `mock-${order.orderNo}`,
-        paymentChannel: 'mock',
-        amountCents: order.amountCents,
-        paidAt: new Date().toISOString(),
-        remark: '前端模拟支付成功',
-      })
+      setBusy('redeem-code')
+      const result = await api.redeemCode({ code })
+      setRedeemCodeInput('')
       setMessage(
-        `支付确认成功，已入账 ${result.creditsAmount} 次充值次数${
-          result.bonusPoints > 0 ? `，并赠送 ${result.bonusPoints} 积分` : ''
+        `兑换成功，已到账${result.creditsAmount > 0 ? ` ${result.creditsAmount} 福利次数` : ''}${
+          result.pointsAmount > 0 ? ` ${result.pointsAmount} 积分` : ''
         }。`,
       )
       await loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })
     } catch (error) {
-      handleApiError(error, '确认支付失败')
+      handleApiError(error, '兑换码使用失败')
     } finally {
       setBusy(null)
     }
@@ -1172,13 +1431,28 @@ function App() {
       return
     }
 
+    if (!imageGenerationEnabled) {
+      return
+    }
+
     if (!prompt.trim()) {
       setMessage('提示词不能为空。')
       return
     }
 
     const promptText = prompt.trim()
+    const sizeValidationMessage = validateSelectedSize(size, customWidth, customHeight)
+    if (sizeValidationMessage) {
+      setMessage(sizeValidationMessage)
+      return
+    }
+
     const requestSize = resolveSelectedSize(size, customWidth, customHeight)
+    const optionsValidationMessage = validateImageOptions(requestSize, quality)
+    if (optionsValidationMessage) {
+      setMessage(optionsValidationMessage)
+    }
+
     const taskCount = clampCount(count)
     const requestSnapshot = {
       prompt: promptText,
@@ -1188,6 +1462,7 @@ function App() {
       quality,
       outputFormat,
       referenceImageUrl: referenceImageURL.trim() || undefined,
+      emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
     } satisfies TaskRequestSnapshot
     const startedAt = Date.now()
 
@@ -1196,22 +1471,25 @@ function App() {
       const result = await api.createImageTask(requestSnapshot)
 
       const now = new Date().toISOString()
-      const resultImageURLs = normalizeImageURLs(result.imageUrls, result.imageUrl)
+      const requestedCount = Number(result.requestedCount ?? taskCount)
+      const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
       setPreview(
         detailToPreview({
           taskId: result.taskId,
+          requestedCount,
           prompt: promptText,
           imageUrl: result.imageUrl,
           imageUrls: resultImageURLs,
-          costPoints: taskCount,
-          costCredits: taskCount,
-          freeCreditsCost: 0,
-          paidCreditsCost: 0,
-          creditSource: 'free',
+          costPoints: Number(result.costPoints ?? 0),
+          costCredits: Number(result.costCredits ?? taskCount),
+          freeCreditsCost: Number(result.freeCreditsCost ?? 0),
+          paidCreditsCost: Number(result.paidCreditsCost ?? 0),
+          creditSource: result.creditSource || 'free',
           status: result.status || 'generating',
           requestParams: stringifyTaskRequestSnapshot(requestSnapshot),
           errorMessage: result.errorMessage,
           createdAt: now,
+          updatedAt: now,
         }),
       )
       setPreviewImageIndex(0)
@@ -1224,9 +1502,10 @@ function App() {
         return {
           ...current,
           balance: result.pointsBalance ?? current.balance,
+          creditsBalance: getResponseCreditsBalance(result, current.totalCredits),
           freeCredits: result.freeCreditsBalance ?? current.freeCredits,
           paidCredits: result.paidCreditsBalance ?? current.paidCredits,
-          totalCredits: result.totalCreditsBalance ?? current.totalCredits,
+          totalCredits: getResponseCreditsBalance(result, current.totalCredits),
         }
       })
       const generationStatus = normalizeGenerationStatus(result.status)
@@ -1236,15 +1515,16 @@ function App() {
         status: generationStatus,
         startedAt,
         elapsedSeconds: 0,
-        total: taskCount,
-        completed: generationStatus === 'running' ? 0 : taskCount,
-        success: generationStatus === 'success' ? taskCount : 0,
-        running: generationStatus === 'running' ? taskCount : 0,
+        imageElapsedSeconds: [],
+        total: requestedCount,
+        completed: generationStatus === 'running' ? 0 : requestedCount,
+        success: generationStatus === 'success' ? requestedCount : 0,
+        running: generationStatus === 'running' ? requestedCount : 0,
         attempt: 1,
         backendUrl: api.API_BASE_URL,
         message:
           generationStatus === 'running'
-            ? `任务已提交，任务编号：${result.taskId}，消耗 ${taskCount} 次`
+            ? `任务已提交，任务编号：${result.taskId}，消耗 ${formatTaskCost(result, taskCount)}`
             : generationStatus === 'success'
               ? `任务已提交，任务编号：${result.taskId}，已直接完成。`
               : `任务已提交，任务编号：${result.taskId}，生成失败。`,
@@ -1269,28 +1549,31 @@ function App() {
       return
     }
     const startedAt = Date.now()
-    const optimisticTotal = Math.max(1, clampCount(Number(preview.costCredits || preview.costPoints)))
+    const optimisticTotal = getPreviewRequestedCount(preview, 1)
 
     try {
       setBusy(`retry:${taskId}`)
       const result = await api.retryImageTask(taskId)
       const now = new Date().toISOString()
-      const resultImageURLs = normalizeImageURLs(result.imageUrls, result.imageUrl)
+      const requestedCount = Number(result.requestedCount ?? optimisticTotal)
+      const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
       setPreview(
         detailToPreview({
           taskId: result.taskId,
+          requestedCount,
           prompt: preview.prompt,
           imageUrl: result.imageUrl,
           imageUrls: resultImageURLs,
-          costPoints: optimisticTotal,
-          costCredits: optimisticTotal,
-          freeCreditsCost: 0,
-          paidCreditsCost: 0,
-          creditSource: 'free',
+          costPoints: Number(result.costPoints ?? 0),
+          costCredits: Number(result.costCredits ?? optimisticTotal),
+          freeCreditsCost: Number(result.freeCreditsCost ?? 0),
+          paidCreditsCost: Number(result.paidCreditsCost ?? 0),
+          creditSource: result.creditSource || 'free',
           status: result.status || 'generating',
           requestParams: preview.requestParams,
           errorMessage: result.errorMessage,
           createdAt: now,
+          updatedAt: now,
         }),
       )
       setPreviewImageIndex(0)
@@ -1303,9 +1586,10 @@ function App() {
         return {
           ...current,
           balance: result.pointsBalance ?? current.balance,
+          creditsBalance: getResponseCreditsBalance(result, current.totalCredits),
           freeCredits: result.freeCreditsBalance ?? current.freeCredits,
           paidCredits: result.paidCreditsBalance ?? current.paidCredits,
-          totalCredits: result.totalCreditsBalance ?? current.totalCredits,
+          totalCredits: getResponseCreditsBalance(result, current.totalCredits),
         }
       })
       const generationStatus = normalizeGenerationStatus(result.status)
@@ -1315,10 +1599,11 @@ function App() {
         status: generationStatus,
         startedAt,
         elapsedSeconds: 0,
-        total: optimisticTotal,
-        completed: generationStatus === 'running' ? 0 : optimisticTotal,
-        success: generationStatus === 'success' ? optimisticTotal : 0,
-        running: generationStatus === 'running' ? optimisticTotal : 0,
+        imageElapsedSeconds: [],
+        total: requestedCount,
+        completed: generationStatus === 'running' ? 0 : requestedCount,
+        success: generationStatus === 'success' ? requestedCount : 0,
+        running: generationStatus === 'running' ? requestedCount : 0,
         attempt: 1,
         backendUrl: api.API_BASE_URL,
         message:
@@ -1339,13 +1624,17 @@ function App() {
   }
 
   function handleSelectTask(item: ImageTaskItem) {
-    setPreview(toPreview(item))
+    const nextPreview = toPreview(item)
+    setPreview(nextPreview)
     setPreviewImageIndex(0)
+    if (item.id && item.id !== '-') {
+      void loadPreviewTaskDetail(item.id)
+    }
   }
 
   function handlePreviousPreviewImage() {
     setPreviewImageIndex((current) => {
-      const total = normalizeImageURLs(preview.imageUrls, preview.imageUrl).length
+      const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
       }
@@ -1355,7 +1644,7 @@ function App() {
 
   function handleNextPreviewImage() {
     setPreviewImageIndex((current) => {
-      const total = normalizeImageURLs(preview.imageUrls, preview.imageUrl).length
+      const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
       }
@@ -1364,7 +1653,7 @@ function App() {
   }
 
   async function handleSaveCurrentImage() {
-    const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
+    const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
     const imageUrl = imageURLs[previewImageIndex] ?? imageURLs[0]
     if (!imageUrl) {
       setMessage('当前没有可保存的图片。')
@@ -1385,20 +1674,88 @@ function App() {
     }
 
     try {
-      const { blob, fileName } = await api.downloadImageTaskImage(preview.taskId, previewImageIndex)
-      triggerImageDownload(blob, fileName)
+      const cacheKey = getDownloadCacheKey(preview.taskId, previewImageIndex)
+      const cached = downloadFileCacheRef.current.get(cacheKey)
+      if (cached) {
+        triggerImageDownload(cached.blob, cached.fileName)
+        return
+      }
+
+      setMessage('正在准备下载，请稍等。')
+      const downloaded = await loadImageDownload(preview.taskId, previewImageIndex)
+      triggerImageDownload(downloaded.blob, downloaded.fileName)
     } catch (error) {
       handleApiError(error, '保存当前图片失败')
     }
   }
 
-  function handleOpenPreviewDetail() {
-    const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
+  async function prefetchImageDownload(taskId: string, imageIndex: number) {
+    const cacheKey = getDownloadCacheKey(taskId, imageIndex)
+    if (downloadFileCacheRef.current.has(cacheKey) || downloadPendingRef.current.has(cacheKey)) {
+      return
+    }
+
+    try {
+      await loadImageDownload(taskId, imageIndex)
+    } catch (error) {
+      console.warn('prefetch image download failed', error)
+    }
+  }
+
+  async function loadImageDownload(taskId: string, imageIndex: number): Promise<DownloadedFile> {
+    const cacheKey = getDownloadCacheKey(taskId, imageIndex)
+    const cached = downloadFileCacheRef.current.get(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    const pending = downloadPendingRef.current.get(cacheKey)
+    if (pending) {
+      return pending
+    }
+
+    const pendingDownload = api.downloadImageTaskImage(taskId, imageIndex)
+      .then((downloaded) => {
+        downloadFileCacheRef.current.set(cacheKey, downloaded)
+        trimDownloadFileCache(downloadFileCacheRef.current)
+        return downloaded
+      })
+      .finally(() => {
+        downloadPendingRef.current.delete(cacheKey)
+      })
+
+    downloadPendingRef.current.set(cacheKey, pendingDownload)
+    return pendingDownload
+  }
+
+  async function handleOpenPreviewDetail() {
+    const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
     if (!preview.taskId || preview.taskId === '-' || imageURLs.length === 0) {
       setMessage('当前展示区还没有图片详情。')
       return
     }
+
+    const detail = await loadPreviewTaskDetail(preview.taskId)
+    if (!detail) {
+      return
+    }
     setPreviewDetailOpen(true)
+  }
+
+  async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
+    if (!taskId || taskId === '-') {
+      return null
+    }
+
+    try {
+      const detail = await api.getImageTask(taskId)
+      const nextPreview = detailToPreview(detail)
+      setPreview((current) => (current.taskId === taskId ? nextPreview : current))
+      return nextPreview
+    } catch (error) {
+      handleApiError(error, '任务详情加载失败')
+      return null
+    }
   }
 
   function handleApplyPreviewDetail() {
@@ -1444,11 +1801,10 @@ function App() {
     }
     try {
       setBusy('refresh')
-      const [stats, users, tasks, orders, audits, packages, actionLogs] = await Promise.all([
+      const [stats, users, tasks, audits, packages, actionLogs] = await Promise.all([
         api.adminStats(),
         api.adminListUsers(1, 8),
         api.adminListImageTasks(1, 8),
-        api.adminListRechargeOrders(1, 8),
         api.adminListContentAudits(1, 8),
         api.adminListPackages(1, 50),
         api.adminListActionLogs(1, 20, 'billing_package'),
@@ -1456,10 +1812,9 @@ function App() {
       setAdminStats(stats)
       setAdminUsers(users.items)
       setAdminTasks(tasks.items)
-      setAdminOrders(orders.items)
       setAdminAudits(audits.items)
       setAdminActionLogs(actionLogs.items)
-      setAdminPackages(packages.items.filter((item) => item.packageType === 'recharge'))
+      setAdminPackages((packages.items ?? []).filter((item) => item.packageType === 'recharge'))
     } catch (error) {
       handleApiError(error, '后台数据加载失败')
     } finally {
@@ -1516,7 +1871,7 @@ function App() {
       await loadPackages()
       setMessage(packageId ? '套餐已更新。' : '套餐已创建。')
     } catch (error) {
-      handleApiError(error, '保存套餐失败')
+      handleApiError(error, '保存商品套餐失败')
     } finally {
       setBusy(null)
     }
@@ -1530,13 +1885,17 @@ function App() {
     setAuthForm({
       email: '',
       code: '',
+      captchaCode: '',
       username: '',
+      inviteCode: readInviteCodeFromLocation(),
       account: '',
       password: '',
       confirmPassword: '',
     })
     setAuthFormSeed((current) => current + 1)
     setShowRegisterPassword(false)
+    setEmailCodeCountdown(0)
+    setEmailCaptchaPassUntil(0)
     setActivePage('home')
     setSidebarCollapsed(false)
     setSidebarOpen(false)
@@ -1544,7 +1903,6 @@ function App() {
     setAdminStats(null)
     setAdminUsers([])
     setAdminTasks([])
-    setAdminOrders([])
     setAdminAudits([])
     setAdminActionLogs([])
     setAdminPackages([])
@@ -1557,13 +1915,17 @@ function App() {
     setActivityTotal(0)
     setPointsLogItems([])
     setPointsLogPage(1)
-    setPointsLogTotal(0)
-    setCreditLogItems([])
+      setPointsLogTotal(0)
+      setCreditLogItems([])
+      setProducts([])
+      setProductCategories([])
+      setActiveProduct(null)
     setCreditLogPage(1)
     setCreditLogTotal(0)
-    setRechargeOrders([])
-    setRechargeOrderPage(1)
-    setRechargeOrderTotal(0)
+    setInviteInfo(null)
+    setAnnouncements([])
+    setAnnouncementDialogOpen(false)
+    setActiveAnnouncementId(null)
     setPreview(emptyPreview)
     setPreviewImageIndex(0)
     setWechatSaveGuide({ open: false, imageUrl: '', title: '' })
@@ -1577,6 +1939,7 @@ function App() {
     setOutputFormat('default')
     setCustomWidth(1024)
     setCustomHeight(1024)
+    setEmailNotifyOnComplete(false)
     setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
@@ -1599,13 +1962,96 @@ function App() {
     }
   }
 
+  function handleCancelRechargeConfirm() {
+    setRechargeConfirmDialog({ open: false })
+  }
+
+  function handleConfirmRechargeDialog() {
+    if (!rechargeConfirmDialog.open) {
+      return
+    }
+    if (rechargeConfirmDialog.href) {
+      window.open(rechargeConfirmDialog.href, '_blank', 'noopener,noreferrer')
+      setRechargeConfirmDialog({ open: false })
+      setMessage(rechargeConfirmDialog.title === '确认前往购买' ? '已打开商品购买页面。' : '已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
+      return
+    }
+    void confirmPackageRecharge(activeRechargePackageCode)
+  }
+
   function handleApiError(error: unknown, fallback: string) {
-    if (error instanceof APIError && error.status === 401) {
+    if (shouldForceLogout(error)) {
       handleLogout()
-      setMessage('登录已过期，请重新登录。')
+      setMessage(error instanceof APIError && error.status === 403 ? '账号已被禁用，请联系管理员。' : '登录已过期，请重新登录。')
       return
     }
     setMessage(error instanceof Error ? error.message : fallback)
+  }
+
+  function openAnnouncements() {
+    const firstUnread = announcements.find((item) => !item.isRead)
+    setActiveAnnouncementId(firstUnread?.id ?? announcements[0]?.id ?? null)
+    setAnnouncementDialogOpen(true)
+    if (announcements.length === 0) {
+      void refreshAnnouncements()
+    }
+  }
+
+  async function refreshAnnouncements() {
+    try {
+      const resp = await api.listAnnouncements()
+      setAnnouncements(resp.items)
+      if (!activeAnnouncementId && resp.items.length > 0) {
+        setActiveAnnouncementId(resp.items[0].id)
+      }
+    } catch (error) {
+      handleApiError(error, '公告加载失败')
+    }
+  }
+
+  async function markActiveAnnouncementRead() {
+    const targetAnnouncement = activeAnnouncement
+    if (!targetAnnouncement) {
+      return
+    }
+    try {
+      const resp = await api.markAnnouncementRead(targetAnnouncement.id)
+      setAnnouncements((current) =>
+        current.map((item) =>
+          item.id === targetAnnouncement.id
+            ? { ...item, isRead: true, readAt: resp.readAt }
+            : item,
+        ),
+      )
+      const nextPinned = announcements.find((item) => item.id !== targetAnnouncement.id && item.kind === 'pinned' && !item.isRead)
+      if (nextPinned) {
+        setActiveAnnouncementId(nextPinned.id)
+        return
+      }
+      const nextUnread = announcements.find((item) => item.id !== targetAnnouncement.id && !item.isRead)
+      if (nextUnread) setActiveAnnouncementId(nextUnread.id)
+    } catch (error) {
+      handleApiError(error, '标记公告已读失败')
+    }
+  }
+
+  async function markNormalAnnouncementRead(id: string) {
+    const targetAnnouncement = announcements.find((item) => item.id === id)
+    if (!targetAnnouncement || targetAnnouncement.kind === 'pinned' || targetAnnouncement.isRead) {
+      return
+    }
+    try {
+      const resp = await api.markAnnouncementRead(targetAnnouncement.id)
+      setAnnouncements((current) =>
+        current.map((item) =>
+          item.id === targetAnnouncement.id
+            ? { ...item, isRead: true, readAt: resp.readAt }
+            : item,
+        ),
+      )
+    } catch (error) {
+      handleApiError(error, '标记公告已读失败')
+    }
   }
 
   function navigateToPage(page: AppPage) {
@@ -1613,22 +2059,43 @@ function App() {
     setSidebarOpen(false)
   }
 
-  function handleTogglePromptFavorite(promptId: string) {
-    setFavoritePromptIds((current) =>
-      current.includes(promptId) ? current.filter((item) => item !== promptId) : [...current, promptId],
-    )
+  async function handleTogglePromptFavorite(promptId: string) {
+    const currentItem = serverPromptItems.find((item) => item.id === promptId)
+    if (currentItem) {
+      const nextFavorited = !currentItem.isFavorited
+      const nextFavorites = Math.max(0, Number(currentItem.favorites || 0) + (nextFavorited ? 1 : -1))
+      setServerPromptItems((current) =>
+        current.map((item) =>
+          item.id === promptId ? { ...item, isFavorited: nextFavorited, favorites: nextFavorites } : item,
+        ),
+      )
+    }
+    try {
+      const updated = await api.togglePromptPlazaFavorite(promptId)
+        setServerPromptItems((current) =>
+          current.map((item) =>
+          item.id === updated.id ? { ...item, favorites: updated.favorites, isFavorited: updated.isFavorited } : item,
+        ),
+      )
+      setMyPromptItems((current) =>
+        current.map((item) =>
+          item.id === updated.id ? { ...item, favorites: updated.favorites, isFavorited: updated.isFavorited } : item,
+        ),
+      )
+    } catch (error) {
+      if (currentItem) {
+        setServerPromptItems((current) => current.map((item) => (item.id === currentItem.id ? currentItem : item)))
+      }
+      handleApiError(error, '收藏操作失败')
+    }
   }
 
-  function handleUsePromptItem(item: PromptGalleryItem) {
-    setPrompt(item.prompt)
-    setActivePage('home')
-    setSidebarOpen(false)
-  }
-
-  async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = ''
+  async function uploadLocalReferenceImage(file?: File) {
     if (!file) {
+      return
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      setMessage('仅支持上传 JPEG、PNG、WebP 或 GIF 图片。')
       return
     }
 
@@ -1646,6 +2113,48 @@ function App() {
       setReferenceImageUploading(false)
       setBusy(null)
     }
+  }
+
+  async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    await uploadLocalReferenceImage(file)
+  }
+
+  function handlePromptDrag(event: DragEvent<HTMLTextAreaElement>) {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) {
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    setPromptDragActive(true)
+  }
+
+  function handlePromptDragLeave(event: DragEvent<HTMLTextAreaElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return
+    }
+    setPromptDragActive(false)
+  }
+
+  async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
+    event.preventDefault()
+    setPromptDragActive(false)
+    const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith('image/'))
+    if (!file) {
+      setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
+      return
+    }
+    await uploadLocalReferenceImage(file)
+  }
+
+  async function handlePromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith('image/'))
+    if (!file) {
+      return
+    }
+    event.preventDefault()
+    await uploadLocalReferenceImage(file)
   }
 
   function handleNetworkReferenceImageInput(value: string) {
@@ -1686,7 +2195,7 @@ function App() {
     }
   }
 
-  function handleSubmitPromptDraft() {
+  async function handleSubmitPromptDraft() {
     const title = promptSubmission.title.trim()
     const promptText = promptSubmission.prompt.trim()
     if (!title || !promptText) {
@@ -1694,25 +2203,25 @@ function App() {
       return
     }
 
-    const now = new Date().toISOString()
-    setSubmittedPrompts((current) => [
-      {
-        id: `local-${Date.now()}`,
+    try {
+      await api.submitPromptPlaza({
         title,
         prompt: promptText,
         previewUrl: promptSubmission.previewUrl.trim(),
-        author: currentUser?.username ?? '我',
-        status: 'pending',
-        favorites: 0,
-        createdAt: now,
-      },
-      ...current,
-    ])
-    setPromptSubmission({ title: '', prompt: '', previewUrl: '' })
-    setMessage('提示词已提交，等待审核。')
+        tags: normalizePromptTags(promptSubmission.tags),
+      })
+      setPromptSubmission({ title: '', prompt: '', previewUrl: '', tags: [''] })
+      setMessage('提示词已提交，等待审核。')
+    } catch (error) {
+      handleApiError(error, '提示词提交失败')
+    }
   }
 
-  const previewImageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
+  const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+  const previewThumbnailURLs = limitImageURLs(
+    normalizeImageURLs(preview.thumbnailUrls, preview.thumbnailUrl),
+    preview.requestedCount,
+  )
 
   useEffect(() => {
     if (previewImageURLs.length === 0) {
@@ -1729,14 +2238,14 @@ function App() {
 
   if (!isAuthed) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="auth-light-shell min-h-screen bg-slate-950 text-slate-100">
         <TopNotice message={message} onDismiss={() => setMessage('')} />
-        <main className="flex min-h-screen items-center justify-center px-4 py-8">
+        <main className="flex min-h-screen flex-col items-center justify-center px-4 py-8">
           <section className="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900/85 p-6 shadow-panel">
             <div className="text-center">
               <div className="mx-auto inline-flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-md border border-slate-800 bg-slate-950 text-violet-300">
-                  <Image className="h-6 w-6" />
+                <div className="flex h-12 w-12 overflow-hidden rounded-md border border-slate-800 bg-slate-950">
+                  <img className="h-full w-full object-cover" src={BRAND_ICON_URL} alt="" />
                 </div>
                 <span className="text-2xl font-semibold tracking-normal text-slate-50">image2</span>
               </div>
@@ -1754,43 +2263,90 @@ function App() {
               >
                 {mode === 'register' ? (
                   <>
+                    {registrationDailyLimitReached ? (
+                      <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                        {REGISTRATION_DAILY_LIMIT_MESSAGE}
+                      </div>
+                    ) : null}
                     <Field label="邮箱" icon={<Mail className="h-4 w-4" />}>
                       <input
                         name={`register_email_${authFormSeed}`}
                         autoComplete="off"
                         value={authForm.email}
-                        onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
+                        onChange={(event) => {
+                          setAuthForm((current) => ({ ...current, email: event.target.value }))
+                          setEmailCodeCountdown(0)
+                          setEmailCaptchaPassUntil(0)
+                        }}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入邮箱"
                       />
                     </Field>
-                    <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                      <Field label="验证码" icon={<KeyRound className="h-4 w-4" />}>
+                    <Field label="图形验证码" icon={<ShieldCheck className="h-4 w-4" />}>
+                      <div className="flex min-w-0 items-stretch gap-2">
+                        <input
+                          name={`register_captcha_${authFormSeed}`}
+                          autoComplete="off"
+                          value={authForm.captchaCode}
+                          onChange={(event) =>
+                            setAuthForm((current) => ({
+                              ...current,
+                              captchaCode: event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4),
+                            }))
+                          }
+                          className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
+                          placeholder="输入右侧字符"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void refreshCaptcha(true)}
+                          className="flex h-10 w-32 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-60 min-[380px]:w-36"
+                          title="点击刷新图形验证码"
+                        >
+                          {captcha?.image ? (
+                            <img src={captcha.image} alt="图形验证码" className="h-full w-full object-contain" />
+                          ) : (
+                            <span className="inline-flex items-center gap-2 px-3 text-sm">
+                              <RefreshCcw className="h-4 w-4" />
+                              刷新
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    </Field>
+                    <Field label="验证码" icon={<KeyRound className="h-4 w-4" />}>
+                      <div className="flex min-w-0 items-stretch gap-2">
                         <input
                           name={`register_code_${authFormSeed}`}
                           autoComplete="one-time-code"
+                          inputMode="numeric"
+                          maxLength={4}
+                          pattern="[0-9]{4}"
                           value={authForm.code}
-                          onChange={(event) => setAuthForm((current) => ({ ...current, code: event.target.value }))}
-                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
+                          onChange={(event) =>
+                            setAuthForm((current) => ({
+                              ...current,
+                              code: event.target.value.replace(/\D/g, '').slice(0, 4),
+                            }))
+                          }
+                          className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                           placeholder="请输入验证码"
                         />
-                      </Field>
-                      <div className="flex items-end">
                         <button
                           type="button"
                           onClick={handleSendCode}
-                          disabled={busy === 'send-code'}
-                          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={registrationDailyLimitReached || busy === 'send-code' || emailCodeCountdown > 0}
+                          className="inline-flex h-10 w-32 shrink-0 items-center justify-center gap-1.5 rounded-md border border-slate-700 bg-slate-950 px-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60 min-[380px]:w-36"
                         >
                           {busy === 'send-code' ? (
                             <LoaderCircle className="h-4 w-4 animate-spin" />
                           ) : (
                             <Send className="h-4 w-4" />
                           )}
-                          发送验证码
+                          {emailCodeCountdown > 0 ? `${emailCodeCountdown}s 后重发` : '发送验证码'}
                         </button>
                       </div>
-                    </div>
+                    </Field>
                     <Field label="用户名" icon={<UserRoundPlus className="h-4 w-4" />}>
                       <input
                         name={`register_username_${authFormSeed}`}
@@ -1798,7 +2354,22 @@ function App() {
                         value={authForm.username}
                         onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                        placeholder="请输入用户名"
+                        placeholder="请输入用户名（英文或者数字组成）"
+                      />
+                    </Field>
+                    <Field label="邀请码（选填）" icon={<Gift className="h-4 w-4" />}>
+                      <input
+                        name={`register_invite_${authFormSeed}`}
+                        autoComplete="off"
+                        value={authForm.inviteCode}
+                        onChange={(event) =>
+                          setAuthForm((current) => ({
+                            ...current,
+                            inviteCode: event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16),
+                          }))
+                        }
+                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
+                        placeholder="好友给你的邀请码"
                       />
                     </Field>
                     <Field label="密码" icon={<KeyRound className="h-4 w-4" />}>
@@ -1931,6 +2502,7 @@ function App() {
               </div>
             </div>
           </section>
+          <IcpFooter className="mt-6" />
         </main>
       </div>
     )
@@ -1947,18 +2519,24 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen w-full max-w-[100dvw] overflow-x-hidden bg-slate-950 text-slate-100">
+    <div
+      className="user-glass-shell min-h-screen w-full max-w-[100dvw] overflow-x-hidden bg-slate-950 text-slate-100"
+      data-user-theme={userTheme}
+    >
       <TopNotice message={message} onDismiss={() => setMessage('')} />
-      <div className="flex min-h-screen w-full max-w-[100dvw] overflow-x-hidden">
+      <div
+        className="app-shell"
+        data-sidebar-open={sidebarOpen ? 'true' : 'false'}
+        data-sidebar-collapsed={sidebarCollapsed ? 'true' : 'false'}
+      >
         {sidebarOpen ? (
           <button
             type="button"
             aria-label="关闭侧边栏"
             onClick={() => setSidebarOpen(false)}
-            className="fixed inset-0 z-30 bg-slate-950/70 backdrop-blur-sm lg:hidden"
+            className="app-shell__scrim"
           />
         ) : null}
-
         <AppSidebar
           activePage={activePage}
           collapsed={sidebarCollapsed}
@@ -1972,40 +2550,26 @@ function App() {
           }}
         />
 
-        <div className="flex min-w-0 flex-1 flex-col overflow-x-hidden">
-          <AppTopBar
-            activePage={activePage}
-            sidebarOpen={sidebarOpen}
-            currentUser={currentUser}
-            onOpenSidebar={() => {
-              setSidebarOpen(true)
-            }}
-            onNavigate={navigateToPage}
-            onToggleAdmin={handleToggleAdmin}
-            adminOpen={adminOpen}
-            onLogout={handleLogoutRequest}
-          />
+        <AppTopBar
+          sidebarOpen={sidebarOpen}
+          activePage={activePage}
+          userTheme={userTheme}
+          currentUser={currentUser}
+          onOpenSidebar={() => {
+            setSidebarOpen(true)
+          }}
+          onToggleUserTheme={() => {
+            setUserTheme((current) => (current === 'light' ? 'dark' : 'light'))
+          }}
+          onNavigate={navigateToPage}
+          onToggleAdmin={handleToggleAdmin}
+          adminOpen={adminOpen}
+          onLogout={handleLogoutRequest}
+          unreadAnnouncementCount={unreadAnnouncementCount}
+          onOpenAnnouncements={openAnnouncements}
+        />
 
-          <main className="min-w-0 flex-1 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
-            {isAdmin && adminOpen ? (
-              <div className="mb-4">
-                <AdminPanel
-                  stats={adminStats}
-                  users={adminUsers}
-                  tasks={adminTasks}
-                  orders={adminOrders}
-                  audits={adminAudits}
-                  actionLogs={adminActionLogs}
-                  packages={adminPackages}
-                  busy={busy === 'refresh'}
-                  onRefresh={() => void loadAdminData()}
-                  onToggleUserStatus={(user) => void handleAdminToggleUserStatus(user)}
-                  onAdjustUserPoints={(user, delta) => void handleAdminAdjustUserPoints(user, delta)}
-                  onSavePackage={(packageId, payload) => void handleAdminSavePackage(packageId, payload)}
-                />
-              </div>
-            ) : null}
-
+        <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
             {activePage === 'home' ? (
               <div className="space-y-4">
                 <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)_360px]">
@@ -2032,18 +2596,46 @@ function App() {
                         <div className="mt-1 text-base font-semibold text-slate-100">{points ? points.balance : 0}</div>
                       </div>
                       <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
-                        <div className="text-xs text-slate-500">可用次数</div>
+                        <div className="text-xs text-slate-500">可用福利次数</div>
                         <div className="mt-1 text-base font-semibold text-slate-100">
                           {points ? points.totalCredits : 0}
                         </div>
                       </div>
+                      <div className="col-span-2 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
+                        <div className="text-sm font-medium text-slate-100">
+                          今日生图消耗 {billingSettings?.imageGeneratePointCost ?? 20} 积分
+                        </div>
+                      </div>
                     </div>
+
+                    {emailNotifyAvailable ? (
+                      <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={emailNotifyOnComplete}
+                          onChange={(event) => setEmailNotifyOnComplete(event.target.checked)}
+                          className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-violet-500 focus:ring-violet-400"
+                        />
+                        <span className="min-w-0 leading-6">
+                          额外消耗 {emailNotifyPointCost} 积分，任务完成后发送邮件至账号邮箱，失败将退还积分。
+                        </span>
+                      </label>
+                    ) : null}
 
                     <textarea
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}
-                      className="mt-4 min-h-32 w-full resize-y rounded-md border border-slate-700 bg-slate-900 px-3 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                      placeholder="请输入提示词"
+                      onDragEnter={handlePromptDrag}
+                      onDragOver={handlePromptDrag}
+                      onDragLeave={handlePromptDragLeave}
+                      onDrop={handlePromptDrop}
+                      onPaste={handlePromptPaste}
+                      className={`mt-4 min-h-32 w-full resize-y rounded-md border px-3 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400 ${
+                        promptDragActive
+                          ? 'border-violet-400 bg-violet-950/40 ring-2 ring-violet-400/40'
+                          : 'border-slate-700 bg-slate-900'
+                      }`}
+                      placeholder="请输入提示词，或将本地图片拖入 / 粘贴到此框中"
                     />
 
                     <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2073,7 +2665,7 @@ function App() {
                     <input
                       ref={referenceImageInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
                       className="hidden"
                       onChange={handleLocalReferenceImageChange}
                     />
@@ -2165,8 +2757,8 @@ function App() {
                           <span className="mb-2 block text-sm text-slate-400">自定义宽度</span>
                           <input
                             type="number"
-                            min={256}
-                            max={4096}
+                            min={1}
+                            max={CUSTOM_SIZE_MAX_SIDE}
                             step={64}
                             value={customWidth}
                             onChange={(event) => setCustomWidth(Number(event.target.value))}
@@ -2177,8 +2769,8 @@ function App() {
                           <span className="mb-2 block text-sm text-slate-400">自定义高度</span>
                           <input
                             type="number"
-                            min={256}
-                            max={4096}
+                            min={1}
+                            max={CUSTOM_SIZE_MAX_SIDE}
                             step={64}
                             value={customHeight}
                             onChange={(event) => setCustomHeight(Number(event.target.value))}
@@ -2239,7 +2831,7 @@ function App() {
                       <button
                         type="button"
                         onClick={handleCreateTask}
-                        disabled={!isAuthed || busy === 'create-task' || !prompt.trim()}
+                        disabled={!isAuthed || busy === 'create-task' || !prompt.trim() || !imageGenerationEnabled}
                         className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {busy === 'create-task' ? (
@@ -2247,7 +2839,7 @@ function App() {
                         ) : (
                           <Sparkles className="h-4 w-4" />
                         )}
-                        生成图片
+                        {imageGenerationEnabled ? '生成图片' : '暂时关闭，详情见公告'}
                       </button>
                     </div>
                   </section>
@@ -2260,7 +2852,7 @@ function App() {
                       </div>
                       <button
                         type="button"
-                        onClick={handleOpenPreviewDetail}
+                        onClick={() => void handleOpenPreviewDetail()}
                         className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
                       >
                         <Eye className="h-4 w-4" />
@@ -2268,14 +2860,16 @@ function App() {
                       </button>
                     </div>
 
-                    <PreviewImageStage
-                      preview={preview}
+                <PreviewImageStage
+                  preview={preview}
                   imageURLs={previewImageURLs}
+                  thumbnailURLs={previewThumbnailURLs}
                   activeIndex={previewImageIndex}
                   onPrevious={handlePreviousPreviewImage}
                   onNext={handleNextPreviewImage}
                   onSaveCurrent={handleSaveCurrentImage}
                   onSelectThumbnail={setPreviewImageIndex}
+                  onImageLoadError={loadPreviewTaskDetail}
                 />
 
                 <TaskDetailPanel
@@ -2312,14 +2906,19 @@ function App() {
 
             {activePage === 'profile' ? (
               <div className="space-y-4">
-                <div className="grid gap-4 xl:grid-cols-3">
+                <div className="grid gap-4 xl:grid-cols-2">
                   <UserSummaryPanel
                     currentUser={currentUser}
                     points={points}
                     busy={busy}
+                    checkedInToday={checkedInToday}
                     onCheckin={handleCheckin}
                   />
-                  <AccountOverviewPanel points={points} />
+                  <InvitePanel
+                    info={inviteInfo}
+                    busy={busy}
+                    onCopyLink={handleCopyInviteLink}
+                  />
                   <ChangePasswordPanel
                     form={changePasswordForm}
                     showPassword={showChangePassword}
@@ -2350,43 +2949,35 @@ function App() {
 
             {activePage === 'recharge' ? (
               <div className="space-y-4">
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid gap-4">
                   <section className="space-y-4 rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-                    <CustomRechargePanel
-                      count={customRechargeCount}
-                      unitPriceCents={billingSettings?.customRechargeUnitPriceCents ?? 20}
-                      busy={busy}
-                      onCountChange={setCustomRechargeCount}
-                      onSubmit={handleCustomRecharge}
-                    />
                     <PackageSection
-                      title="充值购买次数"
-                      description="也可以选择后台配置的固定档位，部分档位会额外赠送积分。"
-                      icon={<CreditCard className="h-4 w-4 text-violet-300" />}
+                      title="兑换码商品"
+                      description="购买兑换码商品后，返回本页输入兑换码即可兑换积分或福利次数。"
+                      icon={<KeyRound className="h-4 w-4 text-violet-300" />}
                       items={packages}
                       busy={busy}
-                      emptyText="暂无充值档位。"
-                      actionLabel="下单"
+                      emptyText="暂无可用兑换码商品。"
+                      actionLabel={(item) => (item.productUrl ? '前往购买' : '待配置')}
                       busyPrefix="purchase:"
                       onAction={handlePurchase}
                       renderMeta={(item) => (
                         <>
-                          <span>{item.creditsAmount} 次</span>
+                          <span>{item.creditsAmount} 福利次数</span>
+                          <span>{item.bonusPoints} 积分</span>
                           <span>{(item.amountCents / 100).toFixed(2)} 元</span>
-                          {item.bonusPoints > 0 ? <span>赠送 {item.bonusPoints} 积分</span> : null}
+                          {item.creditsAmount > 0 ? <span>赠送 {item.creditsAmount} 福利次数</span> : null}
+                          {item.productUrl ? <span>兑换码商品</span> : null}
                         </>
                       )}
                     />
+                    <RedeemCodePanel
+                      code={redeemCodeInput}
+                      busy={busy === 'redeem-code'}
+                      onCodeChange={setRedeemCodeInput}
+                      onSubmit={handleRedeemCode}
+                    />
                   </section>
-                  <RechargeOrderPanel
-                    orders={rechargeOrders}
-                    page={rechargeOrderPage}
-                    pageSize={RECHARGE_ORDER_PAGE_SIZE}
-                    total={rechargeOrderTotal}
-                    busy={busy}
-                    onConfirm={handleConfirmRechargeOrder}
-                    onPageChange={(page) => void loadRechargeOrderPage(page)}
-                  />
                 </div>
               </div>
             ) : null}
@@ -2394,19 +2985,39 @@ function App() {
             {activePage === 'prompts' ? (
               <PromptPlaza
                 items={promptGalleryItems}
+                myItems={myPromptItems}
                 favoriteIds={favoritePromptIds}
                 submission={promptSubmission}
-                isAdmin={isAdmin}
                 onSubmissionChange={setPromptSubmission}
                 onSubmit={handleSubmitPromptDraft}
                 onFavorite={handleTogglePromptFavorite}
-                onUse={handleUsePromptItem}
-                onBackHome={() => navigateToPage('home')}
+                onNotify={setMessage}
               />
             ) : null}
-          </main>
-        </div>
+            {activePage === 'products' ? (
+              <ProductPage
+                items={products}
+                categories={productCategories}
+                keyword={productKeyword}
+                activeCategoryId={activeProductCategoryId}
+                onKeywordChange={setProductKeyword}
+                onCategoryChange={setActiveProductCategoryId}
+                onOpenDetail={setActiveProduct}
+              />
+            ) : null}
+            <IcpFooter className="mt-8" />
+        </main>
       </div>
+      {rechargeConfirmDialog.open ? (
+        <RechargeConfirmDialog
+          title={rechargeConfirmDialog.title}
+          lines={rechargeConfirmDialog.lines}
+          confirmLabel={rechargeConfirmDialog.confirmLabel}
+          busy={busy === 'purchase:custom' || busy === `purchase:${activeRechargePackageCode}`}
+          onCancel={handleCancelRechargeConfirm}
+          onConfirm={handleConfirmRechargeDialog}
+        />
+      ) : null}
       {wechatSaveGuide.open ? (
         <WechatSaveGuide
           imageUrl={wechatSaveGuide.imageUrl}
@@ -2421,6 +3032,220 @@ function App() {
           onApply={handleApplyPreviewDetail}
         />
       ) : null}
+
+      {announcementDialogOpen ? (
+        <AnnouncementDialog
+          items={announcements}
+          activeItem={activeAnnouncement}
+          activeId={activeAnnouncementId}
+          forced={Boolean(forcedAnnouncement)}
+          onSelect={(id) => {
+            setActiveAnnouncementId(id)
+          }}
+          onClose={() => setAnnouncementDialogOpen(false)}
+          onMarkRead={() => void markActiveAnnouncementRead()}
+        />
+      ) : null}
+      {activeProduct ? (
+        <ProductDetailDialog
+          item={activeProduct}
+          onClose={() => setActiveProduct(null)}
+          onConfirm={() => handleProductPurchase(activeProduct)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function IcpFooter({ className = '' }: { className?: string }) {
+  return (
+    <footer className={`flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center text-xs text-slate-500 ${className}`}>
+      <a
+        href={ICP_RECORD_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="transition hover:text-slate-700 dark:hover:text-slate-300"
+      >
+        {ICP_RECORD_NUMBER}
+      </a>
+      <a
+        href={POLICE_RECORD_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 transition hover:text-slate-700 dark:hover:text-slate-300"
+      >
+        <span className="inline-block h-3.5 w-3.5 rounded-full border border-current text-[9px] leading-[12px]">盾</span>
+        {POLICE_RECORD_NUMBER}
+      </a>
+    </footer>
+  )
+}
+
+function AnnouncementDialog({
+  items,
+  activeItem,
+  activeId,
+  forced,
+  onSelect,
+  onClose,
+  onMarkRead,
+}: {
+  items: AnnouncementItem[]
+  activeItem: AnnouncementItem | null
+  activeId: string | null
+  forced: boolean
+  onSelect: (id: string) => void
+  onClose: () => void
+  onMarkRead: () => void
+}) {
+  const pinnedItems = items.filter((item) => item.kind === 'pinned')
+  const normalItems = items.filter((item) => item.kind !== 'pinned')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+      {!forced ? (
+        <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭公告" onClick={onClose} />
+      ) : null}
+      <div className="relative flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-base font-medium text-slate-50">
+              <Megaphone className="h-4 w-4 text-amber-300" />
+              公告
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              {forced ? '请先阅读置顶公告并标记已读。' : '查看平台置顶公告和普通公告。'}
+            </p>
+          </div>
+          {!forced ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
+              aria-label="关闭公告"
+            >
+              <XCircle className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
+
+        <div className="grid min-h-0 flex-1 overflow-hidden md:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="order-2 min-h-0 max-h-[34vh] overflow-y-auto border-t border-slate-800 p-3 md:order-1 md:max-h-none md:border-r md:border-t-0">
+            {items.length ? (
+              <div className="space-y-3">
+                {pinnedItems.length ? (
+                  <AnnouncementListGroup title="置顶公告" items={pinnedItems} activeId={activeId} onSelect={onSelect} />
+                ) : null}
+                {normalItems.length ? (
+                  <AnnouncementListGroup title="普通公告" items={normalItems} activeId={activeId} onSelect={onSelect} />
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-500">
+                暂无公告
+              </div>
+            )}
+          </div>
+
+          <div className="order-1 flex min-h-0 flex-col md:order-2">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              {activeItem ? (
+                <article>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-md px-2 py-1 text-xs ${activeItem.kind === 'pinned' ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-300'}`}>
+                      {activeItem.kind === 'pinned' ? '置顶' : '普通'}
+                    </span>
+                    <span className={`rounded-md px-2 py-1 text-xs ${activeItem.isRead ? 'bg-emerald-500/15 text-emerald-200' : 'bg-rose-500/15 text-rose-200'}`}>
+                      {activeItem.isRead ? '已读' : '未读'}
+                    </span>
+                    <span className="text-xs text-slate-500">更新于 {formatDateTime(activeItem.updatedAt)}</span>
+                  </div>
+                  <h2 className="mt-4 text-xl font-semibold text-slate-50">{activeItem.title}</h2>
+                  <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-300">
+                    {activeItem.content}
+                  </div>
+                  {activeItem.imageUrl ? (
+                    <div className="mt-6 border-t border-slate-800 pt-5">
+                      <img
+                        src={activeItem.imageUrl}
+                        alt={`${activeItem.title} 底部图片`}
+                        className="max-h-[420px] max-w-full rounded-lg border border-slate-700 bg-slate-900 object-contain"
+                      />
+                    </div>
+                  ) : null}
+                </article>
+              ) : (
+                <div className="flex min-h-[240px] items-center justify-center rounded-md border border-dashed border-slate-700 bg-slate-900/50 text-sm text-slate-500">
+                  请选择一条公告
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-800 px-4 py-3">
+              {!forced ? (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="inline-flex h-10 items-center justify-center rounded-md border border-slate-700 px-4 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white"
+                >
+                  关闭
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={onMarkRead}
+                disabled={!activeItem || activeItem.isRead}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-4 text-sm text-emerald-100 transition hover:border-emerald-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                标记已读
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AnnouncementListGroup({
+  title,
+  items,
+  activeId,
+  onSelect,
+}: {
+  title: string
+  items: AnnouncementItem[]
+  activeId: string | null
+  onSelect: (id: string) => void
+}) {
+  return (
+    <div>
+      <div className="mb-2 text-xs text-slate-500">{title}</div>
+      <div className="space-y-2">
+        {items.map((item) => {
+          const active = activeId === item.id
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              className={`relative w-full rounded-md border px-3 py-2 text-left transition ${
+                active
+                  ? 'border-amber-300 bg-amber-400/15 text-slate-50 shadow-[0_0_0_1px_rgba(251,191,36,0.38),0_12px_28px_rgba(251,191,36,0.12)] ring-1 ring-amber-300/40'
+                  : 'border-slate-800 bg-slate-900/70 text-slate-300 hover:border-slate-600 hover:text-white'
+              }`}
+            >
+              {active ? <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-amber-300" /> : null}
+              <div className="flex items-start justify-between gap-2">
+                <span className="line-clamp-2 text-sm font-medium">{item.title}</span>
+                {!item.isRead ? <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-rose-400" /> : null}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">{formatDateOnly(item.updatedAt)}</div>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -2469,6 +3294,56 @@ function WechatSaveGuide({
               打开原图
             </a>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RechargeConfirmDialog({
+  title,
+  lines,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string
+  lines: string[]
+  confirmLabel: string
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭兑换码购买确认" onClick={onCancel} />
+      <div className="relative w-full max-w-sm rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
+        <div className="px-4 py-4 text-center">
+          <h2 className="text-base font-medium text-slate-50">{title}</h2>
+          <div className="mt-3 space-y-1 text-sm leading-6 text-slate-300">
+            {lines.map((line) => (
+              <div key={line}>{line}</div>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 border-t border-slate-800">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-12 border-r border-slate-800 text-sm font-medium text-slate-300 transition hover:bg-slate-900 hover:text-white"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="inline-flex h-12 items-center justify-center gap-2 text-sm font-medium text-violet-300 transition hover:bg-slate-900 hover:text-violet-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
+            {confirmLabel}
+          </button>
         </div>
       </div>
     </div>
@@ -2590,19 +3465,18 @@ function AppSidebar({
   onToggleCollapsed: () => void
   onCloseMobile: () => void
 }) {
-  const railWidthClass = collapsed ? 'lg:w-16' : 'lg:w-72'
-  const labelClass = collapsed ? 'lg:hidden' : ''
+  const labelClass = ''
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-800 bg-slate-950 transition-all duration-200 lg:static lg:z-10 lg:h-screen lg:translate-x-0 ${railWidthClass} ${
-        open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      className={`app-shell__sidebar flex h-screen min-w-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-950 ${
+        open ? '' : 'pointer-events-none'
       }`}
     >
       <div className="flex h-20 items-center gap-2 border-b border-slate-800 px-3">
         <button
           type="button"
           onClick={onCloseMobile}
-          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white lg:hidden"
+          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white"
           title="关闭侧边栏"
         >
           <XCircle className="h-5 w-5" />
@@ -2610,23 +3484,23 @@ function AppSidebar({
         <button
           type="button"
           onClick={onToggleCollapsed}
-          className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white lg:inline-flex"
+          className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white"
           title={collapsed ? '展开侧边栏' : '收起侧边栏'}
         >
           {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
         </button>
         <div className={`min-w-0 ${labelClass || 'block'}`}>
-          <div className={`flex items-center gap-2 text-sm text-slate-400 ${collapsed ? 'lg:hidden' : ''}`}>
+          <div className="flex items-center gap-2 text-sm text-slate-400">
             <Image className="h-4 w-4 text-violet-300" />
             <span>AI 生图</span>
           </div>
-          <div className={`truncate text-sm font-medium text-slate-100 ${collapsed ? 'lg:hidden' : ''}`}>
+          <div className="truncate text-sm font-medium text-slate-100">
             用户工作台
           </div>
         </div>
       </div>
 
-      <nav className={`flex-1 space-y-3 ${collapsed ? 'px-2 py-4' : 'px-3 py-6'}`}>
+      <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-5">
         {appNavItems.map((item) => {
           const active = activePage === item.page
           return (
@@ -2634,15 +3508,15 @@ function AppSidebar({
               key={item.page}
               type="button"
               onClick={() => onNavigate(item.page)}
-              className={`flex h-14 w-full items-center gap-3 rounded-md px-3 text-left text-sm transition ${
+              className={`flex h-12 w-full min-w-0 items-center gap-3 rounded-md px-3 text-left text-sm transition ${
                 active
-                  ? 'bg-violet-500 text-slate-950'
+                  ? 'bg-violet-500 text-slate-950 shadow-lg shadow-violet-950/25'
                   : 'text-slate-300 hover:bg-slate-900 hover:text-white'
-              } ${collapsed ? 'lg:justify-center lg:px-0' : ''}`}
+              }`}
               title={item.label}
             >
-              <span className="shrink-0">{item.icon}</span>
-              <span className={labelClass}>{item.label}</span>
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center">{item.icon}</span>
+              <span className={`min-w-0 truncate ${labelClass}`}>{item.label}</span>
             </button>
           )
         })}
@@ -2652,32 +3526,54 @@ function AppSidebar({
 }
 
 function AppTopBar({
-  activePage,
   sidebarOpen,
+  activePage,
+  userTheme,
   currentUser,
   onOpenSidebar,
+  onToggleUserTheme,
   onNavigate,
   onToggleAdmin,
   adminOpen,
   onLogout,
+  unreadAnnouncementCount,
+  onOpenAnnouncements,
 }: {
-  activePage: AppPage
   sidebarOpen: boolean
+  activePage: AppPage
+  userTheme: UserTheme
   currentUser: UserInfo | null
   onOpenSidebar: () => void
+  onToggleUserTheme: () => void
   onNavigate: (page: AppPage) => void
   onToggleAdmin: () => void
   adminOpen: boolean
   onLogout: () => void
+  unreadAnnouncementCount: number
+  onOpenAnnouncements: () => void
 }) {
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!userMenuRef.current?.contains(event.target as Node)) {
+        setUserMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    return () => window.removeEventListener('mousedown', handlePointerDown)
+  }, [])
+
   return (
-    <header className="sticky top-0 z-20 max-w-[100dvw] overflow-hidden border-b border-slate-800 bg-slate-950/95 px-2 py-2 backdrop-blur sm:px-4 lg:px-6">
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-        <div className="flex min-w-0 items-center gap-2 overflow-x-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <header className="app-shell__topbar sticky top-0 z-30 flex h-20 min-w-0 items-center overflow-visible border-b border-slate-800 bg-slate-950/95 px-2 backdrop-blur sm:px-4 lg:px-6">
+      <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2 pr-1">
           <button
             type="button"
             onClick={onOpenSidebar}
-            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white lg:hidden ${
+            className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white ${
               sidebarOpen ? 'hidden' : ''
             }`}
             title="打开侧边栏"
@@ -2687,54 +3583,120 @@ function AppTopBar({
           <nav className="flex flex-nowrap items-center gap-1 whitespace-nowrap text-sm font-medium sm:gap-2">
             <button
               type="button"
-              onClick={() => onNavigate('home')}
-              className={`rounded-md px-2.5 py-2 transition sm:px-3 ${
-                activePage === 'home'
-                  ? 'text-slate-50'
-                  : 'text-slate-400 hover:text-slate-100'
-              }`}
+              onClick={() => onNavigate(activePage === 'prompts' ? 'home' : 'prompts')}
+              className="rounded-md px-2.5 py-2 text-slate-400 transition hover:text-slate-100 sm:px-3"
             >
-              首页
+              {activePage === 'prompts' ? '首页' : '提示词广场'}
             </button>
             <button
               type="button"
-              onClick={() => onNavigate('prompts')}
-              className={`rounded-md px-2.5 py-2 transition sm:px-3 ${
-                activePage === 'prompts'
-                  ? 'text-slate-50'
-                  : 'text-slate-400 hover:text-slate-100'
-              }`}
+              onClick={() => onNavigate('products')}
+              className={`rounded-md px-2.5 py-2 transition sm:px-3 ${activePage === 'products' ? 'text-slate-100' : 'text-slate-400 hover:text-slate-100'}`}
             >
-              提示词广场
+              商品
+            </button>
+            <button
+              type="button"
+              onClick={onOpenAnnouncements}
+              className="relative inline-flex items-center gap-1 rounded-md px-2.5 py-2 text-slate-400 transition hover:text-slate-100 sm:px-3"
+              aria-label="查看公告"
+              title="查看公告"
+            >
+              <Megaphone className="h-4 w-4" />
+              公告
+              {unreadAnnouncementCount > 0 ? (
+                <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                  {unreadAnnouncementCount > 9 ? '9+' : unreadAnnouncementCount}
+                </span>
+              ) : null}
             </button>
           </nav>
         </div>
 
         <div className="flex min-w-0 shrink-0 items-center gap-1 text-sm sm:gap-2">
-          {currentUser?.role === 'admin' && !adminOpen ? (
+          <div
+            ref={userMenuRef}
+            className="relative"
+          >
             <button
               type="button"
-              onClick={onToggleAdmin}
-              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-2 text-emerald-200 transition hover:border-emerald-400 hover:text-white sm:gap-2 sm:px-3"
+              onClick={() => setUserMenuOpen((current) => !current)}
+              className="inline-flex h-9 max-w-[42vw] items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 min-[380px]:max-w-[48vw] sm:max-w-none"
+              title={currentUser ? currentUser.username : '已登录'}
+              aria-expanded={userMenuOpen}
             >
-              <ShieldCheck className="h-4 w-4" />
-              后台
+              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 text-xs font-semibold text-white">
+                {currentUser?.username?.slice(0, 1).toUpperCase() || 'U'}
+              </span>
+              <span className="truncate text-sm font-medium text-slate-200">
+                {currentUser ? currentUser.username : '已登录'}
+              </span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition ${userMenuOpen ? 'rotate-180' : ''}`}
+              />
             </button>
-          ) : null}
-          <span
-            className="max-w-[22vw] truncate rounded-md border border-slate-800 bg-slate-900 px-2 py-2 text-slate-300 min-[380px]:max-w-[28vw] sm:max-w-none sm:px-3"
-            title={currentUser ? currentUser.username : '已登录'}
-          >
-            {currentUser ? currentUser.username : '已登录'}
-          </span>
-          <button
-            type="button"
-            onClick={onLogout}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-slate-200 transition hover:border-slate-500 hover:text-white sm:gap-2 sm:px-3"
-          >
-            <LogOut className="h-4 w-4" />
-            退出
-          </button>
+
+            {userMenuOpen ? (
+              <div className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[152px] rounded-md border border-slate-800 bg-slate-900 p-1 shadow-2xl shadow-black/40">
+                <button
+                  type="button"
+                  onClick={onToggleUserTheme}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 hover:text-white"
+                  title={userTheme === 'light' ? '浅色模式' : '深色模式'}
+                >
+                  {userTheme === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                  {userTheme === 'light' ? '浅色模式' : '深色模式'}
+                </button>
+                <div className="user-theme-menu-divider my-1 h-px bg-slate-800" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    onNavigate('profile')
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 hover:text-white"
+                >
+                  <UserRound className="h-4 w-4" />
+                  个人
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    onNavigate('recharge')
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 hover:text-white"
+                >
+                  <KeyRound className="h-4 w-4" />
+                  兑换码
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    onLogout()
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 hover:text-white"
+                >
+                  <LogOut className="h-4 w-4" />
+                  退出登录
+                </button>
+                {currentUser?.role === 'admin' && !adminOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserMenuOpen(false)
+                      onToggleAdmin()
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-emerald-200 transition hover:bg-slate-800 hover:text-emerald-100"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    后台
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </header>
@@ -2764,11 +3726,13 @@ function UserSummaryPanel({
   currentUser,
   points,
   busy,
+  checkedInToday,
   onCheckin,
 }: {
   currentUser: UserInfo | null
   points: PointsResponse | null
   busy: BusyAction
+  checkedInToday: boolean
   onCheckin: () => void
 }) {
   return (
@@ -2792,52 +3756,86 @@ function UserSummaryPanel({
 
         <div className="grid grid-cols-2 gap-3">
           <MiniStat label="当前积分" value={points ? String(points.balance) : '0'} />
-          <MiniStat label="可用次数" value={points ? String(points.totalCredits) : '0'} />
+          <MiniStat label="可用福利次数" value={points ? String(points.totalCredits) : '0'} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <MiniStat
+            label="累计签到奖励"
+            value={`${points?.checkinCreditsTotal ?? 0}福利次数+${points?.checkinPointsTotal ?? 0}积分`}
+          />
+          <MiniStat label="最近签到时间" value={points?.lastCheckinAt ? formatDateTime(points.lastCheckinAt) : '-'} />
         </div>
 
         <button
           type="button"
           onClick={onCheckin}
-          disabled={busy === 'checkin'}
+          disabled={busy === 'checkin' || checkedInToday}
           className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-4 py-3 font-medium text-slate-100 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy === 'checkin' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <BadgeCheck className="h-4 w-4" />}
-          每日签到
+          {busy === 'checkin' ? '签到中' : checkedInToday ? '今日已签到' : '每日签到'}
         </button>
       </div>
     </section>
   )
 }
 
-function AccountOverviewPanel({ points }: { points: PointsResponse | null }) {
+function InvitePanel({
+  info,
+  busy,
+  onCopyLink,
+}: {
+  info: InviteInfoResponse | null
+  busy: BusyAction
+  onCopyLink: (link: string) => void
+}) {
+  const inviteCode = info?.inviteCode ?? ''
+  const inviteLink = buildInviteLink(inviteCode)
+  const rewardText = formatInviteReward(info?.inviteRewardCredits ?? 0, info?.inviteRewardPoints ?? 0)
+
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-end">
-        <Wallet className="h-5 w-5 text-violet-300" />
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-        <MiniStat label="当前积分" value={points ? String(points.balance) : '0'} />
-        <MiniStat label="可用次数" value={points ? String(points.totalCredits) : '0'} />
-      </div>
-
-      <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-        <MiniStat label="免费次数" value={String(points?.freeCredits ?? 0)} />
-        <MiniStat label="充值次数" value={String(points?.paidCredits ?? 0)} />
-        <MiniStat label="连续签到" value={points ? String(points.streak) : '0'} />
-      </div>
-
-      <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-400">
-        <div className="flex items-center justify-between gap-3">
-          <span>最近签到时间</span>
-          <span className="text-right text-slate-200">
-            {points?.lastCheckinAt ? formatDateTime(points.lastCheckinAt) : '-'}
-          </span>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-medium text-slate-50">好友邀请</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            邀请好友注册后，你可获得 {rewardText}，新用户注册赠送 {info?.registrationGiftCredits ?? 0} 福利次数。
+          </p>
+        </div>
+        <div className="flex h-10 w-10 items-center justify-center rounded-md border border-violet-500/20 bg-violet-500/10 text-violet-300">
+          <Gift className="h-5 w-5" />
         </div>
       </div>
-      </section>
-    )
-  }
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <MiniStat label="已邀请人数" value={String(info?.invitedCount ?? 0)} />
+        <MiniStat label="累计奖励福利次数" value={String(info?.rewardCreditsTotal ?? 0)} />
+        <MiniStat label="累计奖励积分" value={String(info?.rewardPointsTotal ?? 0)} />
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)_auto]">
+        <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+          <div className="text-xs text-slate-500">我的邀请码</div>
+          <div className="mt-1 font-mono text-lg font-semibold tracking-[0.2em] text-violet-200">{inviteCode || '-'}</div>
+        </div>
+        <div className="min-w-0 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+          <div className="text-xs text-slate-500">邀请链接</div>
+          <div className="mt-1 truncate text-sm text-slate-200">{inviteLink || '-'}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onCopyLink(inviteLink)}
+          disabled={!inviteLink || busy === 'copy-invite-link'}
+          className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy === 'copy-invite-link' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+          复制链接
+        </button>
+      </div>
+    </section>
+  )
+}
 
 function ChangePasswordPanel({
   form,
@@ -2852,7 +3850,7 @@ function ChangePasswordPanel({
   busy: BusyAction
   onToggleShowPassword: () => void
   onChangeForm: (next: PasswordChangeForm) => void
-  onSubmit: () => void
+  onSubmit: () => void | Promise<void>
 }) {
   const inputType = showPassword ? 'text' : 'password'
   const isBusy = busy === 'change-password'
@@ -2986,148 +3984,6 @@ function PanelPagination({
   )
 }
 
-function CustomRechargePanel({
-  count,
-  unitPriceCents,
-  busy,
-  onCountChange,
-  onSubmit,
-}: {
-  count: number
-  unitPriceCents: number
-  busy: BusyAction
-  onCountChange: (value: number) => void
-  onSubmit: () => void
-}) {
-  const normalizedCount = Math.max(1, Math.floor(count || 0))
-  const amountCents = normalizedCount * unitPriceCents
-
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-medium text-slate-100">自定义充值</h3>
-          <p className="mt-1 text-xs text-slate-500">按次数充值，自定义充值不赠送积分。</p>
-        </div>
-        <CreditCard className="h-4 w-4 text-violet-300" />
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-        <label className="block">
-          <span className="mb-2 block text-xs text-slate-500">充值次数</span>
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={count}
-            onChange={(event) => onCountChange(Math.max(1, Number(event.target.value) || 1))}
-            className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={onSubmit}
-          disabled={busy === 'purchase:custom'}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {busy === 'purchase:custom' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-          充值
-        </button>
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-        <span>单次 {(unitPriceCents / 100).toFixed(2)} 元</span>
-        <span>合计 {(amountCents / 100).toFixed(2)} 元</span>
-        <span>赠送 0 积分</span>
-      </div>
-    </div>
-  )
-}
-
-function RechargeOrderPanel({
-  orders,
-  page,
-  pageSize,
-  total,
-  busy,
-  onConfirm,
-  onPageChange,
-}: {
-  orders: RechargeOrderItem[]
-  page: number
-  pageSize: number
-  total: number
-  busy: BusyAction
-  onConfirm: (order: RechargeOrderItem) => void
-  onPageChange: (page: number) => void
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-slate-100">订单</h3>
-          <p className="mt-1 text-xs text-slate-500">查看当前充值订单与支付状态。</p>
-        </div>
-        <CreditCard className="h-5 w-5 text-violet-300" />
-      </div>
-
-      <div className="mt-4 space-y-2">
-        {orders.length ? (
-          orders.map((order) => (
-            <div key={order.orderNo} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm text-slate-100">{order.packageName}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {order.orderNo} · {order.rechargeType === 'custom' ? '自定义充值' : '套餐充值'} · {(order.amountCents / 100).toFixed(2)} 元
-                  </div>
-                </div>
-                <span
-                  className={`rounded-md px-2 py-1 text-xs ${
-                    order.status === 'paid'
-                      ? 'bg-emerald-500/15 text-emerald-300'
-                      : order.status === 'pending'
-                        ? 'bg-amber-500/15 text-amber-300'
-                        : 'bg-slate-800 text-slate-300'
-                  }`}
-                >
-                  {getRechargeOrderStatusLabel(order.status)}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                <span>次数 {order.creditsAmount}</span>
-                {order.bonusPoints > 0 ? <span>赠送 {order.bonusPoints} 积分</span> : null}
-                {order.paymentChannel ? <span>渠道 {getPaymentChannelLabel(order.paymentChannel)}</span> : null}
-              </div>
-              {order.status === 'pending' ? (
-                <button
-                  type="button"
-                  onClick={() => onConfirm(order)}
-                  disabled={busy === `confirm-recharge:${order.orderNo}`}
-                  className="mt-3 inline-flex items-center gap-2 rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs text-violet-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {busy === `confirm-recharge:${order.orderNo}` ? (
-                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                  )}
-                  模拟支付成功
-                </button>
-              ) : null}
-            </div>
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-            暂无充值订单
-          </div>
-        )}
-      </div>
-
-      <PanelPagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
-    </section>
-  )
-}
-
 function TaskHistoryPanel({
   items,
   page,
@@ -3145,7 +4001,7 @@ function TaskHistoryPanel({
 }) {
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-medium text-slate-50">历史记录</h2>
           <p className="mt-1 text-sm text-slate-400">最近提交的生图任务，每页 {pageSize} 条</p>
@@ -3155,48 +4011,42 @@ function TaskHistoryPanel({
 
       <div className="mt-4 space-y-3">
         {items.length ? (
-          items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelect(item)}
-              className="flex w-full items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-900"
-            >
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-xs font-medium text-slate-300">
-                {item.imageUrl ? (
-                  <img src={item.imageUrl} alt={item.prompt} className="h-full w-full object-cover" />
-                ) : (
-                  <span>{getImageTaskStatusLabel(item.status)}</span>
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-medium text-slate-200">{item.prompt}</span>
-                  <span
-                    className={`rounded-md px-2 py-0.5 text-xs ${
-                      item.status === 'success'
-                        ? 'bg-emerald-500/15 text-emerald-300'
-                        : item.status === 'failed'
-                          ? 'bg-rose-500/15 text-rose-300'
-                          : 'bg-amber-500/15 text-amber-300'
-                    }`}
-                  >
-                    {getImageTaskStatusLabel(item.status)}
-                  </span>
+          items.map((item) => {
+            const imageURLs = limitImageURLs(normalizeImageURLs(item.imageUrls, item.imageUrl), item.requestedCount)
+            const cover = item.thumbnailUrl || item.thumbnailUrls?.[0] || imageURLs[0] || ''
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelect(item)}
+                className="flex w-full items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-900"
+              >
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-xs font-medium text-slate-300">
+                  {cover ? (
+                    <img src={cover} alt={item.prompt} className="h-full w-full object-cover" />
+                  ) : (
+                    <span>{getImageTaskStatusLabel(item.status)}</span>
+                  )}
                 </div>
-                <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                  <span>{formatDateTime(item.createdAt)}</span>
-                  <span>
-                    {item.costCredits || item.costPoints} 次 / {getCreditSourceLabel(item.creditSource)}
-                  </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium text-slate-200">{item.prompt}</span>
+                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs ${getTaskStatusBadgeClass(item.status)}`}>
+                      {getImageTaskStatusLabel(item.status)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>{formatDateTime(item.createdAt)}</span>
+                    <span>消耗 {formatTaskCost(item, getTaskCreditCost(item))}</span>
+                    {imageURLs.length > 1 ? <span>{imageURLs.length} 张图</span> : null}
+                  </div>
                 </div>
-                {item.errorMessage ? <p className="mt-2 text-xs text-rose-300">{item.errorMessage}</p> : null}
-              </div>
-            </button>
-          ))
+              </button>
+            )
+          })
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-            暂无任务记录。
+          <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
+            暂无生图历史。
           </div>
         )}
       </div>
@@ -3221,9 +4071,11 @@ function ActivityLogPanel({
 }) {
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-end">
-        <ReceiptText className="h-5 w-5 text-violet-300" />
-      </div>
+      <PageHeader
+        title="活动记录"
+        description="查看生图、兑换码、积分和福利次数流水合并记录。"
+        action={<ReceiptText className="h-5 w-5 text-violet-300" />}
+      />
 
       <div className="mt-4 space-y-3">
         {items.length ? (
@@ -3233,7 +4085,7 @@ function ActivityLogPanel({
                 {item.imageUrl ? (
                   <img src={item.imageUrl} alt={item.title} className="h-full w-full object-cover" />
                 ) : (
-                  <span className="text-[11px]">{activityRecordShortLabel(item.recordType)}</span>
+                  <span className="text-[11px]">{getActivityShortLabel(item.recordType)}</span>
                 )}
               </div>
               <div className="min-w-0 flex-1">
@@ -3243,19 +4095,19 @@ function ActivityLogPanel({
                     <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{item.description}</p>
                   </div>
                   <span className="shrink-0 rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs text-slate-300">
-                    {activityRecordLabel(item.recordType)}
+                    {getActivityRecordLabel(item.recordType)}
                   </span>
                 </div>
-                <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                  <span>{activityRecordTimeLabel(item)}</span>
-                  <span>{activityRecordValue(item)}</span>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <span>{formatDateTime(item.createdAt)}</span>
+                  <span>{getActivityRecordValue(item)}</span>
                 </div>
               </div>
             </div>
           ))
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-            暂无日志记录。
+          <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
+            暂无活动记录。
           </div>
         )}
       </div>
@@ -3287,7 +4139,6 @@ function FlowLogsPanel({
   onCreditPageChange: (page: number) => void
 }) {
   const [activeType, setActiveType] = useState<FlowLogType>('points')
-  const [detail, setDetail] = useState<FlowLogDetail>(null)
   const showingPoints = activeType === 'points'
   const currentPage = showingPoints ? pointsPage : creditPage
   const currentTotal = showingPoints ? pointsTotal : creditTotal
@@ -3298,68 +4149,42 @@ function FlowLogsPanel({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-md border border-slate-800 bg-slate-950 p-1">
           <FlowLogTabButton
-            active={activeType === 'points'}
+            active={showingPoints}
             icon={<Wallet className="h-4 w-4" />}
             label="积分流水"
             onClick={() => setActiveType('points')}
           />
           <FlowLogTabButton
-            active={activeType === 'credits'}
+            active={!showingPoints}
             icon={<Sparkles className="h-4 w-4" />}
-            label="次数流水"
+            label="福利次数流水"
             onClick={() => setActiveType('credits')}
           />
         </div>
         <div className="text-xs text-slate-500">
-          共 {currentTotal} 条
+          共 {currentTotal} 条，当前第 {currentPage} 页
         </div>
       </div>
 
-      <div className="mt-4 space-y-2">
+      <div className="mt-4 space-y-3">
         {showingPoints ? (
           pointsLogs.length ? (
-            pointsLogs.map((item) => (
-              <FlowLogListRow
-                key={`points-${item.id}`}
-                date={formatDateTime(item.createdAt)}
-                valueLabel={`积分 ${formatSignedNumber(item.delta)}`}
-                positive={item.delta >= 0}
-                onDetail={() => setDetail({ type: 'points', item })}
-              />
-            ))
+            pointsLogs.map((item) => <PointsLogRow key={item.id} item={item} />)
           ) : (
-            <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
+            <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
               暂无积分流水。
             </div>
           )
         ) : creditLogs.length ? (
-          creditLogs.map((item) => {
-            const delta = item.deltaFree + item.deltaPaid
-            return (
-              <FlowLogListRow
-                key={`credits-${item.id}`}
-                date={formatDateTime(item.createdAt)}
-                valueLabel={`次数 ${formatSignedNumber(delta)}`}
-                positive={delta >= 0}
-                onDetail={() => setDetail({ type: 'credits', item })}
-              />
-            )
-          })
+          creditLogs.map((item) => <CreditLogRow key={item.id} item={item} />)
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-            暂无次数流水。
+          <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
+            暂无福利次数流水。
           </div>
         )}
       </div>
 
-      <PanelPagination
-        page={currentPage}
-        pageSize={pageSize}
-        total={currentTotal}
-        onPageChange={onCurrentPageChange}
-      />
-
-      {detail ? <FlowLogDetailDialog detail={detail} onClose={() => setDetail(null)} /> : null}
+      <PanelPagination page={currentPage} pageSize={pageSize} total={currentTotal} onPageChange={onCurrentPageChange} />
     </section>
   )
 }
@@ -3379,249 +4204,14 @@ function FlowLogTabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded px-3 py-2 text-sm transition ${
-        active
-          ? 'bg-violet-500 text-slate-950 shadow-sm'
-          : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'
+      className={`inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm transition ${
+        active ? 'bg-violet-500 text-slate-950' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'
       }`}
     >
       {icon}
       {label}
     </button>
   )
-}
-
-function FlowLogListRow({
-  date,
-  valueLabel,
-  positive,
-  onDetail,
-}: {
-  date: string
-  valueLabel: string
-  positive: boolean
-  onDetail: () => void
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-3">
-      <div className="min-w-0 flex-1 text-sm text-slate-300">{date}</div>
-      <div className={`shrink-0 text-sm font-medium ${positive ? 'text-emerald-300' : 'text-rose-300'}`}>
-        {valueLabel}
-      </div>
-      <button
-        type="button"
-        onClick={onDetail}
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-violet-400 hover:text-white"
-      >
-        <Eye className="h-3.5 w-3.5" />
-        详情
-      </button>
-    </div>
-  )
-}
-
-function FlowLogDetailDialog({ detail, onClose }: { detail: NonNullable<FlowLogDetail>; onClose: () => void }) {
-  const rows =
-    detail.type === 'points'
-      ? getPointsLogDetailRows(detail.item)
-      : getCreditLogDetailRows(detail.item)
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6">
-      <div className="max-h-[88vh] w-full max-w-lg overflow-hidden rounded-lg border border-slate-800 bg-slate-950 shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
-          <div>
-            <h3 className="text-base font-medium text-slate-50">
-              {detail.type === 'points' ? '积分流水详情' : '次数流水详情'}
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">查看该条流水的完整变动信息。</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-rose-400 hover:text-rose-200"
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="max-h-[68vh] overflow-y-auto p-4">
-          <div className="grid gap-2">
-            {rows.map((row) => (
-              <div key={row.label} className="rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2">
-                <div className="text-xs text-slate-500">{row.label}</div>
-                <div className="mt-1 break-words text-sm text-slate-100">{row.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex justify-end border-t border-slate-800 px-4 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
-          >
-            知道了
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function getPointsLogDetailRows(item: PointsLogItem): Array<{ label: string; value: string }> {
-  return [
-    { label: '流水编号', value: item.id },
-    { label: '流水类型', value: getPointsChangeTypeLabel(item.changeType) },
-    { label: '日期', value: formatDateTime(item.createdAt) },
-    { label: '积分变化', value: formatSignedNumber(item.delta) },
-    { label: '变动前积分', value: String(item.beforeBalance) },
-    { label: '变动后积分', value: String(item.afterBalance) },
-    { label: '备注', value: item.remark || '-' },
-  ]
-}
-
-function getCreditLogDetailRows(item: CreditLogItem): Array<{ label: string; value: string }> {
-  const beforeTotal = item.beforeFree + item.beforePaid
-  const afterTotal = item.afterFree + item.afterPaid
-  const deltaTotal = item.deltaFree + item.deltaPaid
-  return [
-    { label: '流水编号', value: item.id },
-    { label: '流水类型', value: getCreditChangeTypeLabel(item.changeType) },
-    { label: '日期', value: formatDateTime(item.createdAt) },
-    { label: '次数变化', value: formatSignedNumber(deltaTotal) },
-    { label: '免费次数变化', value: `${item.beforeFree} → ${item.afterFree}（${formatSignedNumber(item.deltaFree)}）` },
-    { label: '充值次数变化', value: `${item.beforePaid} → ${item.afterPaid}（${formatSignedNumber(item.deltaPaid)}）` },
-    { label: '变动前总次数', value: String(beforeTotal) },
-    { label: '变动后总次数', value: String(afterTotal) },
-    { label: '备注', value: item.remark || '-' },
-  ]
-}
-
-function PointsLogPanel({
-  logs,
-  page,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  logs: PointsLogItem[]
-  page: number
-  pageSize: number
-  total: number
-  onPageChange: (page: number) => void
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-end">
-        <Wallet className="h-5 w-5 text-violet-300" />
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {logs.length ? (
-          logs.map((item) => <PointsLogRow key={item.id} item={item} />)
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-            暂无积分流水。
-          </div>
-        )}
-      </div>
-
-      <PanelPagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
-    </section>
-  )
-}
-
-function CreditLogPanel({
-  logs,
-  page,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  logs: CreditLogItem[]
-  page: number
-  pageSize: number
-  total: number
-  onPageChange: (page: number) => void
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-end">
-        <Sparkles className="h-5 w-5 text-violet-300" />
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {logs.length ? (
-          logs.map((item) => <CreditLogRow key={item.id} item={item} />)
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-            暂无次数流水。
-          </div>
-        )}
-      </div>
-
-      <PanelPagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
-    </section>
-  )
-}
-
-function activityRecordLabel(recordType: UserActivityItem['recordType']) {
-  switch (recordType) {
-    case 'image_task':
-      return '生图任务'
-    case 'recharge_order':
-      return '充值订单'
-    case 'points_log':
-      return '积分流水'
-    case 'credit_log':
-      return '次数流水'
-    default:
-      return '记录'
-  }
-}
-
-function activityRecordShortLabel(recordType: UserActivityItem['recordType']) {
-  switch (recordType) {
-    case 'image_task':
-      return '任务'
-    case 'recharge_order':
-      return '订单'
-    case 'points_log':
-      return '积分'
-    case 'credit_log':
-      return '次数'
-    default:
-      return '记录'
-  }
-}
-
-function activityRecordValue(item: UserActivityItem) {
-  switch (item.recordType) {
-    case 'image_task':
-      return `${item.creditsAmount ?? 0} 次`
-    case 'recharge_order':
-      return `${((item.amountCents ?? 0) / 100).toFixed(2)} 元`
-    case 'points_log':
-      return `${(item.deltaPoints ?? 0) >= 0 ? '+' : ''}${item.deltaPoints ?? 0} 积分`
-    case 'credit_log':
-      return `免费 ${(item.deltaFreeCredits ?? 0) >= 0 ? '+' : ''}${item.deltaFreeCredits ?? 0} / 充值 ${
-        (item.deltaPaidCredits ?? 0) >= 0 ? '+' : ''
-      }${item.deltaPaidCredits ?? 0}`
-    default:
-      return ''
-  }
-}
-
-function activityRecordTimeLabel(item: UserActivityItem): string {
-  const timeText = formatDateTime(item.createdAt)
-  if (item.recordType !== 'image_task') {
-    return timeText
-  }
-
-  const taskId = item.id.replace(/^task-/, '').trim()
-  return taskId ? `任务 #${taskId} · ${timeText}` : timeText
 }
 
 function TaskDetailPanel({
@@ -3631,96 +4221,36 @@ function TaskDetailPanel({
   preview: ImageTaskDetailResponse
   progress: GenerationProgress | null
 }) {
-  const imageCount = normalizeImageURLs(preview.imageUrls, preview.imageUrl).length
+  const imageCount = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
   const rawStatus = progress?.status ?? preview.status
-  const isRunning = rawStatus === 'running' || rawStatus === 'generating'
-  const isSuccess = rawStatus === 'success'
-  const isFailed = rawStatus === 'failed'
-  const costCount = Math.max(1, Number(preview.costCredits || preview.costPoints || progress?.total || 1))
-  const totalCount = Math.max(
-    1,
-    progress?.total ?? (isSuccess ? imageCount || costCount : costCount),
-  )
-  const completedCount = Math.min(
-    totalCount,
-    Math.max(0, progress?.completed ?? (isSuccess ? totalCount : 0)),
-  )
-  const successCount = Math.min(
-    totalCount,
-    Math.max(0, progress?.success ?? (isSuccess ? Math.max(1, imageCount || totalCount) : 0)),
-  )
-  const runningCount = Math.min(
-    totalCount,
-    Math.max(0, progress?.running ?? (isRunning ? totalCount - completedCount : 0)),
-  )
-  const elapsedSeconds = Math.max(0, Math.floor(progress?.elapsedSeconds ?? 0))
-  const elapsedText = progress || isRunning ? `${elapsedSeconds} 秒` : '-'
-  const statusBadgeClass = isSuccess
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-    : isFailed
-      ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-    : isRunning
-      ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-      : 'border-slate-700 bg-slate-900 text-slate-300'
+  const totalCount = Math.max(1, progress?.total ?? getPreviewRequestedCount(preview, imageCount || 1))
+  const completedCount = Math.min(totalCount, Math.max(0, progress?.completed ?? (rawStatus === 'success' ? totalCount : 0)))
+  const elapsedSeconds = progress?.elapsedSeconds ?? getPreviewElapsedSeconds(preview)
+  const elapsedText = formatElapsedTriplet(totalCount, elapsedSeconds, progress?.imageElapsedSeconds)
 
   return (
     <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
-        <Copy className="h-4 w-4 text-slate-400" />
-        任务状态
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
+          <Copy className="h-4 w-4 text-slate-400" />
+          任务状态
+        </div>
+        <span className={`rounded-md px-2 py-1 text-xs ${getTaskStatusBadgeClass(rawStatus)}`}>
+          {getImageTaskStatusLabel(rawStatus)}
+        </span>
       </div>
 
-      <div className="mt-3 space-y-2">
-        <div className="grid grid-cols-2 gap-2">
-          <TaskMetaCell label="任务编号" value={preview.taskId} />
-          <TaskMetaCell
-            label="状态"
-            value={
-              <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs ${statusBadgeClass}`}>
-                {getTaskStatusLabel(rawStatus)}
-              </span>
-            }
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <TaskMetaCell label="完成数量" value={`${completedCount}/${totalCount}`} />
-          <TaskMetaCell label="成功数量" value={`${successCount} 张`} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <TaskMetaCell label="耗时" value={elapsedText} />
-          <TaskMetaCell label="运行中" value={`${runningCount} 张`} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <TaskMetaCell label="消耗次数" value={`${costCount} 次`} />
-          <TaskMetaCell label="消耗来源" value={getCreditSourceLabel(preview.creditSource)} />
-        </div>
-
-        <TaskMetaCell label="创建时间" value={preview.createdAt ? formatDateTime(preview.createdAt) : '-'} />
-
-        {preview.errorMessage ? (
-          <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-            错误：{preview.errorMessage}
-          </div>
-        ) : null}
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <MiniStat label="完成" value={`${completedCount}/${totalCount}`} />
+        <MiniStat label="耗时·s" value={elapsedText} />
+        <MiniStat label="消耗" value={formatTaskCost(preview, totalCount)} />
       </div>
-    </div>
-  )
-}
 
-function TaskMetaCell({
-  label,
-  value,
-}: {
-  label: string
-  value: ReactNode
-}) {
-  return (
-    <div className="min-w-0 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 min-w-0 truncate text-sm font-medium text-slate-100">{value}</div>
+      {preview.errorMessage ? (
+        <div className="mt-3 rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+          {preview.errorMessage}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -3728,355 +4258,1130 @@ function TaskMetaCell({
 function PreviewImageStage({
   preview,
   imageURLs,
+  thumbnailURLs,
   activeIndex,
   onPrevious,
   onNext,
   onSaveCurrent,
   onSelectThumbnail,
+  onImageLoadError,
 }: {
   preview: ImageTaskDetailResponse
   imageURLs: string[]
+  thumbnailURLs: string[]
   activeIndex: number
   onPrevious: () => void
   onNext: () => void
   onSaveCurrent: () => void
   onSelectThumbnail: (index: number) => void
+  onImageLoadError: (taskId: string) => Promise<ImageTaskDetailResponse | null>
 }) {
   const hasImages = imageURLs.length > 0
   const currentIndex = hasImages ? Math.min(Math.max(activeIndex, 0), imageURLs.length - 1) : -1
   const currentImageUrl = currentIndex >= 0 ? imageURLs[currentIndex] : ''
+  const currentThumbnailUrl = currentIndex >= 0 ? thumbnailURLs[currentIndex] ?? thumbnailURLs[0] ?? '' : ''
+  const displayCandidates = buildPreviewImageCandidates(currentImageUrl, currentThumbnailUrl)
+  const [failedDisplayURLs, setFailedDisplayURLs] = useState<Set<string>>(() => new Set())
+  const imageReloadedRef = useRef<string>('')
   const canNavigate = imageURLs.length > 1
-  const thumbnailSlots = createCenteredThumbnailSlots(imageURLs, currentIndex, 5)
+  const thumbnailSlots = createCenteredThumbnailSlots(thumbnailURLs.length > 0 ? thumbnailURLs : imageURLs, currentIndex, 5)
+  const currentDisplayUrl = displayCandidates.find((candidate) => !failedDisplayURLs.has(candidate)) ?? ''
+
+  useEffect(() => {
+    setFailedDisplayURLs(new Set())
+    imageReloadedRef.current = ''
+  }, [currentIndex, currentImageUrl, currentThumbnailUrl, preview.taskId])
+
+  function handleImageError() {
+    if (currentDisplayUrl) {
+      setFailedDisplayURLs((current) => {
+        const next = new Set(current)
+        next.add(currentDisplayUrl)
+        return next
+      })
+    }
+    if (displayCandidates.some((candidate) => candidate !== currentDisplayUrl && !failedDisplayURLs.has(candidate))) {
+      return
+    }
+    if (!preview.taskId || preview.taskId === '-') {
+      return
+    }
+    const reloadKey = `${preview.taskId}:${currentIndex}:${currentImageUrl}:${currentThumbnailUrl}`
+    if (imageReloadedRef.current === reloadKey) {
+      return
+    }
+    imageReloadedRef.current = reloadKey
+    void onImageLoadError(preview.taskId)
+  }
 
   return (
     <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
       <div className="flex min-h-[460px] items-center justify-center rounded-md border border-dashed border-slate-700 bg-slate-900/40 p-4">
-        {currentImageUrl ? (
+        {currentDisplayUrl ? (
           <img
-            src={currentImageUrl}
+            key={`${preview.taskId}:${currentIndex}:${currentDisplayUrl}`}
+            src={currentDisplayUrl}
             alt={preview.prompt ? `${preview.prompt} 第${currentIndex + 1}张` : `第 ${currentIndex + 1} 张图片`}
             className="max-h-[420px] w-full rounded-md object-contain"
+            loading="eager"
+            decoding="async"
+            onError={handleImageError}
           />
         ) : (
           <div className="max-w-2xl text-center">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-violet-300">
-              <Image className="h-8 w-8" />
+              {preview.status === 'generating' || preview.status === 'running' ? (
+                <LoaderCircle className="h-8 w-8 animate-spin" />
+              ) : (
+                <Image className="h-8 w-8" />
+              )}
             </div>
-            <h3 className="mt-4 text-xl font-medium text-slate-50">
-              {preview.status === 'idle'
-                ? '等待生成'
-                : preview.status === 'failed'
-                  ? '生成失败'
-                  : preview.status === 'generating'
-                    ? '生成中'
-                    : '预览区'}
-            </h3>
-            <p className="mt-3 text-sm leading-6 text-slate-400">
-              {preview.prompt || '生成完成后，当前图片会显示在这里。'}
-            </p>
+            <h3 className="mt-4 text-xl font-medium text-slate-50">{getImageTaskStatusLabel(preview.status)}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-400">{preview.prompt}</p>
           </div>
         )}
       </div>
 
-      <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
-        <button
-          type="button"
-          onClick={onPrevious}
-          disabled={!canNavigate}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          上一张
-        </button>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onPrevious}
+            disabled={!canNavigate}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="上一张"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={!canNavigate}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="下一张"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <span className="text-sm text-slate-500">
+            {hasImages ? `${currentIndex + 1} / ${imageURLs.length}` : '0 / 0'}
+          </span>
+        </div>
 
         <button
           type="button"
           onClick={onSaveCurrent}
           disabled={!currentImageUrl}
-          className="inline-flex min-h-11 flex-col items-center justify-center rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <span className="inline-flex items-center gap-2">
-            <Download className="h-4 w-4" />
-            保存当前图片
-          </span>
-          <span className="mt-1 text-[11px] font-normal leading-tight text-slate-900/70">
-            点击一次即可，然后稍作等待下载
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!canNavigate}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          下一张
-          <ChevronRight className="h-4 w-4" />
+          <Download className="h-4 w-4" />
+          保存当前图片
         </button>
       </div>
 
-      <div className="mt-4">
-        {hasImages ? (
-          <div className="grid grid-cols-5 gap-2">
-            {thumbnailSlots.map((slot, slotIndex) =>
-              slot ? (
-                <button
-                  key={`${slot.index}-${slot.imageUrl}`}
-                  type="button"
-                  onClick={() => onSelectThumbnail(slot.index)}
-                  className={`relative aspect-square overflow-hidden rounded-md border transition ${
-                    slot.index === currentIndex
-                      ? 'border-violet-400 ring-2 ring-violet-400/30'
-                      : 'border-slate-800 hover:border-slate-600'
-                  }`}
-                  aria-label={`切换到第 ${slot.index + 1} 张图片`}
-                >
-                  <img src={slot.imageUrl} alt={`缩略图 ${slot.index + 1}`} className="h-full w-full object-cover" />
-                  <span
-                    className={`absolute inset-x-0 bottom-0 px-1 py-0.5 text-[10px] leading-none ${
-                      slot.index === currentIndex ? 'bg-violet-500/85 text-slate-950' : 'bg-slate-950/65 text-slate-200'
-                    }`}
-                  >
-                    {slot.index === currentIndex ? '当前' : `${slot.index + 1}`}
-                  </span>
-                </button>
-              ) : (
-                <div
-                  key={`preview-empty-${slotIndex}`}
-                  className="aspect-square rounded-md border border-dashed border-slate-800 bg-slate-950/40"
+      {hasImages ? (
+        <div className="mt-4 grid grid-cols-5 gap-2">
+          {thumbnailSlots.map((slot, slotIndex) =>
+            slot ? (
+              <button
+                key={slot.index}
+                type="button"
+                onClick={() => onSelectThumbnail(slot.index)}
+                className={`aspect-square overflow-hidden rounded-md border transition ${
+                  slot.index === currentIndex ? 'border-violet-400' : 'border-slate-800 hover:border-slate-600'
+                }`}
+              >
+                <img
+                  key={`${preview.taskId}:thumb:${slot.index}:${slot.imageUrl}`}
+                  src={slot.imageUrl}
+                  alt={`缩略图 ${slot.index + 1}`}
+                  className="h-full w-full object-cover"
                 />
-              ),
-            )}
-          </div>
-        ) : (
-          <div className="rounded-md border border-dashed border-slate-800 bg-slate-950/40 px-4 py-5 text-center text-sm text-slate-500">
-            暂无缩略图，生成完成后会自动显示最多 5 张。
-          </div>
-        )}
-      </div>
+              </button>
+            ) : (
+              <div key={`empty-${slotIndex}`} className="aspect-square rounded-md border border-dashed border-slate-800 bg-slate-900/40" />
+            ),
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
 
 function PromptPlaza({
   items,
+  myItems,
   favoriteIds,
   submission,
-  isAdmin,
   onSubmissionChange,
   onSubmit,
   onFavorite,
-  onUse,
-  onBackHome,
+  onNotify,
 }: {
   items: PromptGalleryItem[]
+  myItems: PromptGalleryItem[]
   favoriteIds: string[]
-  submission: { title: string; prompt: string; previewUrl: string }
-  isAdmin: boolean
-  onSubmissionChange: (value: { title: string; prompt: string; previewUrl: string }) => void
+  submission: { title: string; prompt: string; previewUrl: string; tags: string[] }
+  onSubmissionChange: (value: { title: string; prompt: string; previewUrl: string; tags: string[] }) => void
   onSubmit: () => void
   onFavorite: (id: string) => void
-  onUse: (item: PromptGalleryItem) => void
-  onBackHome: () => void
+  onNotify: (value: string) => void
 }) {
-  const pendingItems = items.filter((item) => item.status === 'pending')
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [myUploadsOnly, setMyUploadsOnly] = useState(false)
+  const [showSubmissionModal, setShowSubmissionModal] = useState(false)
+  const [sortMode, setSortMode] = useState<PromptSortMode>('recommended')
+  const [sortOpen, setSortOpen] = useState(false)
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [activeDetailId, setActiveDetailId] = useState<string | null>(null)
+  const [submissionImageUploading, setSubmissionImageUploading] = useState(false)
+  const [submissionDragActive, setSubmissionDragActive] = useState(false)
+  const [submissionImageName, setSubmissionImageName] = useState('')
+  const submissionImageInputRef = useRef<HTMLInputElement | null>(null)
+  const approvedItems = useMemo(() => items.filter((item) => item.status === 'approved'), [items])
+
+  const serialMap = useMemo(() => {
+    const ordered = [...approvedItems].sort((a, b) => {
+      const aTime = new Date(a.approvedAt ?? a.createdAt).getTime()
+      const bTime = new Date(b.approvedAt ?? b.createdAt).getTime()
+      if (aTime !== bTime) return aTime - bTime
+      return a.id.localeCompare(b.id)
+    })
+    const map = new Map<string, string>()
+    ordered.forEach((item, index) => {
+      map.set(item.id, String(index + 1))
+    })
+    return map
+  }, [approvedItems])
+
+  const enrichedItems = useMemo(
+    () =>
+      approvedItems.map((item, index) => {
+        const serialNo = serialMap.get(item.id) ?? ''
+        const favorite = Boolean(item.isFavorited)
+        return {
+          ...item,
+          serialNo,
+          favorite,
+          displayFavorites: item.favorites,
+          recommendedOrder: index,
+        }
+      }),
+    [approvedItems, serialMap],
+  )
+
+  const visibleItems = useMemo(() => {
+    const keyword = searchKeyword.trim().toLowerCase()
+    const keywordSerial = keyword.replace('#', '')
+
+    let next = myUploadsOnly
+      ? myItems.map((item, index) => ({ ...item, serialNo: item.status === 'approved' ? serialMap.get(item.id) ?? '' : '', favorite: Boolean(item.isFavorited), displayFavorites: item.favorites, recommendedOrder: index }))
+      : enrichedItems
+    if (favoritesOnly) {
+      next = next.filter((item) => item.favorite)
+    }
+    if (keyword) {
+      next = next.filter((item) => {
+        const serialText = (item.serialNo ?? '').toLowerCase()
+        const serialMatch = serialText.includes(keyword) || serialText.replace('#', '').includes(keywordSerial)
+        const tagMatch = (item.tags ?? []).some((tag) => {
+          const normalizedTag = tag.toLowerCase()
+          return normalizedTag.includes(keyword.replace('#', '')) || `#${normalizedTag}`.includes(keyword)
+        })
+        const authorMatch = String(item.author ?? '').toLowerCase().includes(keyword)
+        return serialMatch || tagMatch || authorMatch
+      })
+    }
+
+    const sorted = [...next]
+    switch (sortMode) {
+      case 'favorites':
+        sorted.sort((a, b) => {
+          if (b.displayFavorites !== a.displayFavorites) return b.displayFavorites - a.displayFavorites
+          return a.recommendedOrder - b.recommendedOrder
+        })
+        break
+      case 'latest-approved':
+        sorted.sort((a, b) => {
+          const aTime = new Date(a.approvedAt ?? a.createdAt).getTime()
+          const bTime = new Date(b.approvedAt ?? b.createdAt).getTime()
+          if (bTime !== aTime) return bTime - aTime
+          return a.recommendedOrder - b.recommendedOrder
+        })
+        break
+      case 'serial':
+        sorted.sort((a, b) => {
+          const aSerial = Number((a.serialNo ?? '#0').replace('#', ''))
+          const bSerial = Number((b.serialNo ?? '#0').replace('#', ''))
+          return aSerial - bSerial
+        })
+        break
+      default:
+        sorted.sort((a, b) => a.recommendedOrder - b.recommendedOrder)
+        break
+    }
+    return sorted
+  }, [enrichedItems, favoritesOnly, myItems, myUploadsOnly, searchKeyword, serialMap, sortMode])
+
+  const activeDetail = useMemo(
+    () => enrichedItems.find((item) => item.id === activeDetailId) ?? null,
+    [activeDetailId, enrichedItems],
+  )
+
+  const sortOptions: Array<{ value: PromptSortMode; label: string }> = [
+    { value: 'recommended', label: '默认推荐' },
+    { value: 'favorites', label: '收藏最多' },
+    { value: 'latest-approved', label: '最新通过' },
+    { value: 'serial', label: '编号顺序' },
+  ]
+
+  const sortLabel = sortOptions.find((item) => item.value === sortMode)?.label ?? '默认推荐'
+  async function handleCopyPromptText(value: string) {
+    const copied = await copyTextToClipboard(value)
+    if (copied) {
+      onNotify('提示词已复制。')
+    } else {
+      onNotify('复制失败，请长按提示词手动复制。')
+    }
+  }
+
+  function handleSubmitShare() {
+    if (!submission.title.trim() || !submission.prompt.trim()) {
+      onNotify('请先填写提示词标题和正文。')
+      return
+    }
+    void onSubmit()
+    setSubmissionImageName('')
+    setShowSubmissionModal(false)
+  }
+
+  async function uploadSubmissionPreviewImage(file?: File) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      onNotify('请上传图片文件。')
+      return
+    }
+
+    try {
+      setSubmissionImageUploading(true)
+      const result = await api.uploadReferenceImage(file, 'prompt-plaza-preview')
+      onSubmissionChange({ ...submission, previewUrl: result.imageUrl })
+      setSubmissionImageName(file.name)
+      onNotify('缩略图已上传。')
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : '图片上传失败。')
+    } finally {
+      setSubmissionImageUploading(false)
+    }
+  }
+
+  async function handleSubmissionImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    await uploadSubmissionPreviewImage(file)
+  }
+
+  function handleSubmissionPromptDrag(event: DragEvent<HTMLTextAreaElement>) {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) {
+      return
+    }
+    event.preventDefault()
+    setSubmissionDragActive(event.type === 'dragenter' || event.type === 'dragover')
+  }
+
+  async function handleSubmissionPromptDrop(event: DragEvent<HTMLTextAreaElement>) {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) {
+      return
+    }
+    event.preventDefault()
+    setSubmissionDragActive(false)
+    const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith('image/'))
+    await uploadSubmissionPreviewImage(file)
+  }
+
+  async function handleSubmissionPromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith('image/'))
+    if (!file) {
+      return
+    }
+    event.preventDefault()
+    await uploadSubmissionPreviewImage(file)
+  }
+
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="提示词广场"
-        description="展示优质提示词，收藏喜欢的灵感，也可以提交自己的提示词等待审核。"
-        action={
+    <div className="prompt-plaza space-y-2.5">
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={onBackHome}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
+            onClick={() => setFavoritesOnly((current) => !current)}
+            className={`prompt-plaza-action inline-flex h-10 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition ${
+              favoritesOnly ? 'is-active' : ''
+            }`}
           >
-            <Home className="h-4 w-4" />
-            返回首页
+            <Heart className="h-4 w-4" />
+            我的收藏
           </button>
-        }
-      />
+          <button
+            type="button"
+            onClick={() => {
+              setMyUploadsOnly((current) => !current)
+              setFavoritesOnly(false)
+            }}
+            className={`prompt-plaza-action inline-flex h-10 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition ${
+              myUploadsOnly ? 'is-active' : ''
+            }`}
+          >
+            <Upload className="h-4 w-4" />
+            我的上传
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSubmissionModal(true)}
+            className="prompt-plaza-action inline-flex h-10 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition"
+          >
+            <Upload className="h-4 w-4" />
+            上传分享
+          </button>
+        </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-          {items.map((item) => (
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setSortOpen((current) => !current)}
+              className="prompt-plaza-sort inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm transition"
+            >
+              <ArrowUpDown className="h-4 w-4" />
+              {sortLabel}
+              <ChevronDown className={`h-4 w-4 transition ${sortOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {sortOpen ? (
+              <div className="prompt-plaza-sort-menu absolute left-0 top-11 z-20 min-w-[144px] overflow-hidden rounded-lg border shadow-xl">
+                {sortOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      setSortMode(option.value)
+                      setSortOpen(false)
+                    }}
+                    className={`block w-full px-3 py-2 text-left text-sm transition ${sortMode === option.value ? 'is-active' : ''}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="prompt-plaza-search flex h-10 min-w-0 items-center overflow-hidden rounded-xl border text-left">
+            <Search className="ml-3 h-4 w-4 text-slate-400" />
+            <input
+              value={searchKeyword}
+              onChange={(event) => setSearchKeyword(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
+              placeholder="搜索编号、标签或上传人"
+            />
+            {searchKeyword ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchKeyword('')
+                }}
+                className="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+                aria-label="清空搜索"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            ) : null}
+            <span className="prompt-plaza-search-button flex h-full items-center px-3 text-sm font-medium">
+              搜索
+            </span>
+          </div>
+        </div>
+
+        <section className="grid grid-cols-2 gap-1.5 sm:gap-2 lg:grid-cols-3 xl:grid-cols-5">
+          {visibleItems.map((item, index) => (
             <PromptCard
               key={item.id}
               item={item}
-              favorite={favoriteIds.includes(item.id)}
+              priority={index < 6}
+              onOpenDetail={() => setActiveDetailId(item.id)}
               onFavorite={() => onFavorite(item.id)}
-              onUse={() => onUse(item)}
             />
           ))}
         </section>
 
-        <aside className="space-y-4">
-          <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-medium text-slate-50">上传提示词</h2>
-                <p className="mt-1 text-sm text-slate-400">当前先保存到前端待审核列表。</p>
-              </div>
-              <Upload className="h-5 w-5 text-violet-300" />
-            </div>
+        {!visibleItems.length ? (
+          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/60 px-4 py-6 text-center text-sm text-slate-400">
+            {favoritesOnly
+              ? '当前还没有已收藏的提示词。'
+              : myUploadsOnly
+                ? '当前还没有上传过提示词。'
+              : searchKeyword.trim()
+                ? '没有匹配到编号、标签或上传人，试试别的关键词。'
+                : '暂时没有可展示的提示词。'}
+          </div>
+        ) : null}
+      </div>
 
-            <div className="mt-4 space-y-3">
+      {showSubmissionModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="关闭上传分享"
+            onClick={() => setShowSubmissionModal(false)}
+          />
+          <div className="relative flex max-h-[86dvh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+            <div className="shrink-0 border-b border-slate-800 px-4 py-3">
+              <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-100">上传分享</h3>
+              <button
+                type="button"
+                onClick={() => setShowSubmissionModal(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
               <Field label="标题">
                 <input
                   value={submission.title}
                   onChange={(event) => onSubmissionChange({ ...submission, title: event.target.value })}
-                  className="h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                  placeholder="例如：赛博机械角色"
-                />
-              </Field>
-              <Field label="预览图链接">
-                <input
-                  value={submission.previewUrl}
-                  onChange={(event) => onSubmissionChange({ ...submission, previewUrl: event.target.value })}
-                  className="h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                  placeholder="请输入预览图链接"
+                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
+                  placeholder="给这个灵感起个名字"
                 />
               </Field>
               <Field label="提示词">
                 <textarea
                   value={submission.prompt}
                   onChange={(event) => onSubmissionChange({ ...submission, prompt: event.target.value })}
-                  className="min-h-28 w-full resize-y rounded-md border border-slate-700 bg-slate-950 px-3 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                  placeholder="写下可复用的生图提示词"
+                  onDragEnter={handleSubmissionPromptDrag}
+                  onDragOver={handleSubmissionPromptDrag}
+                  onDragLeave={handleSubmissionPromptDrag}
+                  onDrop={(event) => void handleSubmissionPromptDrop(event)}
+                  onPaste={(event) => void handleSubmissionPromptPaste(event)}
+                  className={`min-h-28 w-full resize-y rounded-md border bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400 ${
+                    submissionDragActive ? 'border-violet-400 ring-2 ring-violet-400/20' : 'border-slate-700'
+                  }`}
+                  placeholder="写下完整提示词，也可以拖入或粘贴本地图片作为缩略图"
                 />
               </Field>
+              <Field label="标签（可选）">
+                <div className="space-y-2">
+                  {submission.tags.map((tag, index) => (
+                    <div key={index} className="flex gap-2">
+                      <input
+                        value={tag}
+                        onChange={(event) => {
+                          const nextTags = [...submission.tags]
+                          nextTags[index] = event.target.value
+                          onSubmissionChange({ ...submission, tags: nextTags })
+                        }}
+                        className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
+                        placeholder={`标签 ${index + 1}`}
+                      />
+                      {index === 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (submission.tags.length >= 4) return
+                            onSubmissionChange({ ...submission, tags: [...submission.tags, ''] })
+                          }}
+                          disabled={submission.tags.length >= 4}
+                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-700 text-lg text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label="增加标签"
+                        >
+                          +
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onSubmissionChange({ ...submission, tags: submission.tags.filter((_, tagIndex) => tagIndex !== index) })}
+                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-rose-400 hover:text-rose-200"
+                          aria-label="删除标签"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Field>
+              <Field label="缩略图链接">
+                <input
+                  value={submission.previewUrl}
+                  onChange={(event) => {
+                    setSubmissionImageName('')
+                    onSubmissionChange({ ...submission, previewUrl: event.target.value })
+                  }}
+                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
+                  placeholder="https://..."
+                />
+              </Field>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => submissionImageInputRef.current?.click()}
+                    disabled={submissionImageUploading}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-700 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {submissionImageUploading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                    {submissionImageUploading ? '上传中...' : '选择本地照片'}
+                  </button>
+                  <span className="text-xs text-slate-500">也可以拖拽或复制粘贴图片到提示词区域。</span>
+                </div>
+                <input
+                  ref={submissionImageInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(event) => void handleSubmissionImageChange(event)}
+                />
+                {submission.previewUrl ? (
+                  <div className="mt-3 flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
+                    <Image className="h-4 w-4 shrink-0 text-slate-500" />
+                    <span className="min-w-0 flex-1 truncate">{submissionImageName || '已填写缩略图链接'}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSubmissionImageName('')
+                        onSubmissionChange({ ...submission, previewUrl: '' })
+                      }}
+                      className="shrink-0 rounded-md px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+                    >
+                      移除
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <div className="shrink-0 border-t border-slate-800 p-4">
               <button
                 type="button"
-                onClick={onSubmit}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 py-3 font-medium text-slate-950 transition hover:bg-violet-400"
+                onClick={handleSubmitShare}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
               >
-                <Upload className="h-4 w-4" />
+                <Send className="h-4 w-4" />
                 提交审核
               </button>
             </div>
-          </section>
+          </div>
+        </div>
+      ) : null}
 
-          <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-medium text-slate-50">审核队列</h2>
-                <p className="mt-1 text-sm text-slate-400">后续由管理员审核发布。</p>
-              </div>
-              <ShieldCheck className="h-5 w-5 text-emerald-300" />
-            </div>
-            <div className="mt-4 space-y-2">
-              {pendingItems.length ? (
-                pendingItems.map((item) => (
-                  <div key={item.id} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-                    <div className="text-sm font-medium text-slate-100">{item.title}</div>
-                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{item.prompt}</p>
-                    <div className="mt-2 text-xs text-amber-300">{isAdmin ? '待接入审核按钮' : '等待管理员审核'}</div>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
-                  暂无待审核提示词。
-                </div>
-              )}
-            </div>
-          </section>
-        </aside>
+      <PromptDetailDialog
+        item={activeDetail}
+        onClose={() => setActiveDetailId(null)}
+        onFavorite={() => (activeDetail ? onFavorite(activeDetail.id) : undefined)}
+        onCopy={() => (activeDetail ? void handleCopyPromptText(activeDetail.prompt) : undefined)}
+      />
+    </div>
+  )
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const value = String(text ?? '')
+  if (!value.trim()) {
+    return false
+  }
+
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      // Fall through to the textarea copy path for HTTP or restricted browsers.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', 'readonly')
+  textarea.setAttribute('aria-hidden', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '0'
+  textarea.style.left = '0'
+  textarea.style.width = '1px'
+  textarea.style.height = '1px'
+  textarea.style.padding = '0'
+  textarea.style.border = '0'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  textarea.style.zIndex = '-1'
+  document.body.appendChild(textarea)
+
+  const selection = document.getSelection()
+  const selectedRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+  textarea.focus({ preventScroll: true })
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  let copied = false
+  try {
+    copied = document.execCommand('copy')
+  } catch {
+    copied = false
+  } finally {
+    document.body.removeChild(textarea)
+    if (selectedRange && selection) {
+      selection.removeAllRanges()
+      selection.addRange(selectedRange)
+    }
+  }
+
+  return copied
+}
+
+function PromptSearchOverlay({
+  value,
+  suggestions,
+  onChange,
+  onClose,
+  onClear,
+  onSearch,
+}: {
+  value: string
+  suggestions: Array<PromptGalleryItem & { serialNo?: string }>
+  onChange: (value: string) => void
+  onClose: () => void
+  onClear: () => void
+  onSearch: (value?: string) => void
+}) {
+  const keyword = value.trim()
+  return (
+    <div className="prompt-search-overlay fixed inset-0 z-50 bg-slate-950 text-slate-100">
+      <div className="flex h-full flex-col">
+        <div className="flex items-center gap-2 px-3 pb-3 pt-10">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-slate-200 transition hover:bg-slate-800"
+            aria-label="返回"
+          >
+            <ChevronLeft className="h-7 w-7" />
+          </button>
+          <div className="flex h-11 min-w-0 flex-1 items-center overflow-hidden rounded-xl bg-slate-800">
+            <input
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') onSearch()
+              }}
+              autoFocus
+              placeholder="搜索编号、标签或上传人"
+              className="h-full min-w-0 flex-1 bg-transparent px-4 text-base text-slate-50 outline-none placeholder:text-slate-500"
+            />
+            {value ? (
+              <button
+                type="button"
+                onClick={onClear}
+                className="mr-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-slate-300 text-slate-700"
+                aria-label="清空搜索"
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => onSearch()}
+            className="h-11 shrink-0 rounded-xl bg-red-600 px-5 text-base font-semibold text-white transition hover:bg-red-500"
+          >
+            搜索
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {suggestions.length ? (
+            suggestions.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSearch(item.serialNo ?? item.title)}
+                className="flex h-14 w-full items-center gap-3 border-b border-slate-700 px-4 text-left text-lg text-slate-100"
+              >
+                <Search className="h-6 w-6 shrink-0 text-slate-400" />
+                <span className="min-w-0 truncate">
+                  {highlightSearchText(item.title, keyword)}
+                  {item.serialNo ? <span className="ml-2 text-sm text-slate-500">#{item.serialNo}</span> : null}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="px-4 py-8 text-center text-sm text-slate-500">没有找到相关提示词</div>
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
+function highlightSearchText(text: string, keyword: string): ReactNode {
+  const trimmed = keyword.trim()
+  if (!trimmed) return text
+  const index = text.toLowerCase().indexOf(trimmed.toLowerCase())
+  if (index < 0) return text
+  return (
+    <>
+      {text.slice(0, index)}
+      <span className="text-orange-500">{text.slice(index, index + trimmed.length)}</span>
+      {text.slice(index + trimmed.length)}
+    </>
+  )
+}
+
+function normalizePromptGalleryItem(item: PromptGalleryItem): PromptGalleryItem {
+  return {
+    ...item,
+    tags: normalizePromptTags((item as PromptGalleryItem & { tags?: unknown }).tags),
+  }
+}
+
+function normalizePromptTags(tags: unknown): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  const source = Array.isArray(tags)
+    ? tags
+    : typeof tags === 'string'
+      ? parsePromptTagString(tags)
+      : []
+  for (const tag of source) {
+    const normalized = String(tag ?? '').trim().replace(/^#+/, '').replace(/\s+/g, '')
+    if (!normalized) continue
+    const key = normalized.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(Array.from(normalized).slice(0, 24).join(''))
+    if (result.length >= 4) break
+  }
+  return result
+}
+
+function parsePromptTagString(value: string): string[] {
+  const trimmed = value.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item ?? ''))
+    } catch {
+      // Fall back to separator parsing for legacy or malformed values.
+    }
+  }
+  return trimmed.split(/[,，#\s]+/).filter(Boolean)
+}
+
 function PromptCard({
   item,
-  favorite,
+  priority,
   onFavorite,
-  onUse,
+  onOpenDetail,
 }: {
-  item: PromptGalleryItem
-  favorite: boolean
+  item: PromptGalleryItem & { serialNo?: string; favorite?: boolean; displayFavorites?: number }
+  priority?: boolean
   onFavorite: () => void
-  onUse: () => void
+  onOpenDetail: () => void
 }) {
-  const [imageReady, setImageReady] = useState(false)
-
-  useEffect(() => {
-    setImageReady(false)
-  }, [item.previewUrl])
-
+  const displayImageUrl = item.previewThumbUrl || item.previewUrl
   return (
-    <article className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/70 shadow-panel">
-      <div className="relative aspect-[4/3] overflow-hidden bg-slate-950">
-        <div className="absolute inset-0 flex flex-col justify-between bg-slate-950 px-4 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <span className="rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-300">
-              预览
-            </span>
-            <Image className="h-5 w-5 text-violet-300/80" />
-          </div>
-          <div className="space-y-2">
-            <div className="text-base font-medium text-slate-50">{item.title}</div>
-            <p className="line-clamp-3 text-xs leading-5 text-slate-400">{item.prompt}</p>
-          </div>
-        </div>
-        {item.previewUrl ? (
+    <article
+      onClick={onOpenDetail}
+      className="prompt-card group cursor-pointer overflow-hidden rounded-lg border shadow-panel transition"
+    >
+      <div className="prompt-card-media relative aspect-[5/4]">
+        {displayImageUrl ? (
           <img
-            src={item.previewUrl}
+            src={displayImageUrl}
             alt={item.title}
-            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
-              imageReady ? 'opacity-100' : 'opacity-0'
-            }`}
-            onLoad={() => setImageReady(true)}
-            onError={() => setImageReady(false)}
+            loading={priority ? 'eager' : 'lazy'}
+            decoding="async"
+            className="h-full w-full bg-slate-800 object-cover"
           />
-        ) : null}
-        <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent" />
-        <span
-          className={`absolute left-3 top-3 rounded-md px-2 py-1 text-xs ${
-            item.status === 'approved'
-              ? 'bg-emerald-500/80 text-slate-950'
-              : item.status === 'pending'
-                ? 'bg-amber-500/80 text-slate-950'
-                : 'bg-rose-500/80 text-white'
-          }`}
-        >
-          {item.status === 'approved' ? '已发布' : item.status === 'pending' ? '待审核' : '未通过'}
-        </span>
-      </div>
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-medium text-slate-50">{item.title}</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              {item.author} · {formatDateTime(item.createdAt)}
-            </p>
+        ) : (
+          <div className="flex h-full items-center justify-center text-slate-500">
+            <Image className="h-8 w-8" />
           </div>
-          <button
-            type="button"
-            onClick={onFavorite}
-            className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition ${
-              favorite
-                ? 'border-rose-400 bg-rose-500/15 text-rose-300'
-                : 'border-slate-700 bg-slate-950 text-slate-300 hover:border-rose-400 hover:text-rose-300'
-            }`}
-            title="收藏"
-          >
-            <Heart className="h-4 w-4" />
-          </button>
+        )}
+      </div>
+      <div className="prompt-card-body flex min-h-[92px] flex-col p-2">
+        <div className="min-w-0 flex-1">
+          <h3 className="line-clamp-2 min-h-9 text-[13px] font-semibold leading-[18px]">{item.title}</h3>
+          {item.tags?.length ? (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {item.tags.slice(0, 4).map((tag) => (
+                <span key={tag} className="prompt-card-tag rounded-full bg-slate-800/80 px-1.5 py-0.5 text-[10px] leading-4 text-slate-300">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
-        <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-400">{item.prompt}</p>
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <span className="text-xs text-slate-500">{item.favorites + (favorite ? 1 : 0)} 收藏</span>
+        <div className="prompt-card-footer mt-1.5 grid grid-cols-[auto_auto] items-center justify-between gap-2">
+          <span className="prompt-card-serial text-xs font-medium">{item.serialNo ? `#${item.serialNo}` : '-'}</span>
           <button
             type="button"
-            onClick={onUse}
-            className="inline-flex items-center gap-2 rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 transition hover:border-violet-400 hover:text-white"
+            onClick={(event) => {
+              event.stopPropagation()
+              onFavorite()
+            }}
+            className={`prompt-card-like inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs transition ${
+              item.favorite ? 'is-active' : ''
+            }`}
           >
-            <Sparkles className="h-4 w-4" />
-            使用
+            <Heart className="h-3.5 w-3.5" />
+            {item.displayFavorites ?? item.favorites}
           </button>
         </div>
       </div>
     </article>
+  )
+}
+
+function PromptDetailDialog({
+  item,
+  onClose,
+  onFavorite,
+  onCopy,
+}: {
+  item: (PromptGalleryItem & { serialNo?: string; favorite?: boolean; displayFavorites?: number }) | null
+  onClose: () => void
+  onFavorite: () => void
+  onCopy: () => void
+}) {
+  if (!item) return null
+  const displayImageUrl = item.previewThumbUrl || item.previewUrl
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+      <button type="button" className="absolute inset-0" aria-label="关闭详情" onClick={onClose} />
+      <div className="relative w-full max-w-lg overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-xs text-slate-400">上传人：{item.author || '-'}</p>
+            <h3 className="truncate text-base font-semibold text-slate-100">{item.title}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-[72vh] overflow-y-auto p-4">
+          <p className="mb-2 text-xs text-slate-500">为保证性能体验，展示图质量会进行压缩</p>
+          <div className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+            {displayImageUrl ? (
+              <img src={displayImageUrl} alt={item.title} loading="lazy" decoding="async" className="h-auto w-full object-cover" />
+            ) : (
+              <div className="flex h-40 items-center justify-center text-slate-500">
+                <Image className="h-8 w-8" />
+              </div>
+            )}
+          </div>
+          <div className="mt-4 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950/70 p-3 text-sm leading-6 text-slate-200">
+            {item.prompt}
+          </div>
+          {item.tags?.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {item.tags.slice(0, 4).map((tag) => (
+                <span key={tag} className="rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-300">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={onFavorite}
+              className={`inline-flex h-10 items-center gap-2 rounded-md border px-3 text-sm transition ${
+                item.favorite
+                  ? 'border-rose-400/50 bg-rose-500/10 text-rose-100'
+                  : 'border-slate-700 text-slate-200 hover:border-slate-500'
+              }`}
+            >
+              <Heart className="h-4 w-4" />
+              {item.displayFavorites ?? item.favorites}
+            </button>
+            <button
+              type="button"
+              onClick={onCopy}
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
+            >
+              <Copy className="h-4 w-4" />
+              复制提示词
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ProductPage({
+  items,
+  categories,
+  keyword,
+  activeCategoryId,
+  onKeywordChange,
+  onCategoryChange,
+  onOpenDetail,
+}: {
+  items: ProductItem[]
+  categories: ProductCategoryItem[]
+  keyword: string
+  activeCategoryId: string
+  onKeywordChange: (value: string) => void
+  onCategoryChange: (value: string) => void
+  onOpenDetail: (item: ProductItem) => void
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-950/70">
+          <Search className="h-4 w-4 text-slate-400" />
+          <input
+            value={keyword}
+            onChange={(event) => onKeywordChange(event.target.value)}
+            placeholder="搜索商品名、说明或分类"
+            className="min-w-0 flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-100"
+          />
+          {keyword ? (
+            <button type="button" onClick={() => onKeywordChange('')} className="text-xs text-slate-400 transition hover:text-slate-600 dark:hover:text-slate-200">
+              清空
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => onCategoryChange('')}
+            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
+              activeCategoryId ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' : 'bg-amber-400 text-slate-900'
+            }`}
+          >
+            全部
+          </button>
+          {categories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              onClick={() => onCategoryChange(category.id)}
+              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                activeCategoryId === category.id
+                  ? 'bg-amber-400 text-slate-900'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+              }`}
+            >
+              {category.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-5">
+        {items.map((item) => {
+          const imageUrl = item.previewThumbUrl || item.previewUrl
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpenDetail(item)}
+              className="overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="aspect-[4/3] overflow-hidden bg-slate-100 dark:bg-slate-950">
+                {imageUrl ? (
+                  <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-slate-400">
+                    <ShoppingBag className="h-8 w-8" />
+                  </div>
+                )}
+              </div>
+              <div className="flex min-h-[96px] flex-col p-3">
+                <h3 className="line-clamp-2 text-center text-[15px] font-semibold leading-5 text-slate-900 dark:text-slate-100">{item.name}</h3>
+                {item.shortDescription ? (
+                  <p className="mt-1 line-clamp-2 text-xs leading-4 text-slate-500 dark:text-slate-400">{item.shortDescription}</p>
+                ) : (
+                  <p className="mt-1 text-xs leading-4 text-slate-300 dark:text-slate-600"> </p>
+                )}
+                <div className="mt-auto flex justify-end pt-2 text-sm font-bold text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function ProductDetailDialog({
+  item,
+  onClose,
+  onConfirm,
+}: {
+  item: ProductItem
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const imageUrl = item.previewThumbUrl || item.previewUrl
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
+      <button type="button" className="absolute inset-0" aria-label="关闭商品详情" onClick={onClose} />
+      <div className="relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <h3 className="line-clamp-2 text-xl font-black tracking-tight text-slate-950 dark:text-slate-100">{item.name}</h3>
+          <div className="mt-2 text-lg font-black text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="overflow-hidden rounded-[20px] bg-slate-100 dark:bg-slate-950">
+            {imageUrl ? (
+              <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="h-auto w-full object-cover" />
+            ) : (
+              <div className="flex h-52 items-center justify-center bg-slate-100 text-slate-500 dark:bg-slate-950 dark:text-slate-500">
+                <ShoppingBag className="h-12 w-12" />
+              </div>
+            )}
+          </div>
+          {item.categories.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {item.categories.map((category) => (
+                <span key={category.id} className="rounded-full bg-amber-300 px-2.5 py-1 text-xs font-medium text-amber-950">
+                  {category.name}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">未分类</div>
+          )}
+          {item.shortDescription ? (
+            <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+              <div className="mb-1 text-xs font-semibold text-slate-400">简短说明</div>
+              {item.shortDescription}
+            </div>
+          ) : null}
+          {item.description ? (
+            <div className="mt-3 whitespace-pre-wrap rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+              <div className="mb-1 text-xs font-semibold text-slate-400">详细说明</div>
+              {item.description}
+            </div>
+          ) : null}
+        </div>
+        <div className="grid grid-cols-2 border-t border-slate-200 dark:border-slate-800">
+          <button type="button" onClick={onClose} className="h-12 border-r border-slate-200 text-sm font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-950">
+            取消
+          </button>
+          <button type="button" onClick={onConfirm} className="h-12 text-sm font-bold text-amber-600 transition hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-slate-950">
+            {item.productUrl ? '购买' : '待配置'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -4098,7 +5403,7 @@ function PackageSection({
   items: PackageItem[]
   busy: BusyAction
   emptyText: string
-  actionLabel: string
+  actionLabel: string | ((item: PackageItem) => string)
   busyPrefix: 'purchase:'
   onAction: (packageCode: string) => void
   renderMeta: (item: PackageItem) => ReactNode
@@ -4115,30 +5420,33 @@ function PackageSection({
 
       <div className="mt-3 space-y-2">
         {items.length ? (
-          items.map((item) => (
-            <button
-              key={item.code}
-              type="button"
-              onClick={() => onAction(item.code)}
-              disabled={busy === `${busyPrefix}${item.code}` || item.enabled === false}
-              className="flex w-full items-start justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-slate-100">{item.name}</span>
-                  {!item.enabled ? (
-                    <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] text-slate-400">停用</span>
-                  ) : null}
+          items.map((item) => {
+            const label = typeof actionLabel === 'function' ? actionLabel(item) : actionLabel
+            return (
+              <button
+                key={item.code}
+                type="button"
+                onClick={() => onAction(item.code)}
+                disabled={busy === `${busyPrefix}${item.code}` || item.enabled === false}
+                className="flex w-full items-start justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-slate-100">{item.name}</span>
+                    {item.enabled === false ? (
+                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-500">停用</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">{renderMeta(item)}</div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">{renderMeta(item)}</div>
-              </div>
-              <span className="rounded-md bg-violet-500/15 px-2 py-1 text-xs text-violet-300">
-                {busy === `${busyPrefix}${item.code}` ? '处理中' : actionLabel}
-              </span>
-            </button>
-          ))
+                <span className="shrink-0 rounded-md bg-violet-500 px-3 py-1.5 text-sm font-medium text-slate-950">
+                  {busy === `${busyPrefix}${item.code}` ? '处理中' : label}
+                </span>
+              </button>
+            )
+          })
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
+          <div className="rounded-md border border-dashed border-slate-800 bg-slate-900 p-4 text-sm text-slate-500">
             {emptyText}
           </div>
         )}
@@ -4147,493 +5455,54 @@ function PackageSection({
   )
 }
 
-function AdminPanel({
-  stats,
-  users,
-  tasks,
-  orders,
-  audits,
-  actionLogs,
-  packages,
+function RedeemCodePanel({
+  code,
   busy,
-  onRefresh,
-  onToggleUserStatus,
-  onAdjustUserPoints,
-  onSavePackage,
+  onCodeChange,
+  onSubmit,
 }: {
-  stats: AdminStatsResponse | null
-  users: AdminUserItem[]
-  tasks: AdminImageTaskItem[]
-  orders: AdminRechargeOrderItem[]
-  audits: AdminContentAuditItem[]
-  actionLogs: AdminActionLogItem[]
-  packages: AdminPackageItem[]
+  code: string
   busy: boolean
-  onRefresh: () => void
-  onToggleUserStatus: (user: AdminUserItem) => void
-  onAdjustUserPoints: (user: AdminUserItem, delta: number) => void
-  onSavePackage: (packageId: string | null, payload: AdminPackagePayload) => void
+  onCodeChange: (value: string) => void
+  onSubmit: () => void
 }) {
-  const [editingPackageId, setEditingPackageId] = useState<string | null>(null)
-  const [packageForm, setPackageForm] = useState<AdminPackagePayload>({
-    code: '',
-    name: '',
-    packageType: 'recharge',
-    creditsAmount: 100,
-    pointsCost: 0,
-    amountCents: 1999,
-    bonusPoints: 0,
-    enabled: true,
-    sortOrder: 0,
-    note: '',
-  })
-
-  function startCreatePackage() {
-    setEditingPackageId(null)
-    setPackageForm({
-      code: '',
-      name: '',
-      packageType: 'recharge',
-      creditsAmount: 100,
-      pointsCost: 0,
-      amountCents: 1999,
-      bonusPoints: 0,
-      enabled: true,
-      sortOrder: 0,
-      note: '',
-    })
-  }
-
-  function startEditPackage(item: AdminPackageItem) {
-    setEditingPackageId(item.id)
-    setPackageForm({
-      code: item.code,
-      name: item.name,
-      packageType: item.packageType,
-      creditsAmount: item.creditsAmount,
-      pointsCost: item.pointsCost,
-      amountCents: item.amountCents,
-      bonusPoints: item.bonusPoints,
-      enabled: item.enabled,
-      sortOrder: item.sortOrder,
-      note: item.note ?? '',
-    })
-  }
-
-  function handlePackageTypeChange(nextType: 'recharge' | 'redeem') {
-    setPackageForm((current) => {
-      if (current.packageType === nextType) {
-        return current
-      }
-
-      if (nextType === 'redeem') {
-        return {
-          ...current,
-          packageType: nextType,
-          pointsCost: current.pointsCost > 0 ? current.pointsCost : Math.max(3, current.creditsAmount * 3),
-          amountCents: 0,
-          bonusPoints: 0,
-        }
-      }
-
-      return {
-        ...current,
-        packageType: nextType,
-        pointsCost: 0,
-        amountCents: current.amountCents > 0 ? current.amountCents : 1999,
-        bonusPoints: current.bonusPoints >= 0 ? current.bonusPoints : 0,
-      }
-    })
-  }
-
-  const isRedeemPackage = packageForm.packageType === 'redeem'
-
-  function submitPackageForm() {
-    const payload: AdminPackagePayload = {
-      code: editingPackageId ? undefined : packageForm.code,
-      name: packageForm.name,
-      packageType: editingPackageId ? undefined : packageForm.packageType,
-      creditsAmount: packageForm.creditsAmount,
-      pointsCost: packageForm.pointsCost,
-      amountCents: packageForm.amountCents,
-      bonusPoints: packageForm.bonusPoints,
-      enabled: packageForm.enabled,
-      sortOrder: packageForm.sortOrder,
-      note: packageForm.note,
-    }
-    onSavePackage(editingPackageId, payload)
-  }
-
   return (
-    <section className="rounded-lg border border-emerald-600/30 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+      <div className="flex items-center justify-between gap-2">
         <div>
-          <div className="flex items-center gap-2 text-sm text-emerald-300">
-            <ShieldCheck className="h-4 w-4" />
-            后台管理
-          </div>
-          <h2 className="mt-1 text-xl font-semibold text-slate-50">运营、安全和风控概览</h2>
+          <h3 className="text-sm font-medium text-slate-100">兑换码</h3>
+          <p className="mt-1 text-xs text-slate-500">输入已获得的兑换码，兑换积分或福利次数。</p>
         </div>
+        <KeyRound className="h-4 w-4 text-emerald-300" />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <label className="block">
+          <span className="mb-2 block text-xs text-slate-500">兑换码</span>
+          <input
+            value={code}
+            onChange={(event) => onCodeChange(event.target.value.toUpperCase())}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                onSubmit()
+              }
+            }}
+            className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm uppercase tracking-wider text-slate-100 outline-none transition focus:border-emerald-400"
+            placeholder="输入兑换码"
+            autoComplete="off"
+          />
+        </label>
         <button
           type="button"
-          onClick={onRefresh}
+          onClick={onSubmit}
           disabled={busy}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-4 text-sm text-slate-200 transition hover:border-emerald-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-emerald-400 px-4 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-          刷新后台
+          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+          兑换
         </button>
       </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MiniStat label="用户总数" value={String(stats?.usersTotal ?? 0)} />
-        <MiniStat label="成功任务" value={String(stats?.tasksSuccess ?? 0)} />
-        <MiniStat label="生成中" value={String(stats?.tasksGenerating ?? 0)} />
-        <MiniStat label="拦截内容" value={String(stats?.auditRejected ?? 0)} />
-        <MiniStat label="积分总量" value={String(stats?.pointsBalanceTotal ?? 0)} />
-        <MiniStat label="免费次数" value={String(stats?.freeCreditsTotal ?? 0)} />
-        <MiniStat label="充值次数" value={String(stats?.paidCreditsTotal ?? 0)} />
-      </div>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <AdminBlock title="用户管理">
-          <div className="space-y-2">
-            {users.length ? (
-              users.map((user) => (
-                <div key={user.id} className="rounded-md border border-slate-800 bg-slate-950 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-100">{user.username}</div>
-                      <div className="mt-1 truncate text-xs text-slate-500">{user.email}</div>
-                    </div>
-                    <span className={`rounded-md px-2 py-1 text-xs ${user.status === 1 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
-                      {user.status === 1 ? '正常' : '禁用'} / {getUserRoleLabel(user.role)}
-                    </span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                    <span>积分 {user.pointsBalance}</span>
-                    <span>免费 {user.freeCredits} / 充值 {user.paidCredits}</span>
-                    <span>总次数 {user.totalCredits}</span>
-                    <span>{formatDateTime(user.createdAt)}</span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onAdjustUserPoints(user, 10)}
-                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-emerald-400"
-                    >
-                      +10
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onAdjustUserPoints(user, -10)}
-                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-amber-400"
-                    >
-                      -10
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onToggleUserStatus(user)}
-                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-rose-400"
-                    >
-                      {user.status === 1 ? '禁用' : '启用'}
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <EmptyAdminText text="暂无用户数据" />
-            )}
-          </div>
-        </AdminBlock>
-
-        <AdminBlock title="套餐配置">
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={startCreatePackage}
-                className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 transition hover:border-violet-400"
-              >
-                新建套餐
-              </button>
-              {editingPackageId ? (
-                <span className="text-xs text-slate-500">正在编辑 #{editingPackageId}</span>
-              ) : (
-                <span className="text-xs text-slate-500">当前为新建模式</span>
-              )}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              {!editingPackageId ? (
-                <label className="block md:col-span-2">
-                  <span className="mb-2 block text-xs text-slate-500">套餐编码</span>
-                  <input
-                    value={packageForm.code ?? ''}
-                    onChange={(event) => setPackageForm((current) => ({ ...current, code: event.target.value }))}
-                    className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                    placeholder="recharge-100"
-                  />
-                </label>
-              ) : null}
-
-              <label className="block">
-                <span className="mb-2 block text-xs text-slate-500">套餐名称</span>
-                <input
-                  value={packageForm.name}
-                  onChange={(event) => setPackageForm((current) => ({ ...current, name: event.target.value }))}
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                />
-              </label>
-
-              {!editingPackageId ? (
-                <label className="block">
-                  <span className="mb-2 block text-xs text-slate-500">套餐类型</span>
-                  <select
-                    value={packageForm.packageType}
-                    onChange={(event) => handlePackageTypeChange(event.target.value as 'recharge' | 'redeem')}
-                    className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                  >
-                    <option value="recharge">充值次数</option>
-                    <option value="redeem">积分兑换</option>
-                  </select>
-                </label>
-              ) : null}
-
-              <label className="block">
-                <span className="mb-2 block text-xs text-slate-500">次数</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={packageForm.creditsAmount}
-                  onChange={(event) =>
-                    setPackageForm((current) => ({ ...current, creditsAmount: Number(event.target.value) }))
-                  }
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                />
-              </label>
-
-              {isRedeemPackage ? (
-                <label className="block">
-                  <span className="mb-2 block text-xs text-slate-500">积分消耗</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={packageForm.pointsCost}
-                    onChange={(event) =>
-                      setPackageForm((current) => ({ ...current, pointsCost: Number(event.target.value) }))
-                    }
-                    className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                  />
-                </label>
-              ) : (
-                <>
-                  <label className="block">
-                    <span className="mb-2 block text-xs text-slate-500">价格（分）</span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={packageForm.amountCents}
-                      onChange={(event) =>
-                        setPackageForm((current) => ({ ...current, amountCents: Number(event.target.value) }))
-                      }
-                      className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="mb-2 block text-xs text-slate-500">赠送积分</span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={packageForm.bonusPoints}
-                      onChange={(event) =>
-                        setPackageForm((current) => ({ ...current, bonusPoints: Number(event.target.value) }))
-                      }
-                      className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                    />
-                  </label>
-                </>
-              )}
-
-              <label className="block">
-                <span className="mb-2 block text-xs text-slate-500">排序</span>
-                <input
-                  type="number"
-                  value={packageForm.sortOrder}
-                  onChange={(event) =>
-                    setPackageForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))
-                  }
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                />
-              </label>
-
-              <label className="block md:col-span-2">
-                <span className="mb-2 block text-xs text-slate-500">备注</span>
-                <input
-                  value={packageForm.note ?? ''}
-                  onChange={(event) => setPackageForm((current) => ({ ...current, note: event.target.value }))}
-                  className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                />
-              </label>
-
-              <label className="flex items-center gap-2 text-xs text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={packageForm.enabled ?? true}
-                  onChange={(event) => setPackageForm((current) => ({ ...current, enabled: event.target.checked }))}
-                />
-                启用
-              </label>
-
-              <div className="md:col-span-2 text-xs leading-6 text-slate-500">
-                {isRedeemPackage
-                  ? '兑换档位只需要填写次数和积分消耗，价格与赠送积分会自动归零。'
-                  : '充值档位只需要填写次数、价格和赠送积分，积分消耗会自动归零。'}
-              </div>
-
-              <div className="md:col-span-2">
-                <button
-                  type="button"
-                  onClick={submitPackageForm}
-                  className="rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
-                >
-                  保存套餐
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              {packages.length ? (
-                packages.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => startEditPackage(item)}
-                    className="flex w-full items-start justify-between gap-2 rounded-md border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-violet-400/50"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm text-slate-100">
-                        {item.name} <span className="text-xs text-slate-500">({getPackageTypeLabel(item.packageType)})</span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                        <span>次数 {item.creditsAmount}</span>
-                        {item.packageType === 'redeem' ? (
-                          <span>积分 {item.pointsCost}</span>
-                        ) : (
-                          <>
-                            <span>金额 {(item.amountCents / 100).toFixed(2)}</span>
-                            <span>赠送 {item.bonusPoints}</span>
-                          </>
-                        )}
-                        <span>{item.enabled ? '启用' : '停用'}</span>
-                      </div>
-                    </div>
-                    <span className="text-xs text-slate-500">编辑</span>
-                  </button>
-                ))
-              ) : (
-                <EmptyAdminText text="暂无套餐配置" />
-              )}
-            </div>
-          </div>
-        </AdminBlock>
-
-        <AdminBlock title="套餐审计">
-          <div className="space-y-2">
-            {actionLogs.length ? (
-              actionLogs.slice(0, 8).map((item) => (
-                <div key={item.id} className="rounded-md border border-slate-800 bg-slate-950 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="rounded-md bg-violet-500/15 px-2 py-1 text-xs text-violet-300">
-                      {item.action}
-                    </span>
-                    <span className="text-xs text-slate-500">{formatDateTime(item.createdAt)}</span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span>目标 #{item.targetId}</span>
-                    <span>管理员 {item.adminId}</span>
-                    {item.remark ? <span>{item.remark}</span> : null}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <EmptyAdminText text="暂无套餐审计日志" />
-            )}
-          </div>
-        </AdminBlock>
-
-        <AdminBlock title="内容安全">
-          <div className="space-y-2">
-            {audits.length ? (
-              audits.map((item) => (
-                <div key={item.id} className="rounded-md border border-slate-800 bg-slate-950 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`rounded-md px-2 py-1 text-xs ${item.status === 'rejected' ? 'bg-rose-500/15 text-rose-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
-                      {getAuditStatusLabel(item.status)}
-                    </span>
-                    <span className="text-xs text-slate-500">{formatDateTime(item.createdAt)}</span>
-                  </div>
-                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-300">{item.content}</p>
-                  <p className="mt-2 text-xs text-slate-500">{item.reason || '-'}</p>
-                </div>
-              ))
-            ) : (
-              <EmptyAdminText text="暂无审核日志" />
-            )}
-          </div>
-        </AdminBlock>
-
-        <AdminBlock title="全站任务">
-                <div className="space-y-2">
-                  {tasks.length ? (
-                    tasks.map((task) => (
-                      <div key={task.id} className="rounded-md border border-slate-800 bg-slate-950 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm text-slate-200">#{task.id} / 用户 {task.userId}</span>
-                          <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">{getImageTaskStatusLabel(task.status)}</span>
-                        </div>
-                        <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{task.prompt}</p>
-                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                          <span>{task.costCredits || task.costPoints} 次</span>
-                          <span>免费 {task.freeCreditsCost} / 充值 {task.paidCreditsCost}</span>
-                          <span>{getCreditSourceLabel(task.creditSource)}</span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-              <EmptyAdminText text="暂无任务数据" />
-            )}
-          </div>
-        </AdminBlock>
-
-        <AdminBlock title="订单记录">
-          <div className="space-y-2">
-            {orders.length ? (
-              orders.map((order) => (
-                <div key={order.id} className="rounded-md border border-slate-800 bg-slate-950 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm text-slate-200">{order.orderNo}</span>
-                    <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300">{getRechargeOrderStatusLabel(order.status)}</span>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                    <span>{order.packageName}</span>
-                    <span>{order.creditsAmount} 次 + {order.bonusPoints} 积分</span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                    {order.paymentChannel ? <span>渠道 {getPaymentChannelLabel(order.paymentChannel)}</span> : null}
-                    {order.providerTradeNo ? <span>交易号 {order.providerTradeNo}</span> : null}
-                    {order.paidAt ? <span>{formatDateTime(order.paidAt)}</span> : null}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <EmptyAdminText text="暂无订单数据" />
-            )}
-          </div>
-        </AdminBlock>
-      </div>
-    </section>
+    </div>
   )
 }
 
@@ -4729,9 +5598,11 @@ function GenerationProgressCard({ progress }: { progress: GenerationProgress }) 
         <ProgressStat label="服务地址" value={progress.backendUrl} />
         <ProgressStat label="提示词" value={progress.prompt || '未填写'} />
         <ProgressStat label="完成数量" value={`${progress.completed}/${progress.total}`} />
-        <ProgressStat label="成功数量" value={String(progress.success)} />
+        <ProgressStat
+          label="耗时·s"
+          value={formatElapsedTriplet(progress.total, Math.max(0, Math.floor(progress.elapsedSeconds)), progress.imageElapsedSeconds)}
+        />
         <ProgressStat label="运行中" value={String(progress.running)} />
-        <ProgressStat label="耗时" value={`${progress.elapsedSeconds}s`} />
         <ProgressStat label="轮询次数" value={isRunning ? `${Math.max(1, progress.attempt)} 次` : '-'} />
       </div>
 
@@ -4784,7 +5655,7 @@ function PointsLogRow({ item }: { item: PointsLogItem }) {
 }
 
 function CreditLogRow({ item }: { item: CreditLogItem }) {
-  const totalAfter = item.afterFree + item.afterPaid
+  const { beforeTotal, afterTotal, deltaTotal } = getCreditLogTotals(item)
   const title = item.remark || getCreditChangeTypeLabel(item.changeType)
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
@@ -4793,18 +5664,12 @@ function CreditLogRow({ item }: { item: CreditLogItem }) {
         <span className="text-xs text-slate-500">{getCreditChangeTypeLabel(item.changeType)}</span>
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-        <span>
-          免费 {item.beforeFree} → {item.afterFree} ({item.deltaFree >= 0 ? '+' : ''}
-          {item.deltaFree})
-        </span>
-        <span>
-          充值 {item.beforePaid} → {item.afterPaid} ({item.deltaPaid >= 0 ? '+' : ''}
-          {item.deltaPaid})
-        </span>
+        <span>福利次数 {beforeTotal} → {afterTotal}</span>
+        <span>变动 {formatSignedNumber(deltaTotal)}</span>
       </div>
       <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
         <span>{formatDateTime(item.createdAt)}</span>
-        <span>总次数 {totalAfter}</span>
+        <span>总福利次数 {afterTotal}</span>
       </div>
     </div>
   )
@@ -4834,6 +5699,60 @@ function getTaskStatusLabel(status: string): string {
   }
 }
 
+function getTaskStatusBadgeClass(status: string): string {
+  switch (status) {
+    case 'success':
+      return 'bg-emerald-500/15 text-emerald-200'
+    case 'failed':
+      return 'bg-rose-500/15 text-rose-200'
+    case 'running':
+    case 'generating':
+      return 'bg-amber-500/15 text-amber-200'
+    default:
+      return 'bg-slate-800 text-slate-300'
+  }
+}
+
+function getActivityRecordLabel(recordType: UserActivityItem['recordType']): string {
+  switch (recordType) {
+    case 'image_task':
+      return '生图'
+    case 'points_log':
+      return '积分'
+    case 'credit_log':
+      return '福利次数'
+    default:
+      return '记录'
+  }
+}
+
+function getActivityShortLabel(recordType: UserActivityItem['recordType']): string {
+  switch (recordType) {
+    case 'image_task':
+      return '图'
+    case 'points_log':
+      return '分'
+    case 'credit_log':
+      return '次'
+    default:
+      return '记'
+  }
+}
+
+function getActivityRecordValue(item: UserActivityItem): string {
+  if (item.recordType === 'points_log' && item.deltaPoints != null) {
+    return `积分 ${formatSignedNumber(item.deltaPoints)}`
+  }
+  const creditDelta = getActivityCreditDelta(item)
+  if (item.recordType === 'credit_log' || creditDelta !== 0) {
+    return `福利次数 ${formatSignedNumber(creditDelta)}`
+  }
+  if (item.status) {
+    return getTaskStatusLabel(item.status)
+  }
+  return formatDateTime(item.createdAt)
+}
+
 function getUserRoleLabel(role: string): string {
   switch (role) {
     case 'admin':
@@ -4845,14 +5764,14 @@ function getUserRoleLabel(role: string): string {
   }
 }
 
-function getCreditSourceLabel(source: string): string {
+function getCreditSourceLabel(source?: string): string {
   switch (source) {
     case 'free':
-      return '免费次数'
     case 'paid':
-      return '充值次数'
     case 'mixed':
-      return '混合次数'
+      return '福利次数'
+    case 'points':
+      return '积分'
     case 'legacy_points':
       return '历史积分模式'
     case 'legacy':
@@ -4906,7 +5825,7 @@ function parsePreviewSizeState(size?: string): { size: string; customWidth?: num
 
 function buildPreviewRequestOptions(preview: ImageTaskDetailResponse): Array<{ label: string; value: string; wide?: boolean }> {
   const parsed = parseTaskRequestParams(preview.requestParams)
-  const count = Number(parsed?.count ?? preview.costCredits ?? preview.costPoints ?? 0)
+  const count = Number(parsed?.count ?? preview.requestedCount ?? preview.costCredits ?? preview.costPoints ?? 0)
 
   return [
     {
@@ -4942,6 +5861,17 @@ function buildPreviewRequestOptions(preview: ImageTaskDetailResponse): Array<{ l
   ]
 }
 
+function getPreviewRequestedCount(preview: Pick<ImageTaskDetailResponse, 'requestedCount' | 'requestParams' | 'costCredits' | 'costPoints'>, fallback = 0): number {
+  const parsed = parseTaskRequestParams(preview.requestParams)
+  const value = Number(parsed?.count ?? preview.requestedCount ?? fallback)
+  if (Number.isFinite(value) && value > 0) {
+    return clampCount(value)
+  }
+
+  const legacyValue = Number(preview.costCredits || preview.costPoints || fallback)
+  return Number.isFinite(legacyValue) && legacyValue > 0 ? clampCount(legacyValue) : Math.max(0, fallback)
+}
+
 function formatPreviewOptionValue(
   value: string | undefined,
   options: Array<{ value: string; label: string }>,
@@ -4955,22 +5885,68 @@ function formatPreviewOptionValue(
   return matched?.label ?? (trimmed || '-')
 }
 
+function formatTaskCost(task: Pick<ImageTaskDetailResponse, 'costPoints' | 'costCredits'>, fallbackCredits = 0): string {
+  const points = Math.max(0, Math.floor(Number(task.costPoints || 0)))
+  const credits = Math.max(0, Math.floor(Number(task.costCredits || 0)))
+
+  if (points > 0 && credits > 0) {
+    return `${points}积分+${credits}福利次数`
+  }
+  if (points > 0) {
+    return `${points}积分`
+  }
+  if (credits > 0) {
+    return `${credits}福利次数`
+  }
+
+  const fallback = Math.max(0, Math.floor(Number(fallbackCredits || 0)))
+  return fallback > 0 ? `${fallback}福利次数` : '-'
+}
+
+function buildImageElapsedSeconds(total: number, elapsedSeconds: number, existing: number[] = []): number[] {
+  const count = Math.max(1, Math.floor(Number(total || 0)))
+  const safeElapsed = Math.max(0, Math.floor(Number(elapsedSeconds || 0)))
+  const result = Array.from({ length: count }, (_, index) => Math.max(safeElapsed, Math.floor(Number(existing[index] ?? 0))))
+  return result
+}
+
+function formatElapsedTriplet(total: number, elapsedSeconds: number, existing: number[] | undefined): string {
+  const count = Math.max(1, Math.floor(Number(total || 0)))
+  const values = buildImageElapsedSeconds(count, elapsedSeconds, existing ?? [])
+  return values.join('/')
+}
+
+function getPreviewElapsedSeconds(preview: Pick<ImageTaskDetailResponse, 'createdAt' | 'updatedAt'>): number {
+  const created = Date.parse(preview.createdAt || '')
+  const updated = Date.parse(preview.updatedAt || '')
+  if (!Number.isFinite(created) || !Number.isFinite(updated) || updated < created) {
+    return 0
+  }
+  return Math.max(0, Math.floor((updated - created) / 1000))
+}
+
 function getPointsChangeTypeLabel(changeType: string): string {
   switch (changeType) {
     case 'checkin':
       return '每日签到'
     case 'purchase':
-      return '充值入账'
+      return '兑换码入账'
     case 'purchase_bonus':
-      return '充值赠送'
+      return '兑换码赠送'
     case 'redeem':
       return '积分兑换'
+    case 'settlement':
+      return '日终转换'
     case 'generate':
       return '生图消耗'
     case 'refund':
       return '失败退回'
     case 'adjust':
       return '后台调整'
+    case 'redeem_code':
+      return '兑换码兑换'
+    case 'invite':
+      return '邀请奖励'
     default:
       return changeType || '积分变动'
   }
@@ -4978,43 +5954,57 @@ function getPointsChangeTypeLabel(changeType: string): string {
 
 function getCreditChangeTypeLabel(changeType: string): string {
   switch (changeType) {
+    case 'checkin':
+      return '每日签到福利次数'
+    case 'register':
+      return '注册赠送福利次数'
     case 'redeem':
-      return '积分兑换次数'
+      return '积分兑换福利次数'
     case 'purchase':
-      return '充值入账次数'
+      return '兑换码入账福利次数'
+    case 'settlement':
+      return '日终转换福利次数'
     case 'generate':
-      return '生图消耗次数'
+      return '生图消耗福利次数'
     case 'refund':
-      return '失败退回次数'
+      return '失败退回福利次数'
     case 'adjust':
-      return '后台调整次数'
+      return '后台调整福利次数'
+    case 'redeem_code':
+      return '兑换码兑换福利次数'
+    case 'invite':
+      return '邀请奖励福利次数'
     default:
-      return changeType || '次数变动'
+      return changeType || '福利次数变动'
   }
 }
 
-function getRechargeOrderStatusLabel(status: string): string {
-  switch (status) {
-    case 'pending':
-      return '待支付'
-    case 'paid':
-      return '已支付'
-    case 'canceled':
-      return '已取消'
-    case 'refunded':
-      return '已退款'
-    default:
-      return status || '未知'
+function readInviteCodeFromLocation(): string {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    return (params.get('invite') || params.get('inviteCode') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16)
+  } catch {
+    return ''
   }
 }
 
-function getPaymentChannelLabel(channel: string): string {
-  switch (channel) {
-    case 'mock':
-      return '模拟支付'
-    default:
-      return channel || '未知渠道'
+function buildInviteLink(inviteCode: string): string {
+  const code = inviteCode.trim()
+  if (!code) {
+    return ''
   }
+  return `${window.location.origin}/register?invite=${encodeURIComponent(code)}`
+}
+
+function formatInviteReward(credits: number, points: number): string {
+  const parts: string[] = []
+  if (credits > 0) {
+    parts.push(`${credits} 福利次数`)
+  }
+  if (points > 0) {
+    parts.push(`${points} 积分`)
+  }
+  return parts.length > 0 ? parts.join(' + ') : '0 奖励'
 }
 
 function getAuditStatusLabel(status: string): string {
@@ -5033,7 +6023,7 @@ function getAuditStatusLabel(status: string): string {
 function getPackageTypeLabel(packageType: string): string {
   switch (packageType) {
     case 'recharge':
-      return '充值'
+      return '兑换码商品'
     case 'redeem':
       return '兑换'
     default:
@@ -5052,7 +6042,7 @@ function clampDimension(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return 1024
   }
-  return Math.min(4096, Math.max(256, Math.floor(value)))
+  return Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(value)))
 }
 
 function limitGenerationProgresses(progresses: GenerationProgress[], maxItems = 6): GenerationProgress[] {
@@ -5075,7 +6065,7 @@ function normalizeGenerationStatus(status: string): GenerationStatus {
 }
 
 function progressFromImageTaskItem(item: ImageTaskItem): GenerationProgress {
-  const taskCount = Math.max(1, clampCount(Number(item.costCredits || item.costPoints)))
+  const taskCount = Math.max(1, clampCount(Number(item.requestedCount || item.costCredits || item.costPoints)))
   const status = normalizeGenerationStatus(item.status)
   return {
     taskId: item.id,
@@ -5083,6 +6073,7 @@ function progressFromImageTaskItem(item: ImageTaskItem): GenerationProgress {
     status,
     startedAt: new Date(item.createdAt).getTime() || Date.now(),
     elapsedSeconds: 0,
+    imageElapsedSeconds: buildImageElapsedSeconds(taskCount, 0),
     total: taskCount,
     completed: status === 'running' ? 0 : taskCount,
     success: status === 'success' ? taskCount : 0,
@@ -5098,23 +6089,151 @@ function resolveSelectedSize(size: string, width: number, height: number): strin
     return size
   }
 
-  const safeWidth = Math.min(4096, Math.max(256, Math.floor(width || 1024)))
-  const safeHeight = Math.min(4096, Math.max(256, Math.floor(height || 1024)))
+  const safeWidth = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(width || 1024)))
+  const safeHeight = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(height || 1024)))
   return `${safeWidth}x${safeHeight}`
 }
 
+function validateSelectedSize(size: string, width: number, height: number): string | null {
+  if (size !== 'custom') {
+    return null
+  }
+
+  const normalizedWidth = Math.floor(width)
+  const normalizedHeight = Math.floor(height)
+  if (
+    !Number.isFinite(normalizedWidth) ||
+    !Number.isFinite(normalizedHeight) ||
+    normalizedWidth <= 0 ||
+    normalizedHeight <= 0 ||
+    normalizedWidth > CUSTOM_SIZE_MAX_SIDE ||
+    normalizedHeight > CUSTOM_SIZE_MAX_SIDE
+  ) {
+    return CUSTOM_SIZE_LIMIT_MESSAGE
+  }
+
+  const totalPixels = normalizedWidth * normalizedHeight
+  if (totalPixels < CUSTOM_SIZE_MIN_PIXELS || totalPixels > CUSTOM_SIZE_MAX_PIXELS) {
+    return CUSTOM_SIZE_LIMIT_MESSAGE
+  }
+
+  return null
+}
+
+function validateImageOptions(size: string, quality: string): string | null {
+  if (quality.trim().toLowerCase() !== 'high') {
+    return null
+  }
+  const dimensions = parseImageSize(size)
+  if (!dimensions) {
+    return null
+  }
+  return dimensions.width * dimensions.height > HIGH_QUALITY_MAX_PIXELS ? HIGH_QUALITY_SIZE_LIMIT_MESSAGE : null
+}
+
+function parseImageSize(size: string): { width: number; height: number } | null {
+  const match = size.trim().toLowerCase().match(/^(\d+)x(\d+)$/)
+  if (!match) {
+    return null
+  }
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width, height }
+}
+
 function normalizeImageURLs(imageUrls?: string[], imageUrl?: string): string[] {
-  const seen = new Set<string>()
+  const seen = new Map<string, string>()
   const result: string[] = []
   for (const value of [...(imageUrls ?? []), imageUrl ?? '']) {
     const trimmed = value.trim()
-    if (!trimmed || seen.has(trimmed)) {
+    const dedupeKey = normalizeImageUrlForDedupe(trimmed)
+    if (!trimmed) {
       continue
     }
-    seen.add(trimmed)
+    const existing = seen.get(dedupeKey)
+    if (existing) {
+      if (isLikelyThumbnailUrl(existing) && !isLikelyThumbnailUrl(trimmed)) {
+        const index = result.indexOf(existing)
+        if (index >= 0) {
+          result[index] = trimmed
+        }
+        seen.set(dedupeKey, trimmed)
+      }
+      continue
+    }
+    seen.set(dedupeKey, trimmed)
     result.push(trimmed)
   }
   return result
+}
+
+function buildPreviewImageCandidates(thumbnailUrl?: string, imageUrl?: string): string[] {
+  const candidates: string[] = []
+  for (const value of [thumbnailUrl ?? '', imageUrl ?? '']) {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      continue
+    }
+    if (candidates.includes(trimmed)) {
+      continue
+    }
+    candidates.push(trimmed)
+  }
+  return candidates
+}
+
+function limitImageURLs(imageURLs: string[], requestedCount?: number): string[] {
+  const limit = Math.max(1, Math.floor(Number(requestedCount || 0)))
+  if (!Number.isFinite(limit) || limit <= 0 || imageURLs.length <= limit) {
+    return imageURLs
+  }
+  return imageURLs.slice(0, limit)
+}
+
+function normalizeImageUrlForDedupe(rawUrl: string): string {
+  const trimmed = rawUrl.trim()
+  if (!trimmed) {
+    return ''
+  }
+  try {
+    const parsed = new URL(trimmed)
+    return normalizeImageUrlPath(parsed.pathname)
+  } catch {
+    return normalizeImageUrlPath(trimmed)
+  }
+}
+
+function isLikelyThumbnailUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl)
+    return parsed.pathname.includes('/thumbs/')
+  } catch {
+    return rawUrl.includes('/thumbs/')
+  }
+}
+
+function normalizeImageUrlPath(pathname: string): string {
+  return pathname
+    .replace(/\\/g, '/')
+    .replace(/\/thumbs\//g, '/')
+    .replace(/\/+/g, '/')
+}
+
+function getDownloadCacheKey(taskId: string, imageIndex: number): string {
+  return `${taskId}:${Math.max(0, Math.floor(imageIndex || 0))}`
+}
+
+function trimDownloadFileCache(cache: Map<string, DownloadedFile>, maxItems = 12): void {
+  while (cache.size > maxItems) {
+    const oldestKey = cache.keys().next().value
+    if (!oldestKey) {
+      return
+    }
+    cache.delete(oldestKey)
+  }
 }
 
 function formatDateTime(value: string): string {
@@ -5136,6 +6255,11 @@ function formatDateTime(value: string): string {
   }
 }
 
+function money(cents: number): string {
+  const value = Number(cents || 0) / 100
+  return `${value.toFixed(2)} 元`
+}
+
 function formatDateOnly(value: string): string {
   if (!value) {
     return '-'
@@ -5152,16 +6276,127 @@ function formatDateOnly(value: string): string {
   }
 }
 
+function getShanghaiDateKey(value: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(value)
+}
+
+function isSameShanghaiDay(value?: string | null): boolean {
+  if (!value) {
+    return false
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return false
+  }
+
+  return getShanghaiDateKey(date) === getShanghaiDateKey(new Date())
+}
+
+type CreditsBalanceLike = {
+  creditsBalance?: number
+  totalCredits?: number
+  freeCredits?: number
+  paidCredits?: number
+}
+
+type CreditsBalanceResponseLike = {
+  creditsBalance?: number
+  totalCreditsBalance?: number
+  freeCreditsBalance?: number
+  paidCreditsBalance?: number
+}
+
+function getTotalCredits(value: CreditsBalanceLike | null | undefined, fallback = 0): number {
+  if (!value) {
+    return fallback
+  }
+
+  if (value.creditsBalance != null) {
+    return Number(value.creditsBalance)
+  }
+  if (value.totalCredits != null) {
+    return Number(value.totalCredits)
+  }
+  if (value.freeCredits != null || value.paidCredits != null) {
+    return Number((value.freeCredits ?? 0) + (value.paidCredits ?? 0))
+  }
+
+  return fallback
+}
+
+function getResponseCreditsBalance(value: CreditsBalanceResponseLike | null | undefined, fallback = 0): number {
+  if (!value) {
+    return fallback
+  }
+
+  if (value.creditsBalance != null) {
+    return Number(value.creditsBalance)
+  }
+  if (value.totalCreditsBalance != null) {
+    return Number(value.totalCreditsBalance)
+  }
+  if (value.freeCreditsBalance != null || value.paidCreditsBalance != null) {
+    return Number((value.freeCreditsBalance ?? 0) + (value.paidCreditsBalance ?? 0))
+  }
+
+  return fallback
+}
+
+function getAdminStatsCreditsTotal(stats: AdminStatsResponse | null): number {
+  if (!stats) {
+    return 0
+  }
+
+  const compatibleStats = stats as AdminStatsResponse & {
+    creditsBalanceTotal?: number
+    creditsTotal?: number
+    totalCredits?: number
+  }
+
+  return Number(
+    compatibleStats.creditsBalanceTotal ??
+      compatibleStats.creditsTotal ??
+      compatibleStats.totalCredits ??
+      (stats.freeCreditsTotal ?? 0) + (stats.paidCreditsTotal ?? 0),
+  )
+}
+
+function getTaskCreditCost(task: { costCredits?: number; freeCreditsCost?: number; paidCreditsCost?: number }): number {
+  return Number(task.costCredits ?? (task.freeCreditsCost ?? 0) + (task.paidCreditsCost ?? 0))
+}
+
+function getCreditLogTotals(item: CreditLogItem): { beforeTotal: number; afterTotal: number; deltaTotal: number } {
+  const beforeTotal = Number(item.beforeCredits ?? item.beforeFree + item.beforePaid)
+  const afterTotal = Number(item.afterCredits ?? item.afterFree + item.afterPaid)
+  const deltaTotal = Number(item.deltaCredits ?? item.deltaFree + item.deltaPaid)
+
+  return { beforeTotal, afterTotal, deltaTotal }
+}
+
+function getActivityCreditDelta(item: UserActivityItem): number {
+  return Number(item.deltaCredits ?? (item.deltaFreeCredits ?? 0) + (item.deltaPaidCredits ?? 0))
+}
+
 function formatSignedNumber(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value}`
+  const safeValue = Number.isFinite(value) ? value : 0
+  return `${safeValue >= 0 ? '+' : ''}${safeValue}`
 }
 
 function toPreview(item: ImageTaskItem): ImageTaskDetailResponse {
   return {
     taskId: item.id,
+    requestedCount: item.requestedCount || getPreviewRequestedCount(item, 0),
     prompt: item.prompt,
     imageUrl: item.imageUrl,
-    imageUrls: normalizeImageURLs(item.imageUrls, item.imageUrl),
+    imageUrls: limitImageURLs(normalizeImageURLs(item.imageUrls, item.imageUrl), item.requestedCount),
+    thumbnailUrl: item.thumbnailUrl,
+    thumbnailUrls: limitImageURLs(normalizeImageURLs(item.thumbnailUrls, item.thumbnailUrl), item.requestedCount),
     costPoints: item.costPoints,
     costCredits: item.costCredits,
     freeCreditsCost: item.freeCreditsCost,
@@ -5171,15 +6406,19 @@ function toPreview(item: ImageTaskItem): ImageTaskDetailResponse {
     requestParams: item.requestParams,
     errorMessage: item.errorMessage,
     createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
   }
 }
 
 function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailResponse {
   return {
     taskId: detail.taskId,
+    requestedCount: detail.requestedCount || getPreviewRequestedCount(detail, 0),
     prompt: detail.prompt,
     imageUrl: detail.imageUrl,
-    imageUrls: normalizeImageURLs(detail.imageUrls, detail.imageUrl),
+    imageUrls: limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount),
+    thumbnailUrl: detail.thumbnailUrl,
+    thumbnailUrls: limitImageURLs(normalizeImageURLs(detail.thumbnailUrls, detail.thumbnailUrl), detail.requestedCount),
     costPoints: detail.costPoints,
     costCredits: detail.costCredits,
     freeCreditsCost: detail.freeCreditsCost,
@@ -5189,6 +6428,7 @@ function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailRespon
     requestParams: detail.requestParams,
     errorMessage: detail.errorMessage,
     createdAt: detail.createdAt,
+    updatedAt: detail.updatedAt,
   }
 }
 
@@ -5234,6 +6474,14 @@ function isWeChatBrowser(): boolean {
 
   const userAgent = navigator.userAgent.toLowerCase()
   return userAgent.includes('micromessenger')
+}
+
+function shouldForceLogout(error: unknown): boolean {
+  return error instanceof APIError && (error.status === 401 || (error.status === 403 && error.message.includes('禁用')))
+}
+
+function isRegistrationDailyLimitError(error: unknown): boolean {
+  return error instanceof APIError && error.message.includes(REGISTRATION_DAILY_LIMIT_MESSAGE)
 }
 
 export default App

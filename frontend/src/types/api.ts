@@ -7,6 +7,8 @@ export interface APIEnvelope<T> {
 export interface SendEmailCodeRequest {
   email: string
   scene: 'register' | 'reset_password'
+  captchaId?: string
+  captchaCode?: string
 }
 
 export interface SendEmailCodeResponse {
@@ -15,11 +17,64 @@ export interface SendEmailCodeResponse {
   debugCode?: string
 }
 
+export interface CaptchaResponse {
+  captchaId: string
+  image: string
+  expiresIn: number
+}
+
+export interface PromptPlazaItem {
+  id: string
+  title: string
+  prompt: string
+  previewUrl: string
+  previewThumbUrl?: string
+  tags: string[]
+  author: string
+  status: 'approved' | 'pending' | 'rejected'
+  favorites: number
+  isFavorited: boolean
+  createdAt: string
+  updatedAt: string
+  approvedAt?: string
+  reviewedAt?: string
+  rejectNote?: string
+}
+
+export interface ListPromptPlazaResponse {
+  items: PromptPlazaItem[]
+}
+
+export interface SubmitPromptPlazaRequest {
+  title: string
+  prompt: string
+  previewUrl?: string
+  tags?: string[]
+}
+
+export interface AdminListPromptPlazaResponse {
+  items: PromptPlazaItem[]
+  page: number
+  pageSize: number
+  total: number
+  pending: number
+}
+
+export interface AdminPromptPlazaPayload {
+  title: string
+  prompt: string
+  previewUrl?: string
+  tags?: string[]
+  author?: string
+  status?: 'approved' | 'pending' | 'rejected'
+}
+
 export interface RegisterRequest {
   email: string
   code: string
   username: string
   password: string
+  inviteCode?: string
 }
 
 export interface LoginRequest {
@@ -33,12 +88,16 @@ export interface UserInfo {
   email: string
   role: string
   pointsBalance: number
-  freeCredits: number
-  paidCredits: number
+  freeCredits?: number
+  paidCredits?: number
+  creditsBalance?: number
   totalCredits: number
+  consumedPoints?: number
+  consumedCredits?: number
   checkinStreak: number
   lastCheckinAt?: string | null
   lastLoginAt?: string | null
+  inviteCode?: string
 }
 
 export interface AuthResponse {
@@ -64,8 +123,9 @@ export interface CheckinResponse {
   gainedCredits: number
   streak: number
   pointsBalance: number
-  freeCredits: number
-  paidCredits: number
+  freeCredits?: number
+  paidCredits?: number
+  creditsBalance?: number
   totalCredits: number
   lastCheckinAt: string
 }
@@ -85,21 +145,27 @@ export interface CreditLogItem {
   changeType: string
   deltaFree: number
   deltaPaid: number
+  deltaCredits?: number
   beforeFree: number
   beforePaid: number
+  beforeCredits?: number
   afterFree: number
   afterPaid: number
+  afterCredits?: number
   remark?: string
   createdAt: string
 }
 
 export interface PointsResponse {
   balance: number
-  freeCredits: number
-  paidCredits: number
+  freeCredits?: number
+  paidCredits?: number
+  creditsBalance?: number
   totalCredits: number
   streak: number
   lastCheckinAt?: string | null
+  checkinPointsTotal: number
+  checkinCreditsTotal: number
   recentLogs: PointsLogItem[]
   recentCreditLogs?: CreditLogItem[]
 }
@@ -120,14 +186,16 @@ export interface ListCreditLogsResponse {
 
 export interface UserActivityItem {
   id: string
-  recordType: 'image_task' | 'recharge_order' | 'points_log' | 'credit_log'
+  recordType: 'image_task' | 'points_log' | 'credit_log' | 'recharge_order'
   title: string
   description: string
   status?: string
   imageUrl?: string
+  thumbnailUrl?: string
   deltaPoints?: number
   deltaFreeCredits?: number
   deltaPaidCredits?: number
+  deltaCredits?: number
   creditsAmount?: number
   pointsAmount?: number
   amountCents?: number
@@ -149,6 +217,7 @@ export interface CreateImageTaskRequest {
   quality?: string
   outputFormat?: string
   referenceImageUrl?: string
+  emailNotifyOnComplete?: boolean
 }
 
 export interface CreateImageTaskResponse {
@@ -156,11 +225,20 @@ export interface CreateImageTaskResponse {
   status: string
   imageUrl?: string
   imageUrls?: string[]
+  requestedCount: number
+  costPoints: number
+  costCredits: number
+  freeCreditsCost?: number
+  paidCreditsCost?: number
+  creditSource?: string
   balance?: number
   pointsBalance?: number
   freeCreditsBalance?: number
   paidCreditsBalance?: number
+  creditsBalance?: number
   totalCreditsBalance?: number
+  emailNotifyEnabled?: boolean
+  emailNotifyCostPoints?: number
   errorMessage?: string
 }
 
@@ -173,34 +251,42 @@ export interface UploadImageResponse {
 
 export interface ImageTaskItem {
   id: string
+  requestedCount: number
   prompt: string
   imageUrl?: string
   imageUrls?: string[]
+  thumbnailUrl?: string
+  thumbnailUrls?: string[]
   costPoints: number
   costCredits: number
-  freeCreditsCost: number
-  paidCreditsCost: number
-  creditSource: string
+  freeCreditsCost?: number
+  paidCreditsCost?: number
+  creditSource?: string
   status: string
   requestParams?: string
   errorMessage?: string
   createdAt: string
+  updatedAt: string
 }
 
 export interface ImageTaskDetailResponse {
   taskId: string
+  requestedCount: number
   prompt: string
   imageUrl?: string
   imageUrls?: string[]
+  thumbnailUrl?: string
+  thumbnailUrls?: string[]
   costPoints: number
   costCredits: number
-  freeCreditsCost: number
-  paidCreditsCost: number
-  creditSource: string
+  freeCreditsCost?: number
+  paidCreditsCost?: number
+  creditSource?: string
   status: string
   requestParams?: string
   errorMessage?: string
   createdAt: string
+  updatedAt: string
 }
 
 export interface ListImageTasksResponse {
@@ -218,6 +304,7 @@ export interface PackageItem {
   pointsCost: number
   amountCents: number
   bonusPoints: number
+  productUrl?: string
   enabled: boolean
   sortOrder: number
   note?: string
@@ -227,71 +314,86 @@ export interface ListPackagesResponse {
   items: PackageItem[]
 }
 
-export interface CreateRechargeOrderRequest {
-  rechargeType: 'custom' | 'package'
-  count?: number
-  packageCode?: string
-}
-
-export interface ConfirmRechargeOrderRequest {
-  providerTradeNo?: string
-  paymentChannel?: string
-  amountCents?: number
-  paidAt?: string | null
-  remark?: string
-}
-
-export interface RechargePaymentCallbackRequest extends ConfirmRechargeOrderRequest {
-  orderNo: string
-}
-
-export interface RechargeOrderItem {
+export interface ProductCategoryItem {
   id: string
-  orderNo: string
-  rechargeType: 'custom' | 'package' | string
-  packageCode: string
-  packageName: string
+  name: string
+  description?: string
+  sortOrder: number
+  enabled: boolean
+}
+
+export interface ProductItem {
+  id: string
+  name: string
+  shortDescription?: string
+  description?: string
+  previewUrl?: string
+  previewThumbUrl?: string
   amountCents: number
-  creditsAmount: number
-  bonusPoints: number
-  pointsAmount: number
-  status: string
-  paymentChannel?: string
-  providerTradeNo?: string
-  paidAt?: string | null
+  productUrl?: string
+  sortOrder: number
+  enabled: boolean
+  categories: ProductCategoryItem[]
   createdAt: string
+  updatedAt: string
 }
 
-export interface RechargeOrderResponse extends RechargeOrderItem {
+export interface ListProductsResponse {
+  items: ProductItem[]
+}
+
+export interface ListProductCategoriesResponse {
+  items: ProductCategoryItem[]
+}
+
+export interface RedeemCodeRequest {
+  code: string
+}
+
+export interface RedeemCodeResponse {
+  code: string
+  pointsAmount: number
+  creditsAmount: number
   pointsBalance: number
-  freeCreditsBalance: number
-  paidCreditsBalance: number
+  freeCreditsBalance?: number
+  paidCreditsBalance?: number
+  creditsBalance?: number
   totalCreditsBalance: number
-  balance: number
+  redeemedAt: string
 }
-
-export interface ListRechargeOrdersResponse {
-  items: RechargeOrderItem[]
-  page: number
-  pageSize: number
-  total: number
-}
-
-export type MockPurchaseRequest = CreateRechargeOrderRequest
-export type MockPurchaseResponse = RechargeOrderResponse
 
 export interface BillingSettingsResponse {
-  customRechargeUnitPriceCents: number
   imageGeneratePointCost: number
+  imageGenerationEnabled: boolean
+  emailNotifyEnabled: boolean
+  emailNotifyPointCost: number
   checkinPoints: number
   checkinCredits: number
+  inviteRewardPoints: number
+  inviteRewardCredits: number
+  registrationGiftCredits: number
 }
 
 export interface UpdateBillingSettingsRequest {
-  customRechargeUnitPriceCents: number
   imageGeneratePointCost: number
+  imageGenerationEnabled: boolean
+  emailNotifyEnabled: boolean
+  emailNotifyPointCost: number
   checkinPoints: number
   checkinCredits: number
+  inviteRewardPoints: number
+  inviteRewardCredits: number
+  registrationGiftCredits: number
+}
+
+export interface InviteInfoResponse {
+  inviteCode: string
+  invitedCount: number
+  rewardPointsTotal: number
+  rewardCreditsTotal: number
+  inviteRewardPoints: number
+  inviteRewardCredits: number
+  registrationGiftCredits: number
 }
 
 export interface RedeemPointsRequest {
@@ -305,8 +407,9 @@ export interface RedeemPointsResponse {
   pointsCost: number
   creditsAmount: number
   pointsBalance: number
-  freeCreditsBalance: number
-  paidCreditsBalance: number
+  freeCreditsBalance?: number
+  paidCreditsBalance?: number
+  creditsBalance?: number
   totalCreditsBalance: number
   status: string
 }
@@ -314,15 +417,49 @@ export interface RedeemPointsResponse {
 export interface AdminStatsResponse {
   usersTotal: number
   usersDisabled: number
+  usersCreatedToday?: number
+  tasksActiveUsersToday?: number
+  ordersPaid?: number
   tasksTotal: number
   tasksGenerating: number
   tasksSuccess: number
   tasksFailed: number
-  ordersPaid: number
+  tasksPointsConsumedTotal?: number
+  tasksCreditsConsumedTotal?: number
+  tasksImagesGeneratedTotal?: number
+  tasksPointsConsumedToday?: number
+  tasksCreditsConsumedToday?: number
+  tasksImagesGeneratedToday?: number
+  tasksPointsConsumedYesterday?: number
+  tasksCreditsConsumedYesterday?: number
+  tasksImagesGeneratedYesterday?: number
   auditRejected: number
   pointsBalanceTotal: number
-  freeCreditsTotal: number
-  paidCreditsTotal: number
+  pointsConvertedCreditsTotal?: number
+  totalCredits?: number
+  creditsTotal?: number
+  creditsBalanceTotal?: number
+  freeCreditsTotal?: number
+  paidCreditsTotal?: number
+  resourceCreditsTotal?: number
+  pointToCreditRate?: number
+  redeemCodesActive?: number
+  redeemCodesUsed?: number
+  redeemCodesDisabled?: number
+  redeemCodeCreditsTotal?: number
+  redeemCodePointsTotal?: number
+  redeemCodeActivePointsTotal?: number
+  redeemCodeUsedPointsTotal?: number
+  redeemCodeConvertedCreditsTotal?: number
+  taskTrend24h?: AdminTaskTrendPoint[]
+  taskTrend3d?: AdminTaskTrendPoint[]
+  taskTrend7d?: AdminTaskTrendPoint[]
+}
+
+export interface AdminTaskTrendPoint {
+  label: string
+  success: number
+  failed: number
 }
 
 export interface AdminUserItem {
@@ -332,9 +469,12 @@ export interface AdminUserItem {
   role: string
   status: number
   pointsBalance: number
-  freeCredits: number
-  paidCredits: number
+  freeCredits?: number
+  paidCredits?: number
+  creditsBalance?: number
   totalCredits: number
+  consumedPoints?: number
+  consumedCredits?: number
   checkinStreak: number
   lastLoginAt?: string | null
   lastCheckinAt?: string | null
@@ -351,19 +491,23 @@ export interface AdminListUsersResponse {
 export interface AdminImageTaskItem {
   id: string
   userId: string
+  username?: string
   prompt: string
   imageUrl?: string
   imageUrls?: string[]
+  thumbnailUrl?: string
+  thumbnailUrls?: string[]
   costPoints: number
   costCredits: number
-  freeCreditsCost: number
-  paidCreditsCost: number
-  creditSource: string
+  freeCreditsCost?: number
+  paidCreditsCost?: number
+  creditSource?: string
   status: string
   provider?: string
   requestParams?: string
   errorMessage?: string
   createdAt: string
+  updatedAt: string
 }
 
 export interface AdminListImageTasksResponse {
@@ -373,25 +517,35 @@ export interface AdminListImageTasksResponse {
   total: number
 }
 
-export interface AdminRechargeOrderItem {
+export interface AdminRedeemCodeItem {
   id: string
-  userId: string
-  orderNo: string
-  packageCode: string
-  packageName: string
-  amountCents: number
-  creditsAmount: number
-  bonusPoints: number
+  code: string
   pointsAmount: number
+  creditsAmount: number
   status: string
-  paymentChannel?: string
-  providerTradeNo?: string
-  paidAt?: string | null
+  batchNo?: string
+  note?: string
+  createdBy: string
+  usedBy?: string
+  usedAt?: string | null
   createdAt: string
 }
 
-export interface AdminListRechargeOrdersResponse {
-  items: AdminRechargeOrderItem[]
+export interface AdminCreateRedeemCodesRequest {
+  count: number
+  pointsAmount: number
+  creditsAmount: number
+  prefix?: string
+  note?: string
+}
+
+export interface AdminCreateRedeemCodesResponse {
+  batchNo: string
+  items: AdminRedeemCodeItem[]
+}
+
+export interface AdminListRedeemCodesResponse {
+  items: AdminRedeemCodeItem[]
   page: number
   pageSize: number
   total: number
@@ -445,6 +599,74 @@ export interface AdminListActionLogsResponse {
   total: number
 }
 
+export interface DataCleanupRequest {
+  mode: 'date' | 'days_ago'
+  startDate?: string
+  endDate?: string
+  daysAgo?: number
+}
+
+export interface DataCleanupTableStat {
+  table: string
+  count: number
+  bytes?: number
+  note?: string
+}
+
+export interface DataCleanupResponse {
+  mode: 'date' | 'days_ago'
+  targetDate: string
+  startedAt: string
+  finishedAt?: string | null
+  dryRun: boolean
+  tableStats: DataCleanupTableStat[]
+  filesRemoved: number
+  bytesRemoved: number
+  recordsRemoved: number
+}
+
+export interface AnnouncementItem {
+  id: string
+  title: string
+  content: string
+  imageUrl?: string
+  kind: 'pinned' | 'normal' | 'personal'
+  targetUserId?: string
+  enabled: boolean
+  sortOrder: number
+  isRead: boolean
+  readAt?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ListAnnouncementsResponse {
+  items: AnnouncementItem[]
+}
+
+export interface MarkAnnouncementReadResponse {
+  id: string
+  isRead: boolean
+  readAt: string
+}
+
+export interface AdminListAnnouncementsResponse {
+  items: AnnouncementItem[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface AdminAnnouncementPayload {
+  title: string
+  content: string
+  imageUrl?: string
+  kind: 'pinned' | 'normal' | 'personal'
+  targetUserId?: string
+  enabled?: boolean
+  sortOrder: number
+}
+
 export interface AdminPackageItem {
   id: string
   code: string
@@ -454,6 +676,7 @@ export interface AdminPackageItem {
   pointsCost: number
   amountCents: number
   bonusPoints: number
+  productUrl?: string
   enabled: boolean
   sortOrder: number
   note?: string
@@ -476,7 +699,78 @@ export interface AdminPackagePayload {
   pointsCost: number
   amountCents: number
   bonusPoints: number
+  productUrl?: string
   enabled?: boolean
   sortOrder: number
   note?: string
+}
+
+export interface AdminProductPayload {
+  name: string
+  shortDescription?: string
+  description?: string
+  previewUrl?: string
+  amountCents: number
+  productUrl?: string
+  categoryIds: string[]
+  sortOrder: number
+  enabled?: boolean
+}
+
+export interface AdminProductCategoryPayload {
+  name: string
+  description?: string
+  sortOrder: number
+  enabled?: boolean
+}
+
+export interface AdminListProductsResponse {
+  items: ProductItem[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface AdminListProductCategoriesResponse {
+  items: ProductCategoryItem[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface AdminProviderKeyItem {
+  id: string
+  name: string
+  provider: string
+  batchServiceUrl: string
+  apiBaseUrl: string
+  apiKeyMasked: string
+  status: string
+  isUsing: boolean
+  priority: number
+  autoSwitchEnabled: boolean
+  successCount: number
+  failureCount: number
+  lastUsedAt?: string | null
+  lastError?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AdminListProviderKeysResponse {
+  items: AdminProviderKeyItem[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface AdminProviderKeyPayload {
+  name: string
+  provider?: string
+  batchServiceUrl?: string
+  apiBaseUrl?: string
+  apiKey?: string
+  status?: 'active' | 'disabled' | 'error' | 'low_balance'
+  priority: number
+  autoSwitchEnabled?: boolean
 }

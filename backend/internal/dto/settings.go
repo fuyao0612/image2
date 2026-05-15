@@ -1,17 +1,27 @@
 package dto
 
-// BillingSettingsResponse 表示平台账本相关的可配置参数。
+// BillingSettingsResponse represents editable platform billing/reward settings.
 type BillingSettingsResponse struct {
-	CustomRechargeUnitPriceCents int64 `json:"customRechargeUnitPriceCents"`
-	ImageGeneratePointCost       int64 `json:"imageGeneratePointCost"`
-	CheckinPoints                int64 `json:"checkinPoints"`
-	CheckinCredits               int64 `json:"checkinCredits"`
+	ImageGeneratePointCost  int64 `json:"imageGeneratePointCost"`
+	ImageGenerationEnabled  bool  `json:"imageGenerationEnabled"`
+	EmailNotifyEnabled      bool  `json:"emailNotifyEnabled"`
+	EmailNotifyPointCost    int64 `json:"emailNotifyPointCost"`
+	CheckinPoints           int64 `json:"checkinPoints"`
+	CheckinCredits          int64 `json:"checkinCredits"`
+	InviteRewardPoints      int64 `json:"inviteRewardPoints"`
+	InviteRewardCredits     int64 `json:"inviteRewardCredits"`
+	RegistrationGiftCredits int64 `json:"registrationGiftCredits"`
 }
 
-// UpdateBillingSettingsRequest 用于后台更新账本配置。
+// UpdateBillingSettingsRequest updates editable billing/reward settings.
 type UpdateBillingSettingsRequest struct {
-	CustomRechargeUnitPriceCents int64 `json:"customRechargeUnitPriceCents" binding:"required,min=1"`
-	ImageGeneratePointCost       int64 `json:"imageGeneratePointCost" binding:"required,min=1"`
-	CheckinPoints                int64 `json:"checkinPoints" binding:"required,min=0"`
-	CheckinCredits               int64 `json:"checkinCredits" binding:"required,min=0"`
+	ImageGeneratePointCost  int64  `json:"imageGeneratePointCost" binding:"required,min=1"`
+	ImageGenerationEnabled  *bool  `json:"imageGenerationEnabled"`
+	EmailNotifyEnabled      *bool  `json:"emailNotifyEnabled"`
+	EmailNotifyPointCost    *int64 `json:"emailNotifyPointCost" binding:"required,min=0"`
+	CheckinPoints           *int64 `json:"checkinPoints" binding:"required,min=0"`
+	CheckinCredits          *int64 `json:"checkinCredits" binding:"required,min=0"`
+	InviteRewardPoints      *int64 `json:"inviteRewardPoints" binding:"required,min=0"`
+	InviteRewardCredits     *int64 `json:"inviteRewardCredits" binding:"required,min=0"`
+	RegistrationGiftCredits *int64 `json:"registrationGiftCredits" binding:"required,min=0"`
 }

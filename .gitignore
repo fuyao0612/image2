@@ -15,12 +15,20 @@ backend/logs/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dist.*/
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+frontend/src/admin/AdminConsole.tsx.*backup*
+frontend/src/admin/AdminConsole.tsx.before-*
+frontend/src/admin/AdminConsole.tsx.local-*
+frontend/src/admin/AdminConsole.tsx.mojibake-*
+frontend/src/admin/AdminConsole.tsx.pre-*
+frontend/src/admin/AdminConsole.tsx.restore-*
+frontend/src/admin/AdminConsole.tsx.server-*
 
 # Deploy
 deploy/.env.production
@@ -35,3 +43,9 @@ Thumbs.db
 logs/
 .artifacts/
 tmp-*.html
+temp.txt
+frontend-dist*.tgz
+frontend-dist*/
+backend/api
+jh612.top_nginx/
+restart-project.bat

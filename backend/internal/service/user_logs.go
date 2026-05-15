@@ -13,6 +13,9 @@ import (
 
 // ListPointsLogs 返回当前用户的积分流水分页。
 func (s *Service) ListPointsLogs(ctx context.Context, userID uint64, page, pageSize int) (dto.ListPointsLogsResponse, error) {
+	if err := s.ensureUserCreditSettlement(ctx, userID); err != nil {
+		return dto.ListPointsLogsResponse{}, err
+	}
 	page, pageSize = normalizePage(page, pageSize)
 
 	logs, total, err := s.loadPointsLogsPage(ctx, userID, page, pageSize)
@@ -33,8 +36,11 @@ func (s *Service) ListPointsLogs(ctx context.Context, userID uint64, page, pageS
 	}, nil
 }
 
-// ListCreditLogs 返回当前用户的次数流水分页。
+// ListCreditLogs 返回当前用户的福利次数流水分页。
 func (s *Service) ListCreditLogs(ctx context.Context, userID uint64, page, pageSize int) (dto.ListCreditLogsResponse, error) {
+	if err := s.ensureUserCreditSettlement(ctx, userID); err != nil {
+		return dto.ListCreditLogsResponse{}, err
+	}
 	page, pageSize = normalizePage(page, pageSize)
 
 	logs, total, err := s.loadCreditLogsPage(ctx, userID, page, pageSize)
@@ -57,9 +63,12 @@ func (s *Service) ListCreditLogs(ctx context.Context, userID uint64, page, pageS
 
 // ListUserActivity 返回当前用户的统一记录流分页。
 func (s *Service) ListUserActivity(ctx context.Context, userID uint64, page, pageSize int) (dto.ListUserActivityResponse, error) {
+	if err := s.ensureUserCreditSettlement(ctx, userID); err != nil {
+		return dto.ListUserActivityResponse{}, err
+	}
 	page, pageSize = normalizePage(page, pageSize)
 
-	records, err := s.loadUserActivityRecords(ctx, userID)
+	records, total, err := s.loadUserActivityRecordsPage(ctx, userID, page*pageSize)
 	if err != nil {
 		return dto.ListUserActivityResponse{}, err
 	}
@@ -71,20 +80,19 @@ func (s *Service) ListUserActivity(ctx context.Context, userID uint64, page, pag
 		return records[i].CreatedAt.After(records[j].CreatedAt)
 	})
 
-	total := len(records)
 	start := (page - 1) * pageSize
-	if start >= total {
+	if int64(start) >= total {
 		return dto.ListUserActivityResponse{
 			Items:    []dto.UserActivityItem{},
 			Page:     page,
 			PageSize: pageSize,
-			Total:    int64(total),
+			Total:    total,
 		}, nil
 	}
 
 	end := start + pageSize
-	if end > total {
-		end = total
+	if end > len(records) {
+		end = len(records)
 	}
 
 	items := make([]dto.UserActivityItem, 0, end-start)
@@ -96,7 +104,7 @@ func (s *Service) ListUserActivity(ctx context.Context, userID uint64, page, pag
 		Items:    items,
 		Page:     page,
 		PageSize: pageSize,
-		Total:    int64(total),
+		Total:    total,
 	}, nil
 }
 
@@ -138,28 +146,39 @@ func (s *Service) loadCreditLogsPage(ctx context.Context, userID uint64, page, p
 	return logs, total, nil
 }
 
-func (s *Service) loadUserActivityRecords(ctx context.Context, userID uint64) ([]userActivityRecord, error) {
+func (s *Service) loadUserActivityRecordsPage(ctx context.Context, userID uint64, limit int) ([]userActivityRecord, int64, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var pointsTotal int64
+	if err := s.db.WithContext(ctx).Model(&model.PointsLog{}).Where("user_id = ?", userID).Count(&pointsTotal).Error; err != nil {
+		return nil, 0, err
+	}
 	var pointsLogs []model.PointsLog
-	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Find(&pointsLogs).Error; err != nil {
-		return nil, err
+	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Limit(limit).Find(&pointsLogs).Error; err != nil {
+		return nil, 0, err
 	}
 
+	var creditTotal int64
+	if err := s.db.WithContext(ctx).Model(&model.CreditLog{}).Where("user_id = ?", userID).Count(&creditTotal).Error; err != nil {
+		return nil, 0, err
+	}
 	var creditLogs []model.CreditLog
-	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Find(&creditLogs).Error; err != nil {
-		return nil, err
+	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Limit(limit).Find(&creditLogs).Error; err != nil {
+		return nil, 0, err
 	}
 
+	var imageTaskTotal int64
+	if err := s.db.WithContext(ctx).Model(&model.ImageTask{}).Where("user_id = ?", userID).Count(&imageTaskTotal).Error; err != nil {
+		return nil, 0, err
+	}
 	var imageTasks []model.ImageTask
-	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Find(&imageTasks).Error; err != nil {
-		return nil, err
+	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Limit(limit).Find(&imageTasks).Error; err != nil {
+		return nil, 0, err
 	}
 
-	var rechargeOrders []model.RechargeOrder
-	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at desc, id desc").Find(&rechargeOrders).Error; err != nil {
-		return nil, err
-	}
-
-	records := make([]userActivityRecord, 0, len(pointsLogs)+len(creditLogs)+len(imageTasks)+len(rechargeOrders))
+	records := make([]userActivityRecord, 0, len(pointsLogs)+len(creditLogs)+len(imageTasks))
 	for _, item := range pointsLogs {
 		records = append(records, userActivityRecord{
 			ID:        fmt.Sprintf("points-%d", item.ID),
@@ -178,18 +197,11 @@ func (s *Service) loadUserActivityRecords(ctx context.Context, userID uint64) ([
 		records = append(records, userActivityRecord{
 			ID:        fmt.Sprintf("task-%d", item.ID),
 			CreatedAt: item.CreatedAt,
-			Item:      imageTaskActivityItem(item),
-		})
-	}
-	for _, item := range rechargeOrders {
-		records = append(records, userActivityRecord{
-			ID:        fmt.Sprintf("order-%d", item.ID),
-			CreatedAt: item.CreatedAt,
-			Item:      rechargeOrderActivityItem(item),
+			Item:      s.imageTaskActivityItem(ctx, item),
 		})
 	}
 
-	return records, nil
+	return records, pointsTotal + creditTotal + imageTaskTotal, nil
 }
 
 func pointsLogToDTO(item model.PointsLog) dto.PointsLogItem {
@@ -199,7 +211,7 @@ func pointsLogToDTO(item model.PointsLog) dto.PointsLogItem {
 		Delta:         item.Delta,
 		BeforeBalance: item.BeforeBalance,
 		AfterBalance:  item.AfterBalance,
-		Remark:        item.Remark,
+		Remark:        normalizeLedgerRemark(item.Remark),
 		CreatedAt:     item.CreatedAt,
 	}
 }
@@ -214,14 +226,14 @@ func creditLogToDTO(item model.CreditLog) dto.CreditLogItem {
 		BeforePaid: item.BeforePaid,
 		AfterFree:  item.AfterFree,
 		AfterPaid:  item.AfterPaid,
-		Remark:     item.Remark,
+		Remark:     normalizeLedgerRemark(item.Remark),
 		CreatedAt:  item.CreatedAt,
 	}
 }
 
 func pointsLogActivityItem(item model.PointsLog) dto.UserActivityItem {
 	description := fmt.Sprintf("%+d 积分", item.Delta)
-	if remark := strings.TrimSpace(item.Remark); remark != "" {
+	if remark := normalizeLedgerRemark(item.Remark); remark != "" {
 		description = fmt.Sprintf("%s · %s", description, remark)
 	}
 
@@ -236,8 +248,8 @@ func pointsLogActivityItem(item model.PointsLog) dto.UserActivityItem {
 }
 
 func creditLogActivityItem(item model.CreditLog) dto.UserActivityItem {
-	description := fmt.Sprintf("免费 %+d / 充值 %+d", item.DeltaFree, item.DeltaPaid)
-	if remark := strings.TrimSpace(item.Remark); remark != "" {
+	description := fmt.Sprintf("福利次数 %+d", item.DeltaFree+item.DeltaPaid)
+	if remark := normalizeLedgerRemark(item.Remark); remark != "" {
 		description = fmt.Sprintf("%s · %s", description, remark)
 	}
 
@@ -252,61 +264,54 @@ func creditLogActivityItem(item model.CreditLog) dto.UserActivityItem {
 	}
 }
 
-func imageTaskActivityItem(task model.ImageTask) dto.UserActivityItem {
-	description := fmt.Sprintf("%s · 消耗 %d 次", imageTaskStatusTitle(task.Status), task.CostCredits)
-	if source := strings.TrimSpace(task.CreditSource); source != "" {
-		description = fmt.Sprintf("%s · 来源 %s", description, source)
-	}
+func (s *Service) imageTaskActivityItem(ctx context.Context, task model.ImageTask) dto.UserActivityItem {
+	description := fmt.Sprintf("%s · 消耗 %s", imageTaskStatusTitle(task.Status), imageTaskCostText(task.CostPoints, task.CostCredits))
 	if remark := strings.TrimSpace(task.ErrorMessage); remark != "" && task.Status == model.ImageTaskStatusFailed {
 		description = fmt.Sprintf("%s · %s", description, remark)
 	}
+	thumbURLs := s.thumbnailURLsFromTask(ctx, task)
+	imageURLs := imageURLsFromTask(task)
 
 	return dto.UserActivityItem{
-		ID:          fmt.Sprintf("task-%d", task.ID),
-		RecordType:  "image_task",
-		Title:       task.Prompt,
-		Description: description,
-		Status:      string(task.Status),
-		ImageURL:    task.ImageURL,
-		CreditsAmount: task.CostCredits,
-		CreatedAt:   task.CreatedAt,
-	}
-}
-
-func rechargeOrderActivityItem(order model.RechargeOrder) dto.UserActivityItem {
-	description := fmt.Sprintf("%s · %.2f 元 · %d 次", rechargeOrderStatusTitle(order.Status), float64(order.AmountCents)/100, order.CreditsAmount)
-	if order.BonusPoints > 0 {
-		description = fmt.Sprintf("%s · 赠送 %d 积分", description, order.BonusPoints)
-	}
-	if paidAt := order.PaidAt; paidAt != nil {
-		description = fmt.Sprintf("%s · 支付于 %s", description, paidAt.Format("2006-01-02 15:04"))
-	}
-
-	return dto.UserActivityItem{
-		ID:            fmt.Sprintf("order-%d", order.ID),
-		RecordType:    "recharge_order",
-		Title:         order.PackageName,
+		ID:            fmt.Sprintf("task-%d", task.ID),
+		RecordType:    "image_task",
+		Title:         task.Prompt,
 		Description:   description,
-		Status:        string(order.Status),
-		CreditsAmount: order.CreditsAmount,
-		PointsAmount:  order.BonusPoints,
-		AmountCents:   order.AmountCents,
-		CreatedAt:     order.CreatedAt,
+		Status:        string(task.Status),
+		ImageURL:      thumbnailURLFromList(imageURLs, 0),
+		ThumbnailURL:  thumbnailURLFromList(thumbURLs, 0),
+		PointsAmount:  task.CostPoints,
+		CreditsAmount: task.CostCredits,
+		CreatedAt:     task.CreatedAt,
 	}
 }
 
-func rechargeOrderStatusTitle(status model.RechargeOrderStatus) string {
-	switch status {
-	case model.RechargeOrderStatusPending:
-		return "待支付"
-	case model.RechargeOrderStatusPaid:
-		return "已支付"
-	case model.RechargeOrderStatusCanceled:
-		return "已取消"
-	case model.RechargeOrderStatusRefunded:
-		return "已退款"
+func imageTaskCostText(points int64, credits int64) string {
+	switch {
+	case points > 0 && credits > 0:
+		return fmt.Sprintf("%d 积分 + %d 福利次数", points, credits)
+	case points > 0:
+		return fmt.Sprintf("%d 积分", points)
+	case credits > 0:
+		return fmt.Sprintf("%d 福利次数", credits)
 	default:
-		return string(status)
+		return "-"
+	}
+}
+
+func normalizeLedgerRemark(value string) string {
+	remark := strings.TrimSpace(value)
+	switch remark {
+	case "福利次数不足时的积分兜底消耗":
+		return "消耗积分生图"
+	case "生图失败退回积分兜底":
+		return "生图失败退回积分"
+	default:
+		remark = strings.ReplaceAll(remark, "福利次数不足时的积分兜底消耗", "消耗积分生图")
+		remark = strings.ReplaceAll(remark, "生图失败退回积分兜底", "生图失败退回积分")
+		remark = strings.ReplaceAll(remark, "积分兜底消耗", "消耗积分生图")
+		remark = strings.ReplaceAll(remark, "积分兜底", "积分")
+		return remark
 	}
 }
 
@@ -315,11 +320,13 @@ func pointsChangeTitle(changeType model.PointsChangeType) string {
 	case model.PointsChangeTypeCheckin:
 		return "每日签到"
 	case model.PointsChangeTypePurchase:
-		return "充值入账"
+		return "购买入账"
 	case model.PointsChangeTypePurchaseBonus:
-		return "充值赠送"
+		return "购买赠送"
 	case model.PointsChangeTypeRedeem:
 		return "积分兑换"
+	case model.PointsChangeTypeSettlement:
+		return "日终转换"
 	case model.PointsChangeTypeGenerate:
 		return "生图消耗"
 	case model.PointsChangeTypeRefund:
@@ -333,18 +340,22 @@ func pointsChangeTitle(changeType model.PointsChangeType) string {
 
 func creditChangeTitle(changeType model.CreditChangeType) string {
 	switch changeType {
+	case model.CreditChangeTypeCheckin:
+		return "每日签到福利次数"
 	case model.CreditChangeTypeRedeem:
-		return "积分兑换次数"
+		return "积分兑换福利次数"
 	case model.CreditChangeTypePurchase:
-		return "充值入账次数"
+		return "福利次数入账"
+	case model.CreditChangeTypeSettlement:
+		return "日终转换福利次数"
 	case model.CreditChangeTypeGenerate:
-		return "生图消耗次数"
+		return "生图消耗福利次数"
 	case model.CreditChangeTypeRefund:
-		return "失败退回次数"
+		return "失败退回福利次数"
 	case model.CreditChangeTypeAdjust:
-		return "后台调整次数"
+		return "后台调整福利次数"
 	default:
-		return "次数变动"
+		return "福利次数变动"
 	}
 }
 

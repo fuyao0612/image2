@@ -26,7 +26,7 @@ type PointsLogItem struct {
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
-// CreditLogItem 是前端展示用的次数流水。
+// CreditLogItem 是前端展示用的福利次数流水。
 type CreditLogItem struct {
 	ID         string    `json:"id"`
 	ChangeType string    `json:"changeType"`
@@ -40,14 +40,16 @@ type CreditLogItem struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
-// PointsResponse 是用户积分与次数总览。
+// PointsResponse 是用户积分与福利次数总览。
 type PointsResponse struct {
-	Balance          int64           `json:"balance"`
-	FreeCredits      int64           `json:"freeCredits"`
-	PaidCredits      int64           `json:"paidCredits"`
-	TotalCredits     int64           `json:"totalCredits"`
-	Streak           int             `json:"streak"`
-	LastCheckinAt    *time.Time      `json:"lastCheckinAt,omitempty"`
-	RecentLogs       []PointsLogItem `json:"recentLogs"`
-	RecentCreditLogs []CreditLogItem `json:"recentCreditLogs,omitempty"`
+	Balance             int64           `json:"balance"`
+	FreeCredits         int64           `json:"freeCredits"`
+	PaidCredits         int64           `json:"paidCredits"`
+	TotalCredits        int64           `json:"totalCredits"`
+	Streak              int             `json:"streak"`
+	LastCheckinAt       *time.Time      `json:"lastCheckinAt,omitempty"`
+	CheckinPointsTotal  int64           `json:"checkinPointsTotal"`
+	CheckinCreditsTotal int64           `json:"checkinCreditsTotal"`
+	RecentLogs          []PointsLogItem `json:"recentLogs"`
+	RecentCreditLogs    []CreditLogItem `json:"recentCreditLogs,omitempty"`
 }

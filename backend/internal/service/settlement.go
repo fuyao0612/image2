@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"time"
 
 	"image2/backend/internal/model"
@@ -11,133 +11,119 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ensureUserCreditSettlementTx 在事务内把某个用户尚未转换的次数结算成积分。
+// ensureUserCreditSettlementTx 当前版本不再做次数转积分，保留接口兼容旧调用点。
 func (s *Service) ensureUserCreditSettlementTx(tx *gorm.DB, userID uint64) (model.User, bool, error) {
 	user, err := s.lockUser(tx, userID)
 	if err != nil {
 		return model.User{}, false, err
 	}
-
-	now := s.now()
-	today := s.startOfDay(now)
-
-	lastSettledDate := user.LastCreditSettlementDate
-	if lastSettledDate == nil && !user.CreatedAt.IsZero() {
-		createdDate := s.startOfDay(user.CreatedAt.In(s.location))
-		lastSettledDate = &createdDate
-	}
-	if lastSettledDate == nil || !lastSettledDate.Before(today) {
-		return user, false, nil
-	}
-
-	freeBefore := user.FreeCredits
-	paidBefore := user.PaidCredits
-	totalCredits := freeBefore + paidBefore
-	settleDate := today
-
-	if totalCredits <= 0 {
-		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).Update("last_credit_settlement_date", settleDate).Error; err != nil {
-			return model.User{}, false, err
-		}
-		user.LastCreditSettlementDate = &settleDate
-		return user, true, nil
-	}
-
-	unitPrice := s.settingInt64(systemSettingKeyCustomRechargeUnitPriceCents, 20)
-	if unitPrice <= 0 {
-		unitPrice = 20
-	}
-	pointsGain := totalCredits * unitPrice
-	beforePoints := user.PointsBalance
-	afterPoints := beforePoints + pointsGain
-
-	if err := tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
-		"points_balance":              afterPoints,
-		"free_credits":                0,
-		"paid_credits":                0,
-		"last_credit_settlement_date": settleDate,
-	}).Error; err != nil {
-		return model.User{}, false, err
-	}
-
-	if err := tx.Create(&model.CreditLog{
-		UserID:     user.ID,
-		ChangeType: model.CreditChangeTypeSettlement,
-		DeltaFree:  -freeBefore,
-		DeltaPaid:  -paidBefore,
-		BeforeFree: freeBefore,
-		BeforePaid: paidBefore,
-		AfterFree:  0,
-		AfterPaid:  0,
-		BizType:    "daily_settlement",
-		BizID:      dayKey(today),
-		Remark:     fmt.Sprintf("日终将 %d 次转换为积分", totalCredits),
-	}).Error; err != nil {
-		return model.User{}, false, err
-	}
-
-	if err := tx.Create(&model.PointsLog{
-		UserID:        user.ID,
-		ChangeType:    model.PointsChangeTypeSettlement,
-		Delta:         pointsGain,
-		BeforeBalance: beforePoints,
-		AfterBalance:  afterPoints,
-		BizType:       "daily_settlement",
-		BizID:         dayKey(today),
-		Remark:        fmt.Sprintf("日终将 %d 次转换为积分", totalCredits),
-	}).Error; err != nil {
-		return model.User{}, false, err
-	}
-
-	user.PointsBalance = afterPoints
-	user.FreeCredits = 0
-	user.PaidCredits = 0
-	user.LastCreditSettlementDate = &settleDate
-	return user, true, nil
+	return user, false, nil
 }
 
-// ensureUserCreditSettlement 在独立事务里执行单个用户的日终结算。
+// ensureUserCreditSettlement 当前为兼容空操作，不再执行次数转积分。
 func (s *Service) ensureUserCreditSettlement(ctx context.Context, userID uint64) error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		_, _, err := s.ensureUserCreditSettlementTx(tx, userID)
-		return err
-	})
-}
-
-// SettleAllUserCredits 扫描所有未结算用户并执行日终转换。
-func (s *Service) SettleAllUserCredits(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-
-	today := s.startOfDay(s.now())
-	var userIDs []uint64
-	query := s.db.WithContext(ctx).Model(&model.User{}).
-		Where("last_credit_settlement_date IS NULL OR last_credit_settlement_date < ?", today).
-		Order("id asc")
-	if err := query.Pluck("id", &userIDs).Error; err != nil {
-		return err
-	}
-
-	for _, userID := range userIDs {
-		if err := s.ensureUserCreditSettlement(ctx, userID); err != nil {
-			return err
-		}
-	}
+	_ = ctx
+	_ = userID
 	return nil
 }
 
-// StartDailyCreditSettlementMaintenance 启动后台日终结算巡检。
+// ResetAllUsersCredits 将全体用户的福利次数清零。
+func (s *Service) ResetAllUsersCredits(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Model(&model.User{}).Updates(map[string]any{
+			"free_credits": 0,
+			"paid_credits": 0,
+		})
+		if res.Error != nil {
+			return res.Error
+		}
+		if err := upsertSystemSetting(tx, systemSettingKeyCreditResetLastRunAt, s.now().Format(time.RFC3339), "全体用户福利次数上次清零时间"); err != nil {
+			return err
+		}
+		log.Printf("全体用户福利次数已清零，影响行数: %d", res.RowsAffected)
+		return nil
+	})
+}
+
+func (s *Service) resetAllUsersCreditsIfDue(ctx context.Context, now time.Time, interval time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if interval <= 0 {
+		interval = 7 * 24 * time.Hour
+	}
+	if now.IsZero() {
+		now = s.now()
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var setting model.SystemSetting
+		err := tx.Where("`key` = ?", systemSettingKeyCreditResetLastRunAt).First(&setting).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
+		if err == nil {
+			lastRunAt, parseErr := time.Parse(time.RFC3339, setting.Value)
+			if parseErr == nil && now.Sub(lastRunAt) < interval {
+				return nil
+			}
+		}
+
+		res := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Model(&model.User{}).Updates(map[string]any{
+			"free_credits": 0,
+			"paid_credits": 0,
+		})
+		if res.Error != nil {
+			return res.Error
+		}
+		if err := upsertSystemSetting(tx, systemSettingKeyCreditResetLastRunAt, now.Format(time.RFC3339), "全体用户福利次数上次清零时间"); err != nil {
+			return err
+		}
+		log.Printf("全体用户福利次数已按每周二规则清零，影响行数: %d", res.RowsAffected)
+		return nil
+	})
+}
+
+// SettleAllUserCredits 保留旧接口兼容，当前直接执行全体福利次数清零。
+func (s *Service) SettleAllUserCredits(ctx context.Context) error {
+	return s.ResetAllUsersCredits(ctx)
+}
+
+// StartDailyCreditSettlementMaintenance 保留旧入口，当前改为每周二 0 点清零一次全体用户福利次数。
 func (s *Service) StartDailyCreditSettlementMaintenance(ctx context.Context) {
+	s.StartDailyCreditResetMaintenance(ctx)
+}
+
+// StartDailyCreditResetMaintenance 从下一个周二 0 点开始，每周清零一次全体用户福利次数。
+func (s *Service) StartDailyCreditResetMaintenance(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		timer := time.NewTimer(timeUntilNextWeekdayMidnight(s.location, time.Tuesday))
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		runReset := func() {
+			resetCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			if err := s.resetAllUsersCreditsIfDue(resetCtx, s.now(), 7*24*time.Hour); err != nil {
+				log.Printf("周期清零全体福利次数失败: %v", err)
+			}
+			cancel()
+		}
+
+		runReset()
+
+		ticker := time.NewTicker(7 * 24 * time.Hour)
 		defer ticker.Stop()
 
 		for {
@@ -145,14 +131,23 @@ func (s *Service) StartDailyCreditSettlementMaintenance(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				sweepCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				if err := s.SettleAllUserCredits(sweepCtx); err != nil {
-					fmt.Printf("日终次数转积分失败: %v\n", err)
-				}
-				cancel()
+				runReset()
 			}
 		}
 	}()
+}
+
+func timeUntilNextWeekdayMidnight(loc *time.Location, weekday time.Weekday) time.Duration {
+	now := time.Now()
+	if loc != nil {
+		now = now.In(loc)
+	}
+	daysUntil := (int(weekday) - int(now.Weekday()) + 7) % 7
+	next := time.Date(now.Year(), now.Month(), now.Day()+daysUntil, 0, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 7)
+	}
+	return time.Until(next)
 }
 
 func (s *Service) lockSystemSetting(tx *gorm.DB, key string) (model.SystemSetting, error) {

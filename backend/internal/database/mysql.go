@@ -33,9 +33,10 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("获取数据库句柄失败: %w", err)
 	}
 
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(50)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.DBConnMaxIdleTime)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -72,15 +73,40 @@ func AutoMigrate(db *gorm.DB) error {
 		return nil
 	}
 
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.User{},
+		&model.Invitation{},
 		&model.PointsLog{},
 		&model.CreditLog{},
 		&model.ImageTask{},
+		&model.ImageProviderKey{},
 		&model.BillingPackage{},
-		&model.RechargeOrder{},
+		&model.RedeemCode{},
 		&model.ContentAuditLog{},
 		&model.AdminActionLog{},
 		&model.SystemSetting{},
-	)
+		&model.Announcement{},
+		&model.AnnouncementRead{},
+		&model.PromptPlazaItem{},
+		&model.PromptPlazaFavorite{},
+		&model.ProductCategory{},
+		&model.ProductItem{},
+		&model.ProductItemCategory{},
+	); err != nil {
+		return err
+	}
+	return migrateLegacyPackageProductURL(db)
+}
+
+func migrateLegacyPackageProductURL(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.BillingPackage{}) {
+		return nil
+	}
+	if !db.Migrator().HasColumn(&model.BillingPackage{}, "product_url") {
+		return nil
+	}
+	if !db.Migrator().HasColumn(&model.BillingPackage{}, "afdian_product_url") {
+		return nil
+	}
+	return db.Exec("UPDATE billing_packages SET product_url = afdian_product_url WHERE (product_url IS NULL OR product_url = '') AND afdian_product_url IS NOT NULL AND afdian_product_url <> ''").Error
 }

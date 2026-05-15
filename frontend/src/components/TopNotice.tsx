@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 export function TopNotice({
   message,
@@ -20,7 +21,7 @@ export function TopNotice({
 
     const timer = window.setTimeout(() => {
       onDismissRef.current()
-    }, 2000)
+    }, 3000)
 
     return () => window.clearTimeout(timer)
   }, [message])
@@ -29,15 +30,17 @@ export function TopNotice({
     return null
   }
 
-  return (
-    <div
-      className="pointer-events-none fixed left-1/2 top-4 z-[80] w-[min(92vw,42rem)] -translate-x-1/2 px-4"
-      role="status"
-      aria-live="polite"
-    >
-      <div className="rounded-md border border-slate-700/90 bg-slate-950/95 px-4 py-2 text-sm leading-6 text-slate-100 shadow-2xl shadow-slate-950/40 backdrop-blur">
+  const notice = (
+    <div className="top-notice-root pointer-events-none fixed inset-x-0 top-3 z-[100] flex justify-center px-4" role="status" aria-live="polite">
+      <div className="w-full max-w-[22rem] rounded-lg border border-slate-700/90 bg-slate-950/95 px-3 py-2 text-xs leading-5 text-slate-100 shadow-xl shadow-slate-950/30 backdrop-blur sm:text-sm sm:leading-6">
         <div className="whitespace-pre-wrap break-words">{message}</div>
       </div>
     </div>
   )
+
+  if (typeof document === 'undefined') {
+    return notice
+  }
+
+  return createPortal(notice, document.body)
 }

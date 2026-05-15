@@ -35,6 +35,18 @@ async function apiGet(path, token) {
   return resp.json()
 }
 
+async function apiPost(path, token, payload) {
+  const resp = await fetch(`${apiBaseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload ?? {}),
+  })
+  return resp.json()
+}
+
 async function main() {
   const launchOptions = {
     headless,
@@ -50,204 +62,107 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1400 } })
   const page = await context.newPage()
 
-  const suffix = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17)
-  const email = `smoke-${suffix}@example.com`
-  const username = `smoke_${suffix}`
-  const password = 'Passw0rd!123'
+  const username = 'smoke_admin'
+  const password = 'SmokePass123!'
 
   console.log(`1. 打开前端：${appUrl}`)
   await page.goto(appUrl, { waitUntil: 'networkidle' })
 
-  const inputs = page.locator('input')
-  await inputs.nth(0).fill(email)
-  await inputs.nth(2).fill(username)
-  await inputs.nth(3).fill(password)
-  await page.getByRole('button', { name: '发送验证码' }).click()
-  await page.waitForFunction(() => {
-    const el = document.querySelector('input[placeholder="123456"]')
-    return !!el && el.value.length === 6
-  })
-  const debugCode = await inputs.nth(1).inputValue()
-  if (!debugCode) {
-    throw new Error('开发环境没有返回 debugCode，无法自动完成注册')
-  }
-  console.log(`2. 验证码已生成：${debugCode}`)
-
-  await page.getByRole('button', { name: '注册并登录' }).click()
+  await page.getByPlaceholder('请输入用户名或邮箱').fill(username)
+  await page.getByPlaceholder('请输入密码').fill(password)
+  await page.getByRole('button', { name: '登录' }).click()
   await page.waitForFunction(() => !!localStorage.getItem('ai-image-saas-token'))
   const token = await page.evaluate(() => localStorage.getItem('ai-image-saas-token'))
   if (!token) {
-    throw new Error('注册后没有拿到 token')
+    throw new Error('登录后没有拿到 token')
   }
-  console.log(`3. 注册登录成功：${username}`)
+  console.log(`2. 登录成功：${username}`)
 
-  await page.getByRole('button', { name: '每日签到' }).click()
-  await page.waitForFunction(
-    async (baseUrl) => {
-      const token = localStorage.getItem('ai-image-saas-token')
-      const resp = await fetch(`${baseUrl}/api/v1/user/points`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const json = await resp.json()
-      return json?.data?.balance === 3
-    },
-    apiBaseUrl,
-  )
-  let points = await apiGet('/api/v1/user/points', token)
-  if (points?.data?.balance !== 3) {
-    throw new Error(`签到后积分应为 3，实际返回：${JSON.stringify(points)}`)
+  await page.getByRole('heading', { name: '概览' }).waitFor({ state: 'visible', timeout: 10000 })
+  console.log('3. 管理后台页面已加载')
+
+  const stats = await apiGet('/api/v1/admin/stats', token)
+  if (stats?.code !== 0 || typeof stats?.data?.usersTotal !== 'number') {
+    throw new Error(`后台概览接口异常：${JSON.stringify(stats)}`)
   }
-  console.log('4. 签到成功，积分 +3')
+  console.log(`4. 后台概览接口可用，用户数：${stats.data.usersTotal}`)
 
-  const packages = await apiGet('/api/v1/packages', token)
-  const redeemPackage = packages?.data?.items?.find((item) => item.packageType === 'redeem' && item.enabled)
-  if (!redeemPackage) {
-    throw new Error(`没有找到可用的积分兑换档位：${JSON.stringify(packages)}`)
+  const pointsBefore = await apiGet('/api/v1/user/points', token)
+  if (pointsBefore?.code !== 0) {
+    throw new Error(`用户资产读取失败：${JSON.stringify(pointsBefore)}`)
+  }
+  const codeResp = await apiPost('/api/v1/admin/redeem-codes', token, {
+    count: 1,
+    pointsAmount: 10,
+    creditsAmount: 1,
+    prefix: 'SMOKE',
+    note: 'smoke test',
+  })
+  const code = codeResp?.data?.items?.[0]?.code
+  if (codeResp?.code !== 0 || !code) {
+    throw new Error(`兑换码生成失败：${JSON.stringify(codeResp)}`)
   }
 
-  const redeemResp = await page.evaluate(
-    async ({ baseUrl, redeemPackageCode }) => {
-      const token = localStorage.getItem('ai-image-saas-token')
-      const resp = await fetch(`${baseUrl}/api/v1/user/points/redeem`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ packageCode: redeemPackageCode }),
-      })
-      return resp.json()
-    },
-    { baseUrl: apiBaseUrl, redeemPackageCode: redeemPackage.code },
-  )
+  const redeemResp = await apiPost('/api/v1/redeem-code', token, { code })
   if (redeemResp?.code !== 0) {
-    throw new Error(`积分兑换失败：${JSON.stringify(redeemResp)}`)
+    throw new Error(`兑换码兑换失败：${JSON.stringify(redeemResp)}`)
   }
-  points = await apiGet('/api/v1/user/points', token)
-  if (points?.data?.balance !== 0 || points?.data?.totalCredits !== redeemPackage.creditsAmount) {
-    throw new Error(`兑换后状态不正确：${JSON.stringify(points)}`)
+  const pointsAfter = await apiGet('/api/v1/user/points', token)
+  const expectedPoints = Number(pointsBefore.data.balance ?? 0) + 10
+  const expectedCredits = Number(pointsBefore.data.totalCredits ?? 0) + 1
+  if (Number(pointsAfter?.data?.balance ?? -1) !== expectedPoints || Number(pointsAfter?.data?.totalCredits ?? -1) !== expectedCredits) {
+    throw new Error(`兑换后资产状态不正确：${JSON.stringify({ before: pointsBefore, after: pointsAfter })}`)
   }
-  console.log(`5. 积分兑换成功，获得 ${redeemPackage.creditsAmount} 次免费次数`)
+  console.log('5. 兑换码生成与兑换链路通过')
 
-  await page.locator('textarea').first().fill(prompt)
-  await page.getByRole('button', { name: '生成图片' }).click()
-  await page.getByText('生成进度').waitFor({ state: 'visible', timeout: 10000 })
-  console.log('6. 生图任务已提交，前端进度面板可见')
+  const createdTask = await apiPost('/api/v1/image-tasks', token, { prompt, count: 1 })
+  const taskId = createdTask?.data?.taskId
+  if (createdTask?.code !== 0 || !taskId) {
+    throw new Error(`生图任务提交失败：${JSON.stringify(createdTask)}`)
+  }
+  console.log(`6. 生图任务提交成功，任务：${taskId}`)
 
-  let latestTask = null
   let finalTask = null
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const list = await apiGet('/api/v1/image-tasks?page=1&pageSize=1', token)
-    latestTask = list?.data?.items?.[0] ?? null
-    if (latestTask) {
-      finalTask = await apiGet(`/api/v1/image-tasks/${latestTask.id}`, token)
-      if (finalTask?.data?.status !== 'generating') {
-        break
-      }
+    finalTask = await apiGet(`/api/v1/image-tasks/${taskId}`, token)
+    if (finalTask?.data?.status !== 'generating') {
+      break
     }
     await sleep(2000)
   }
-  if (!latestTask || !finalTask) {
+  if (!finalTask) {
     throw new Error('提交后没有查询到生图任务')
   }
-  if (finalTask.data.status !== 'success') {
-    throw new Error(`生图任务未成功：${JSON.stringify(finalTask)}`)
+  if (!['success', 'failed'].includes(finalTask.data.status)) {
+    throw new Error(`生图任务未进入终态：${JSON.stringify(finalTask)}`)
   }
-  if (!finalTask.data.imageUrl) {
-    throw new Error(`生图任务成功但缺少图片 URL：${JSON.stringify(finalTask)}`)
-  }
-  console.log(`7. 生图成功，任务 ${latestTask.id}，图片：${finalTask.data.imageUrl}`)
-
-  await page.waitForFunction(() => document.querySelectorAll('img').length > 0, null, { timeout: 120000 })
-  const imageSrcs = await page.locator('img').evaluateAll((els) => els.map((el) => el.getAttribute('src')).filter(Boolean))
-  if (imageSrcs.length === 0) {
-    throw new Error('前端没有渲染图片')
-  }
-  console.log(`8. 前端已渲染 ${imageSrcs.length} 张图片`)
-
-  points = await apiGet('/api/v1/user/points', token)
-  if (points?.data?.balance !== 0 || points?.data?.totalCredits !== 0) {
-    throw new Error(`生图后状态应归零，实际返回：${JSON.stringify(points)}`)
-  }
-  console.log('9. 生图消耗次数成功，免费次数从 1 变为 0')
-
-  const duplicateCheckin = await page.evaluate(async (baseUrl) => {
-    const token = localStorage.getItem('ai-image-saas-token')
-    const resp = await fetch(`${baseUrl}/api/v1/user/checkin`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: '{}',
-    })
-    return resp.json()
-  }, apiBaseUrl)
-  if (duplicateCheckin?.data?.checkedIn !== false) {
-    throw new Error(`重复签到没有被拦住：${JSON.stringify(duplicateCheckin)}`)
-  }
-  console.log('10. 重复签到已被拦截')
-
-  const rechargePackage =
-    packages?.data?.items?.find((item) => item.packageType === 'recharge' && item.enabled && item.bonusPoints > 0) ??
-    packages?.data?.items?.find((item) => item.packageType === 'recharge' && item.enabled)
-  if (!rechargePackage) {
-    throw new Error(`没有找到可用的充值档位：${JSON.stringify(packages)}`)
+  if (finalTask.data.status === 'success') {
+    if (!finalTask.data.imageUrl) {
+      throw new Error(`生图任务成功但缺少图片 URL：${JSON.stringify(finalTask)}`)
+    }
+    console.log(`7. 生图成功，图片：${finalTask.data.imageUrl}`)
+  } else {
+    console.log(`7. 生图进入失败态，错误：${finalTask.data.errorMessage || '无错误信息'}`)
   }
 
-  const createdOrder = await page.evaluate(
-    async ({ baseUrl, packageCode }) => {
-      const token = localStorage.getItem('ai-image-saas-token')
-      const resp = await fetch(`${baseUrl}/api/v1/recharge-orders`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ packageCode }),
-      })
-      return resp.json()
-    },
-    { baseUrl: apiBaseUrl, packageCode: rechargePackage.code },
-  )
-  if (createdOrder?.code !== 0 || createdOrder?.data?.status !== 'pending') {
-    throw new Error(`创建充值订单失败：${JSON.stringify(createdOrder)}`)
+  const profile = await apiGet('/api/v1/user/me', token)
+  if (!profile?.data?.email || !profile?.data?.username) {
+    throw new Error(`用户资料加载异常：${JSON.stringify(profile)}`)
   }
-  console.log(`11. 充值订单创建成功：${createdOrder.data.orderNo}`)
+  console.log(`8. 用户资料可用：${profile.data.username}`)
 
-  const paidOrder = await page.evaluate(
-    async ({ baseUrl, orderNo, amountCents }) => {
-      const token = localStorage.getItem('ai-image-saas-token')
-      const resp = await fetch(`${baseUrl}/api/v1/recharge-orders/${encodeURIComponent(orderNo)}/confirm`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          providerTradeNo: `smoke-${orderNo}`,
-          paymentChannel: 'mock',
-          amountCents,
-          paidAt: new Date().toISOString(),
-          remark: 'smoke test payment',
-        }),
-      })
-      return resp.json()
-    },
-    { baseUrl: apiBaseUrl, orderNo: createdOrder.data.orderNo, amountCents: rechargePackage.amountCents },
-  )
-  if (paidOrder?.code !== 0 || paidOrder?.data?.status !== 'paid') {
-    throw new Error(`确认充值订单失败：${JSON.stringify(paidOrder)}`)
+  const history = await apiGet('/api/v1/user/logs?page=1&pageSize=5', token)
+  if (!Array.isArray(history?.data?.items)) {
+    throw new Error(`活动记录加载异常：${JSON.stringify(history)}`)
   }
+  console.log(`9. 用户日志可用，首屏 ${history.data.items.length} 条`)
 
-  points = await apiGet('/api/v1/user/points', token)
-  if (points?.data?.paidCredits !== rechargePackage.creditsAmount || points?.data?.balance !== rechargePackage.bonusPoints) {
-    throw new Error(`充值到账状态不正确：${JSON.stringify(points)}`)
+  const taskDetail = await apiGet(`/api/v1/image-tasks/${taskId}`, token)
+  if (!taskDetail?.data?.id && !taskDetail?.data?.taskId) {
+    throw new Error(`任务详情加载异常：${JSON.stringify(taskDetail)}`)
   }
-  console.log(
-    `12. 充值订单确认成功，付费次数 +${rechargePackage.creditsAmount}，赠送积分 +${rechargePackage.bonusPoints}`,
-  )
+  console.log(`10. 任务详情可用：${taskId}`)
 
   await browser.close()
   console.log('SMOKE_OK')

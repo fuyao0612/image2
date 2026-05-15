@@ -1,11 +1,11 @@
 package dto
 
-// RedeemPointsRequest 是旧版积分兑换次数入口的兼容请求体；当前业务已关闭该入口。
+// RedeemPointsRequest 是旧版积分兑换福利次数入口的兼容请求体；当前业务已关闭该入口。
 type RedeemPointsRequest struct {
 	PackageCode string `json:"packageCode,omitempty"`
 }
 
-// RedeemPointsResponse 是旧版积分兑换次数入口的兼容响应体；当前业务已关闭该入口。
+// RedeemPointsResponse 是旧版积分兑换福利次数入口的兼容响应体；当前业务已关闭该入口。
 type RedeemPointsResponse struct {
 	RedemptionNo        string `json:"redemptionNo"`
 	PackageCode         string `json:"packageCode"`

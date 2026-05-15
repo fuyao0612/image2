@@ -35,6 +35,29 @@ func (h *Handler) Redis() *redis.Client {
 	return h.svc.Redis()
 }
 
+// RequireActiveUser 在 Token 合法之后继续确认账号仍处于可用状态。
+func (h *Handler) RequireActiveUser() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, ok := middleware.CurrentUserID(c)
+		if !ok {
+			response.Unauthorized(c, "请先登录")
+			c.Abort()
+			return
+		}
+		if err := h.svc.EnsureActiveUser(c.Request.Context(), userID); err != nil {
+			h.writeServiceError(c, err)
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireCurrentSession 确保当前 token 版本仍然是该账号的最新版本。
+func (h *Handler) RequireCurrentSession() gin.HandlerFunc {
+	return middleware.RequireTokenVersionMatch(h.svc.TokenVersionView)
+}
+
 // Health 返回服务健康状态。
 func (h *Handler) Health(c *gin.Context) {
 	response.Success(c, gin.H{
@@ -57,6 +80,15 @@ func (h *Handler) SendEmailCode(c *gin.Context) {
 		return
 	}
 
+	response.Success(c, resp)
+}
+
+func (h *Handler) Captcha(c *gin.Context) {
+	resp, err := h.svc.GenerateCaptcha(c.Request.Context())
+	if err != nil {
+		h.writeServiceError(c, err)
+		return
+	}
 	response.Success(c, resp)
 }
 
@@ -159,7 +191,7 @@ func (h *Handler) UploadReferenceImage(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.svc.UploadReferenceImage(c.Request.Context(), userID, fileHeader)
+	resp, err := h.svc.UploadUserImage(c.Request.Context(), userID, fileHeader, c.PostForm("purpose"))
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
@@ -173,7 +205,7 @@ func (h *Handler) ListPackages(c *gin.Context) {
 	response.Success(c, h.svc.ListPackages(c.Request.Context(), c.Query("type")))
 }
 
-// RedeemPoints 将积分兑换为次数。
+// RedeemPoints 将积分兑换为福利次数。
 func (h *Handler) RedeemPoints(c *gin.Context) {
 	userID, ok := middleware.CurrentUserID(c)
 	if !ok {
@@ -188,29 +220,6 @@ func (h *Handler) RedeemPoints(c *gin.Context) {
 	}
 
 	resp, err := h.svc.RedeemPoints(c.Request.Context(), userID, req)
-	if err != nil {
-		h.writeServiceError(c, err)
-		return
-	}
-
-	response.Success(c, resp)
-}
-
-// MockPurchase 模拟支付购买套餐。
-func (h *Handler) MockPurchase(c *gin.Context) {
-	userID, ok := middleware.CurrentUserID(c)
-	if !ok {
-		response.Unauthorized(c, "请先登录")
-		return
-	}
-
-	var req dto.MockPurchaseRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "请求参数不合法")
-		return
-	}
-
-	resp, err := h.svc.MockPurchase(c.Request.Context(), userID, req)
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
@@ -319,7 +328,7 @@ func (h *Handler) AdminListUsers(c *gin.Context) {
 		return
 	}
 	page, pageSize := pagination(c)
-	resp, err := h.svc.AdminListUsers(c.Request.Context(), adminID, c.Query("keyword"), page, pageSize)
+	resp, err := h.svc.AdminListUsers(c.Request.Context(), adminID, c.Query("keyword"), c.Query("status"), page, pageSize)
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
@@ -375,23 +384,7 @@ func (h *Handler) AdminListImageTasks(c *gin.Context) {
 		return
 	}
 	page, pageSize := pagination(c)
-	resp, err := h.svc.AdminListImageTasks(c.Request.Context(), adminID, c.Query("status"), page, pageSize)
-	if err != nil {
-		h.writeServiceError(c, err)
-		return
-	}
-	response.Success(c, resp)
-}
-
-// AdminListRechargeOrders 返回全站充值订单列表。
-func (h *Handler) AdminListRechargeOrders(c *gin.Context) {
-	adminID, ok := middleware.CurrentUserID(c)
-	if !ok {
-		response.Unauthorized(c, "请先登录")
-		return
-	}
-	page, pageSize := pagination(c)
-	resp, err := h.svc.AdminListRechargeOrders(c.Request.Context(), adminID, c.Query("status"), page, pageSize)
+	resp, err := h.svc.AdminListImageTasks(c.Request.Context(), adminID, c.Query("status"), c.Query("keyword"), page, pageSize)
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
@@ -503,8 +496,26 @@ func (h *Handler) writeServiceError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidVerificationCode):
 		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrInvalidCaptcha):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrCaptchaAttemptsExceeded):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrVerificationCodeExpired):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrVerificationAttemptsExceeded):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrVerificationCodeTooFrequent):
+		response.TooManyRequests(c, err.Error())
+	case errors.Is(err, service.ErrVerificationCodeRateLimited):
+		response.TooManyRequests(c, err.Error())
+	case errors.Is(err, service.ErrEmailDailyLimitReached):
+		response.TooManyRequests(c, err.Error())
+	case errors.Is(err, service.ErrEmailAlreadyRegistered):
+		response.Conflict(c, err.Error())
 	case errors.Is(err, service.ErrAccountExists):
 		response.Conflict(c, err.Error())
+	case errors.Is(err, service.ErrInviteCodeInvalid):
+		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrRegistrationDisabled):
 		response.Forbidden(c, err.Error())
 	case errors.Is(err, service.ErrInvalidCredentials):
@@ -523,6 +534,8 @@ func (h *Handler) writeServiceError(c *gin.Context, err error) {
 		response.NotFound(c, err.Error())
 	case errors.Is(err, service.ErrTaskStillGenerating):
 		response.Conflict(c, err.Error())
+	case errors.Is(err, service.ErrImageGenerationDisabled):
+		response.Forbidden(c, err.Error())
 	case errors.Is(err, service.ErrImageNotFound):
 		response.NotFound(c, err.Error())
 	case errors.Is(err, service.ErrImageDownloadFailed):
@@ -532,6 +545,8 @@ func (h *Handler) writeServiceError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrPackageInvalid):
 		response.NotFound(c, err.Error())
 	case errors.Is(err, service.ErrPromptRequired):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrInvalidImageSize):
 		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrProviderNotConfigured):
 		response.BadRequest(c, err.Error())
@@ -545,8 +560,12 @@ func (h *Handler) writeServiceError(c *gin.Context, err error) {
 		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrUploadFileTooLarge):
 		response.JSON(c, 413, 41301, err.Error(), nil)
+	case errors.Is(err, service.ErrUploadUnsupportedType):
+		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrUploadStorageNotConfig):
 		response.InternalError(c, err.Error())
+	case errors.Is(err, service.ErrInvalidReferenceImageURL):
+		response.BadRequest(c, err.Error())
 	default:
 		response.InternalError(c, "服务端异常")
 	}

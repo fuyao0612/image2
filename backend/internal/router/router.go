@@ -45,34 +45,56 @@ func New(cfg config.Config, h *handler.Handler) *gin.Engine {
 	{
 		auth := api.Group("/auth")
 		{
-			auth.POST("/email-code", limiter.LimitIP("auth_email_code", cfg.RateLimitRegisterPerHour, time.Hour), h.SendEmailCode)
+			auth.GET("/captcha", limiter.LimitIP("auth_captcha", cfg.RateLimitRegisterPerHour, time.Hour), h.Captcha)
+			auth.POST(
+				"/email-code",
+				limiter.LimitEmail("auth_email_code_minute", cfg.RateLimitEmailPerMinute, time.Minute),
+				limiter.LimitEmail("auth_email_code_hour", cfg.RateLimitEmailPerHour, time.Hour),
+				h.SendEmailCode,
+			)
 			auth.POST("/register", limiter.LimitIP("auth_register", cfg.RateLimitRegisterPerHour, time.Hour), h.Register)
 			auth.POST("/login", limiter.LimitIP("auth_login", cfg.RateLimitLoginPerMinute, time.Minute), h.Login)
 		}
 
 		api.GET("/packages", h.ListPackages)
 		api.GET("/billing-settings", h.GetBillingSettings)
+		api.GET("/prompt-plaza", h.ListPromptPlaza)
+		api.GET("/products", h.ListProducts)
+		api.GET("/product-categories", h.ListProductCategories)
 
 		user := api.Group("/user")
 		user.Use(middleware.RequireAuth(h.JWT()))
+		user.Use(h.RequireCurrentSession())
+		user.Use(h.RequireActiveUser())
 		{
 			user.GET("/me", h.GetMe)
+			user.GET("/invite", h.GetInviteInfo)
 			user.PATCH("/password", h.ChangePassword)
 			user.POST("/checkin", limiter.LimitUser("user_checkin", cfg.RateLimitCheckinPerMinute, time.Minute), h.CheckIn)
 			user.GET("/points", h.GetPoints)
 			user.GET("/points-logs", h.ListPointsLogs)
 			user.GET("/credit-logs", h.ListCreditLogs)
 			user.GET("/logs", h.ListUserActivity)
+			user.GET("/announcements", h.ListAnnouncements)
+			user.POST("/announcements/:id/read", h.MarkAnnouncementRead)
+			user.GET("/prompt-plaza", h.ListMyPromptPlaza)
+			user.GET("/prompt-plaza-gallery", h.ListPromptPlazaForUser)
+			user.POST("/prompt-plaza", limiter.LimitUser("prompt_plaza_submit_hour", cfg.RateLimitPromptSubmitPerHour, time.Hour), h.SubmitPromptPlaza)
+			user.POST("/prompt-plaza/:id/favorite", h.TogglePromptPlazaFavorite)
 		}
 
 		uploads := api.Group("/uploads")
 		uploads.Use(middleware.RequireAuth(h.JWT()))
+		uploads.Use(h.RequireCurrentSession())
+		uploads.Use(h.RequireActiveUser())
 		{
 			uploads.POST("/reference-image", limiter.LimitUser("upload_reference_image", cfg.RateLimitImagePerMinute, time.Minute), h.UploadReferenceImage)
 		}
 
 		tasks := api.Group("/image-tasks")
 		tasks.Use(middleware.RequireAuth(h.JWT()))
+		tasks.Use(h.RequireCurrentSession())
+		tasks.Use(h.RequireActiveUser())
 		{
 			tasks.POST("", limiter.LimitUser("image_task_create", cfg.RateLimitImagePerMinute, time.Minute), h.CreateImageTask)
 			tasks.GET("", h.ListImageTasks)
@@ -81,23 +103,18 @@ func New(cfg config.Config, h *handler.Handler) *gin.Engine {
 			tasks.GET("/:id", h.GetImageTask)
 		}
 
-		orders := api.Group("/recharge-orders")
-		orders.Use(middleware.RequireAuth(h.JWT()))
+		redeem := api.Group("/redeem-code")
+		redeem.Use(middleware.RequireAuth(h.JWT()))
+		redeem.Use(h.RequireCurrentSession())
+		redeem.Use(h.RequireActiveUser())
 		{
-			orders.POST("", limiter.LimitUser("recharge_order_create", cfg.RateLimitPurchasePerMinute, time.Minute), h.CreateRechargeOrder)
-			orders.GET("", h.ListRechargeOrders)
-			orders.GET("/:orderNo", h.GetRechargeOrder)
-			orders.POST("/:orderNo/confirm", limiter.LimitUser("recharge_order_confirm", cfg.RateLimitPurchasePerMinute, time.Minute), h.ConfirmRechargeOrder)
-			orders.POST("/mock-pay", limiter.LimitUser("mock_purchase", cfg.RateLimitPurchasePerMinute, time.Minute), h.MockPurchase)
-		}
-
-		payments := api.Group("/payments")
-		{
-			payments.POST("/recharge/callback", h.RechargePaymentCallback)
+			redeem.POST("", limiter.LimitUser("redeem_code", cfg.RateLimitPurchasePerMinute, time.Minute), h.RedeemCode)
 		}
 
 		admin := api.Group("/admin")
 		admin.Use(middleware.RequireAuth(h.JWT()))
+		admin.Use(h.RequireCurrentSession())
+		admin.Use(h.RequireActiveUser())
 		{
 			admin.GET("/stats", h.AdminStats)
 			admin.GET("/users", h.AdminListUsers)
@@ -105,7 +122,9 @@ func New(cfg config.Config, h *handler.Handler) *gin.Engine {
 			admin.POST("/users/:id/points-adjustments", h.AdminAdjustPoints)
 			admin.GET("/users/:id/logs", h.AdminListUserActivity)
 			admin.GET("/image-tasks", h.AdminListImageTasks)
-			admin.GET("/recharge-orders", h.AdminListRechargeOrdersV2)
+			admin.GET("/redeem-codes", h.AdminListRedeemCodes)
+			admin.POST("/redeem-codes", h.AdminCreateRedeemCodes)
+			admin.DELETE("/redeem-codes/:id", h.AdminDeleteRedeemCode)
 			admin.GET("/content-audits", h.AdminListContentAudits)
 			admin.PATCH("/content-audits/:id/review", h.AdminReviewContentAudit)
 			admin.GET("/billing-settings", h.AdminGetBillingSettings)
@@ -114,7 +133,32 @@ func New(cfg config.Config, h *handler.Handler) *gin.Engine {
 			admin.POST("/packages", h.AdminCreatePackageV2)
 			admin.PATCH("/packages/:id", h.AdminUpdatePackageV2)
 			admin.DELETE("/packages/:id", h.AdminDeletePackageV2)
+			admin.GET("/provider-keys", h.AdminListProviderKeys)
+			admin.POST("/provider-keys", h.AdminCreateProviderKey)
+			admin.POST("/provider-keys/:id/use", h.AdminUseProviderKey)
+			admin.PATCH("/provider-keys/:id", h.AdminUpdateProviderKey)
+			admin.DELETE("/provider-keys/:id", h.AdminDeleteProviderKey)
+			admin.GET("/announcements", h.AdminListAnnouncements)
+			admin.POST("/announcements", h.AdminCreateAnnouncement)
+			admin.POST("/announcements/upload-image", h.AdminUploadAnnouncementImage)
+			admin.PATCH("/announcements/:id", h.AdminUpdateAnnouncement)
+			admin.DELETE("/announcements/:id", h.AdminDeleteAnnouncement)
+			admin.GET("/prompt-plaza", h.AdminListPromptPlaza)
+			admin.POST("/prompt-plaza", h.AdminCreatePromptPlaza)
+			admin.PATCH("/prompt-plaza/:id", h.AdminUpdatePromptPlaza)
+			admin.PATCH("/prompt-plaza/:id/review", h.AdminReviewPromptPlaza)
+			admin.DELETE("/prompt-plaza/:id", h.AdminDeletePromptPlaza)
+			admin.GET("/products", h.AdminListProducts)
+			admin.POST("/products", h.AdminCreateProduct)
+			admin.PATCH("/products/:id", h.AdminUpdateProduct)
+			admin.DELETE("/products/:id", h.AdminDeleteProduct)
+			admin.GET("/product-categories", h.AdminListProductCategories)
+			admin.POST("/product-categories", h.AdminCreateProductCategory)
+			admin.PATCH("/product-categories/:id", h.AdminUpdateProductCategory)
+			admin.DELETE("/product-categories/:id", h.AdminDeleteProductCategory)
 			admin.GET("/action-logs", h.AdminListActionLogs)
+			admin.POST("/data-cleanup/preview", h.AdminPreviewDataCleanup)
+			admin.POST("/data-cleanup", h.AdminExecuteDataCleanup)
 		}
 	}
 

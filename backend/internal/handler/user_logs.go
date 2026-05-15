@@ -27,7 +27,7 @@ func (h *Handler) ListPointsLogs(c *gin.Context) {
 	response.Success(c, resp)
 }
 
-// ListCreditLogs 返回当前用户的次数流水分页。
+// ListCreditLogs 返回当前用户的福利次数流水分页。
 func (h *Handler) ListCreditLogs(c *gin.Context) {
 	userID, ok := middleware.CurrentUserID(c)
 	if !ok {

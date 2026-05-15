@@ -1,22 +1,22 @@
-# AI 生图 SaaS MVP
+# AI 生成图平台
 
-这是一个前后端分离的 AI 生图平台，当前仓库包含：
+这是一个前后端分离的生成图项目，当前源码包含：
 
-- `backend/`：Go + Gin + GORM
-- `frontend/`：React + TypeScript + TailwindCSS
-- `deploy/`：生产部署文件和 Docker Compose 配置
+- `backend/`：Go + Gin + GORM 后端
+- `frontend/`：React + TypeScript + Vite 前端
+- `deploy/`：生产部署配置
+- `scripts/`：辅助脚本
 
-## 主要能力
+## 当前功能范围
 
-- 邮箱验证码注册
-- 用户名或邮箱登录
-- 每日签到得积分
-- 积分兑换次数
-- 充值套餐购买次数
-- 提交生图任务
-- 历史任务查看
-- 图片下载
-- 管理员后台
+- 邮箱验证码注册、登录
+- 用户兑换码兑换
+- 用户积分与福利次数资产
+- 图片任务提交、轮询、失败回滚与图片下载
+- 管理员概览、任务趋势、异常提醒
+- 用户管理、用户日志、任务详情
+- 兑换码管理、商品套餐、API Key 配置
+- 公告、邀请、数据清理等后台能力
 
 ## 本地开发
 
@@ -50,7 +50,7 @@ http://localhost:5173
 
 ### 一键 smoke
 
-前后端都启动后，在 `frontend/` 目录下执行：
+前后端都启动后，在 `frontend/` 目录执行：
 
 ```powershell
 npm.cmd run smoke
@@ -60,11 +60,6 @@ npm.cmd run smoke
 
 生产部署说明请直接看 [deploy/README.md](./deploy/README.md)。
 
-## 接入第三方生图服务
+## 说明
 
-后端通过第三方生图站点的批次接口提交任务，核心请求路径是：
-
-- `POST https://image.mentalout.top/api/batches`
-- `GET https://image.mentalout.top/api/batches/{batchId}`
-
-本仓库已经封装了提交、轮询、失败回滚和图片下载链路。
+当前项目已移除旧的第三方订单 webhook 等历史流程，部署和验收都应以现有源码为准。

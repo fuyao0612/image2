@@ -24,22 +24,6 @@ func (h *Handler) AdminListUserActivity(c *gin.Context) {
 	response.Success(c, resp)
 }
 
-// AdminListRechargeOrdersV2 返回全站充值订单列表。
-func (h *Handler) AdminListRechargeOrdersV2(c *gin.Context) {
-	adminID, ok := middleware.CurrentUserID(c)
-	if !ok {
-		response.Unauthorized(c, "请先登录")
-		return
-	}
-	page, pageSize := pagination(c)
-	resp, err := h.svc.AdminListRechargeOrdersV2(c.Request.Context(), adminID, c.Query("status"), page, pageSize)
-	if err != nil {
-		h.writeServiceErrorV2(c, err)
-		return
-	}
-	response.Success(c, resp)
-}
-
 // AdminListPackagesV2 返回后台套餐配置。
 func (h *Handler) AdminListPackagesV2(c *gin.Context) {
 	adminID, ok := middleware.CurrentUserID(c)
@@ -118,7 +102,7 @@ func (h *Handler) AdminListActionLogs(c *gin.Context) {
 		return
 	}
 	page, pageSize := pagination(c)
-	resp, err := h.svc.AdminListActionLogs(c.Request.Context(), adminID, c.Query("targetType"), c.Query("targetId"), page, pageSize)
+	resp, err := h.svc.AdminListActionLogs(c.Request.Context(), adminID, c.Query("targetType"), c.Query("targetId"), c.Query("action"), page, pageSize)
 	if err != nil {
 		h.writeServiceErrorV2(c, err)
 		return
