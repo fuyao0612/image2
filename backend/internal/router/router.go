@@ -54,6 +54,7 @@ func New(cfg config.Config, h *handler.Handler) *gin.Engine {
 			)
 			auth.POST("/register", limiter.LimitIP("auth_register", cfg.RateLimitRegisterPerHour, time.Hour), h.Register)
 			auth.POST("/login", limiter.LimitIP("auth_login", cfg.RateLimitLoginPerMinute, time.Minute), h.Login)
+			auth.POST("/register/check", limiter.LimitIP("auth_register_check", cfg.RateLimitLoginPerMinute, time.Minute), h.CheckRegisterAvailability)
 			auth.POST("/reset-password/check", limiter.LimitIP("auth_reset_password_check", cfg.RateLimitLoginPerMinute, time.Minute), h.CheckResetPasswordEmail)
 			auth.POST("/reset-password", limiter.LimitEmail("auth_reset_password", cfg.RateLimitEmailPerHour, time.Hour), h.ResetPassword)
 		}

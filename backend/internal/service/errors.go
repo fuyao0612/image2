@@ -15,6 +15,7 @@ var (
 	ErrEmailDailyLimitReached       = errors.New("当日注册额度已达到上限，请 0 点后再尝试")
 	ErrEmailAlreadyRegistered       = errors.New("该邮箱已被注册，请直接登录")
 	ErrEmailNotRegistered           = errors.New("该邮箱尚未注册，请确认邮箱或先注册账号")
+	ErrUsernameAlreadyRegistered    = errors.New("该用户名已被使用，请更换其他用户名")
 	ErrPasswordResetTooFrequent     = errors.New("该邮箱三天内已重置过密码，请稍后再试")
 	ErrAccountExists                = errors.New("用户名或邮箱已被注册")
 	ErrRegistrationDisabled         = errors.New("注册功能暂时关闭")

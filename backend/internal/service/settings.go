@@ -15,17 +15,18 @@ import (
 )
 
 const (
-	systemSettingKeyImageGeneratePointCost  = "billing.image_generate_point_cost"
-	systemSettingKeyImageGenerationEnabled  = "image.generation_enabled"
-	systemSettingKeyEmailNotifyEnabled      = "email_notify.enabled"
-	systemSettingKeyEmailNotifyPointCost    = "email_notify.point_cost"
-	systemSettingKeyCheckinPoints           = "billing.checkin_points"
-	systemSettingKeyCheckinCredits          = "billing.checkin_credits"
-	systemSettingKeyInviteRewardPoints      = "invite.reward_points"
-	systemSettingKeyInviteRewardCredits     = "invite.reward_credits"
-	systemSettingKeyRegistrationGiftCredits = "registration.gift_credits"
-	systemSettingKeyCreditResetLastRunAt    = "credits.reset_last_run_at"
-	systemSettingKeyImagesGeneratedTotal    = "stats.images_generated_total"
+	systemSettingKeyImageGeneratePointCost        = "billing.image_generate_point_cost"
+	systemSettingKeyImageGenerationEnabled        = "image.generation_enabled"
+	systemSettingKeyEmailNotifyEnabled            = "email_notify.enabled"
+	systemSettingKeyEmailNotifyPointCost          = "email_notify.point_cost"
+	systemSettingKeyCheckinPoints                 = "billing.checkin_points"
+	systemSettingKeyCheckinCredits                = "billing.checkin_credits"
+	systemSettingKeyInviteRewardPoints            = "invite.reward_points"
+	systemSettingKeyInviteRewardCredits           = "invite.reward_credits"
+	systemSettingKeyRegistrationInviteBonusPoints = "registration.invite_bonus_points"
+	systemSettingKeyRegistrationGiftCredits       = "registration.gift_credits"
+	systemSettingKeyCreditResetLastRunAt          = "credits.reset_last_run_at"
+	systemSettingKeyImagesGeneratedTotal          = "stats.images_generated_total"
 )
 
 func defaultSystemSettings(cfg config.Config) map[string]string {
@@ -39,16 +40,17 @@ func defaultSystemSettings(cfg config.Config) map[string]string {
 	}
 
 	return map[string]string{
-		systemSettingKeyImageGeneratePointCost:  strconv.FormatInt(imageCost, 10),
-		systemSettingKeyImageGenerationEnabled:  "true",
-		systemSettingKeyEmailNotifyEnabled:      "false",
-		systemSettingKeyEmailNotifyPointCost:    "1",
-		systemSettingKeyCheckinPoints:           strconv.FormatInt(checkinPoints, 10),
-		systemSettingKeyCheckinCredits:          "1",
-		systemSettingKeyInviteRewardPoints:      "0",
-		systemSettingKeyInviteRewardCredits:     "1",
-		systemSettingKeyRegistrationGiftCredits: "3",
-		systemSettingKeyImagesGeneratedTotal:    "0",
+		systemSettingKeyImageGeneratePointCost:        strconv.FormatInt(imageCost, 10),
+		systemSettingKeyImageGenerationEnabled:        "true",
+		systemSettingKeyEmailNotifyEnabled:            "false",
+		systemSettingKeyEmailNotifyPointCost:          "1",
+		systemSettingKeyCheckinPoints:                 strconv.FormatInt(checkinPoints, 10),
+		systemSettingKeyCheckinCredits:                "1",
+		systemSettingKeyInviteRewardPoints:            "0",
+		systemSettingKeyInviteRewardCredits:           "1",
+		systemSettingKeyRegistrationInviteBonusPoints: "0",
+		systemSettingKeyRegistrationGiftCredits:       "3",
+		systemSettingKeyImagesGeneratedTotal:          "0",
 	}
 }
 
@@ -112,15 +114,16 @@ func (s *Service) BillingSettings(ctx context.Context) (dto.BillingSettingsRespo
 	}
 
 	return dto.BillingSettingsResponse{
-		ImageGeneratePointCost:  s.settingInt64(systemSettingKeyImageGeneratePointCost, 20),
-		ImageGenerationEnabled:  s.settingBool(systemSettingKeyImageGenerationEnabled, true),
-		EmailNotifyEnabled:      s.settingBool(systemSettingKeyEmailNotifyEnabled, false),
-		EmailNotifyPointCost:    s.settingInt64(systemSettingKeyEmailNotifyPointCost, 1),
-		CheckinPoints:           s.settingInt64(systemSettingKeyCheckinPoints, 3),
-		CheckinCredits:          s.settingInt64(systemSettingKeyCheckinCredits, 1),
-		InviteRewardPoints:      s.settingInt64(systemSettingKeyInviteRewardPoints, 0),
-		InviteRewardCredits:     s.settingInt64(systemSettingKeyInviteRewardCredits, 1),
-		RegistrationGiftCredits: s.settingInt64(systemSettingKeyRegistrationGiftCredits, 3),
+		ImageGeneratePointCost:        s.settingInt64(systemSettingKeyImageGeneratePointCost, 20),
+		ImageGenerationEnabled:        s.settingBool(systemSettingKeyImageGenerationEnabled, true),
+		EmailNotifyEnabled:            s.settingBool(systemSettingKeyEmailNotifyEnabled, false),
+		EmailNotifyPointCost:          s.settingInt64(systemSettingKeyEmailNotifyPointCost, 1),
+		CheckinPoints:                 s.settingInt64(systemSettingKeyCheckinPoints, 3),
+		CheckinCredits:                s.settingInt64(systemSettingKeyCheckinCredits, 1),
+		InviteRewardPoints:            s.settingInt64(systemSettingKeyInviteRewardPoints, 0),
+		InviteRewardCredits:           s.settingInt64(systemSettingKeyInviteRewardCredits, 1),
+		RegistrationInviteBonusPoints: s.settingInt64(systemSettingKeyRegistrationInviteBonusPoints, 0),
+		RegistrationGiftCredits:       s.settingInt64(systemSettingKeyRegistrationGiftCredits, 3),
 	}, nil
 }
 
@@ -145,6 +148,10 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 	if !ok {
 		return dto.BillingSettingsResponse{}, ErrSettingsInvalid
 	}
+	registrationInviteBonusPoints, ok := requiredNonNegativeSetting(req.RegistrationInviteBonusPoints)
+	if !ok {
+		return dto.BillingSettingsResponse{}, ErrSettingsInvalid
+	}
 	registrationGiftCredits, ok := requiredNonNegativeSetting(req.RegistrationGiftCredits)
 	if !ok {
 		return dto.BillingSettingsResponse{}, ErrSettingsInvalid
@@ -159,15 +166,16 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 	}
 
 	updates := map[string]string{
-		systemSettingKeyImageGeneratePointCost:  strconv.FormatInt(req.ImageGeneratePointCost, 10),
-		systemSettingKeyImageGenerationEnabled:  settingBoolString(req.ImageGenerationEnabled, true),
-		systemSettingKeyEmailNotifyEnabled:      settingBoolString(req.EmailNotifyEnabled, false),
-		systemSettingKeyEmailNotifyPointCost:    strconv.FormatInt(emailNotifyPointCost, 10),
-		systemSettingKeyCheckinPoints:           strconv.FormatInt(checkinPoints, 10),
-		systemSettingKeyCheckinCredits:          strconv.FormatInt(checkinCredits, 10),
-		systemSettingKeyInviteRewardPoints:      strconv.FormatInt(inviteRewardPoints, 10),
-		systemSettingKeyInviteRewardCredits:     strconv.FormatInt(inviteRewardCredits, 10),
-		systemSettingKeyRegistrationGiftCredits: strconv.FormatInt(registrationGiftCredits, 10),
+		systemSettingKeyImageGeneratePointCost:        strconv.FormatInt(req.ImageGeneratePointCost, 10),
+		systemSettingKeyImageGenerationEnabled:        settingBoolString(req.ImageGenerationEnabled, true),
+		systemSettingKeyEmailNotifyEnabled:            settingBoolString(req.EmailNotifyEnabled, false),
+		systemSettingKeyEmailNotifyPointCost:          strconv.FormatInt(emailNotifyPointCost, 10),
+		systemSettingKeyCheckinPoints:                 strconv.FormatInt(checkinPoints, 10),
+		systemSettingKeyCheckinCredits:                strconv.FormatInt(checkinCredits, 10),
+		systemSettingKeyInviteRewardPoints:            strconv.FormatInt(inviteRewardPoints, 10),
+		systemSettingKeyInviteRewardCredits:           strconv.FormatInt(inviteRewardCredits, 10),
+		systemSettingKeyRegistrationInviteBonusPoints: strconv.FormatInt(registrationInviteBonusPoints, 10),
+		systemSettingKeyRegistrationGiftCredits:       strconv.FormatInt(registrationGiftCredits, 10),
 	}
 	descriptions := systemSettingDescriptions()
 

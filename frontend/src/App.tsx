@@ -92,6 +92,7 @@ type FlowLogDetail =
   | null
 type BusyAction =
   | 'send-code'
+  | 'check-register-availability'
   | 'check-reset-email'
   | 'auth'
   | 'checkin'
@@ -408,6 +409,14 @@ function App() {
   const [emailCodeCountdown, setEmailCodeCountdown] = useState(0)
   const [emailCaptchaPassUntil, setEmailCaptchaPassUntil] = useState(0)
   const [registrationDailyLimitReached, setRegistrationDailyLimitReached] = useState(false)
+  const [registerAvailabilityCheck, setRegisterAvailabilityCheck] = useState<{
+    email: string
+    username: string
+    emailAvailable: boolean
+    usernameAvailable: boolean
+    available: boolean
+    message: string
+  } | null>(null)
   const [resetEmailCheck, setResetEmailCheck] = useState<{ email: string; available: boolean; message: string } | null>(null)
   const [changePasswordForm, setChangePasswordForm] = useState<PasswordChangeForm>({
     currentPassword: '',
@@ -721,6 +730,7 @@ function App() {
     }
     setCaptcha(null)
     setRegistrationDailyLimitReached(false)
+    setRegisterAvailabilityCheck(null)
   }, [mode])
 
   useEffect(() => {
@@ -1193,6 +1203,16 @@ function App() {
       setMessage('注册功能暂时关闭。')
       return
     }
+    if (mode === 'register') {
+      if (!authForm.username.trim()) {
+        setMessage('请先填写用户名。')
+        return
+      }
+      const checked = await handleCheckRegisterAvailability()
+      if (!checked) {
+        return
+      }
+    }
     if (mode === 'reset') {
       const checked = await handleCheckResetEmail()
       if (!checked) {
@@ -1249,6 +1269,45 @@ function App() {
     }
   }
 
+  async function handleCheckRegisterAvailability(): Promise<boolean> {
+    const email = authForm.email.trim()
+    const username = authForm.username.trim()
+    if (mode !== 'register' || !email || !username) {
+      return false
+    }
+    try {
+      setBusy('check-register-availability')
+      const result = await api.checkRegisterAvailability({ email, username })
+      const next = {
+        email,
+        username,
+        emailAvailable: result.emailAvailable,
+        usernameAvailable: result.usernameAvailable,
+        available: result.available,
+        message: result.message || (result.available ? '邮箱和用户名都可以注册。' : '当前信息暂不可注册。'),
+      }
+      setRegisterAvailabilityCheck(next)
+      if (!result.available) {
+        setMessage(next.message)
+      }
+      return result.available
+    } catch (error) {
+      const next = {
+        email,
+        username,
+        emailAvailable: false,
+        usernameAvailable: false,
+        available: false,
+        message: error instanceof Error ? error.message : '注册信息检查失败',
+      }
+      setRegisterAvailabilityCheck(next)
+      setMessage(next.message)
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function handleAuthSubmit() {
     try {
       setBusy('auth')
@@ -1265,6 +1324,10 @@ function App() {
         }
         if (authForm.password !== authForm.confirmPassword) {
           setMessage('两次输入的密码不一致。')
+          return
+        }
+        const checked = await handleCheckRegisterAvailability()
+        if (!checked) {
           return
         }
         result = await api.register({
@@ -2487,6 +2550,9 @@ function App() {
                         autoComplete="off"
                         value={authForm.email}
                         onBlur={() => {
+                          if (mode === 'register' && authForm.email.trim() && authForm.username.trim()) {
+                            void handleCheckRegisterAvailability()
+                          }
                           if (mode === 'reset' && authForm.email.trim()) {
                             void handleCheckResetEmail()
                           }
@@ -2495,11 +2561,23 @@ function App() {
                           setAuthForm((current) => ({ ...current, email: event.target.value }))
                           setEmailCodeCountdown(0)
                           setEmailCaptchaPassUntil(0)
+                          setRegisterAvailabilityCheck(null)
                           setResetEmailCheck(null)
                         }}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入邮箱"
                       />
+                      {mode === 'register' &&
+                      registerAvailabilityCheck?.email === authForm.email.trim() &&
+                      registerAvailabilityCheck.username === authForm.username.trim() ? (
+                        <div
+                          className={`mt-2 text-xs ${
+                            registerAvailabilityCheck.emailAvailable ? 'text-emerald-300' : 'text-amber-300'
+                          }`}
+                        >
+                          {registerAvailabilityCheck.emailAvailable ? '该邮箱可以注册。' : '该邮箱已被注册，请直接登录。'}
+                        </div>
+                      ) : null}
                       {mode === 'reset' && resetEmailCheck?.email === authForm.email.trim() ? (
                         <div className={`mt-2 text-xs ${resetEmailCheck.available ? 'text-emerald-300' : 'text-amber-300'}`}>
                           {resetEmailCheck.message}
@@ -2559,7 +2637,13 @@ function App() {
                         <button
                           type="button"
                           onClick={handleSendCode}
-                          disabled={(mode === 'register' && registrationDailyLimitReached) || busy === 'send-code' || busy === 'check-reset-email' || emailCodeCountdown > 0}
+                          disabled={
+                            (mode === 'register' && registrationDailyLimitReached) ||
+                            busy === 'send-code' ||
+                            busy === 'check-reset-email' ||
+                            busy === 'check-register-availability' ||
+                            emailCodeCountdown > 0
+                          }
                           className="inline-flex h-10 w-32 shrink-0 items-center justify-center gap-1.5 rounded-md border border-slate-700 bg-slate-950 px-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60 min-[380px]:w-36"
                         >
                           {busy === 'send-code' ? (
@@ -2578,10 +2662,30 @@ function App() {
                             name={`register_username_${authFormSeed}`}
                             autoComplete="off"
                             value={authForm.username}
-                            onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
+                            onBlur={() => {
+                              if (authForm.email.trim() && authForm.username.trim()) {
+                                void handleCheckRegisterAvailability()
+                              }
+                            }}
+                            onChange={(event) => {
+                              setAuthForm((current) => ({ ...current, username: event.target.value }))
+                              setRegisterAvailabilityCheck(null)
+                            }}
                             className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                             placeholder="请输入用户名（英文或者数字组成）"
                           />
+                          {registerAvailabilityCheck?.email === authForm.email.trim() &&
+                          registerAvailabilityCheck.username === authForm.username.trim() ? (
+                            <div
+                              className={`mt-2 text-xs ${
+                                registerAvailabilityCheck.usernameAvailable ? 'text-emerald-300' : 'text-amber-300'
+                              }`}
+                            >
+                              {registerAvailabilityCheck.usernameAvailable
+                                ? '该用户名可以注册。'
+                                : '该用户名已被使用，请更换其他用户名。'}
+                            </div>
+                          ) : null}
                         </Field>
                         <Field label="邀请码（选填）" icon={<Gift className="h-4 w-4" />}>
                           <input
@@ -2595,7 +2699,7 @@ function App() {
                               }))
                             }
                             className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                            placeholder="好友给你的邀请码"
+                            placeholder={`填写邀请码可额外获得 ${billingSettings?.registrationInviteBonusPoints ?? 0} 积分`}
                           />
                         </Field>
                       </>
@@ -4213,7 +4317,7 @@ function InvitePanel({
         <div>
           <h2 className="text-lg font-medium text-slate-50">好友邀请</h2>
           <p className="mt-1 text-sm text-slate-400">
-            邀请好友注册后，你可获得 {rewardText}，新用户注册赠送 {info?.registrationGiftCredits ?? 0} 福利次数。
+            邀请好友注册后，对方首次使用 ID+用户ID 开头的兑换码可为你带来 {rewardText}，新用户注册赠送 {info?.registrationGiftCredits ?? 0} 福利次数。
           </p>
         </div>
         <div className="flex h-10 w-10 items-center justify-center rounded-md border border-violet-500/20 bg-violet-500/10 text-violet-300">

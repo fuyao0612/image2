@@ -87,6 +87,18 @@ export interface CheckResetPasswordEmailRequest {
   email: string
 }
 
+export interface CheckRegisterAvailabilityRequest {
+  email: string
+  username: string
+}
+
+export interface CheckRegisterAvailabilityResponse {
+  emailAvailable: boolean
+  usernameAvailable: boolean
+  available: boolean
+  message?: string
+}
+
 export interface CheckResetPasswordEmailResponse {
   available: boolean
   message?: string
@@ -397,6 +409,7 @@ export interface BillingSettingsResponse {
   checkinCredits: number
   inviteRewardPoints: number
   inviteRewardCredits: number
+  registrationInviteBonusPoints: number
   registrationGiftCredits: number
 }
 
@@ -409,6 +422,7 @@ export interface UpdateBillingSettingsRequest {
   checkinCredits: number
   inviteRewardPoints: number
   inviteRewardCredits: number
+  registrationInviteBonusPoints: number
   registrationGiftCredits: number
 }
 
@@ -419,6 +433,7 @@ export interface InviteInfoResponse {
   rewardCreditsTotal: number
   inviteRewardPoints: number
   inviteRewardCredits: number
+  registrationInviteBonusPoints: number
   registrationGiftCredits: number
 }
 

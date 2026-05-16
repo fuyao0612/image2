@@ -29,6 +29,8 @@ import type {
   BillingSettingsResponse,
   ChangePasswordRequest,
   ChangePasswordResponse,
+  CheckRegisterAvailabilityRequest,
+  CheckRegisterAvailabilityResponse,
   CheckResetPasswordEmailRequest,
   CheckResetPasswordEmailResponse,
   CheckinResponse,
@@ -276,6 +278,15 @@ export async function checkResetPasswordEmail(
   payload: CheckResetPasswordEmailRequest,
 ): Promise<CheckResetPasswordEmailResponse> {
   return request<CheckResetPasswordEmailResponse>('/api/v1/auth/reset-password/check', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function checkRegisterAvailability(
+  payload: CheckRegisterAvailabilityRequest,
+): Promise<CheckRegisterAvailabilityResponse> {
+  return request<CheckRegisterAvailabilityResponse>('/api/v1/auth/register/check', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -803,6 +814,7 @@ export const api = {
   sendEmailCode,
   register,
   login,
+  checkRegisterAvailability,
   checkResetPasswordEmail,
   resetPassword,
   checkin,

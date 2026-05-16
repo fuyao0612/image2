@@ -12,6 +12,7 @@ const (
 	PointsChangeTypeGenerate      PointsChangeType = "generate"
 	PointsChangeTypeRefund        PointsChangeType = "refund"
 	PointsChangeTypeAdjust        PointsChangeType = "adjust"
+	PointsChangeTypeRegister      PointsChangeType = "register"
 	PointsChangeTypeCode          PointsChangeType = "redeem_code"
 	PointsChangeTypeInvite        PointsChangeType = "invite"
 )

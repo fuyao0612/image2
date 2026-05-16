@@ -50,16 +50,30 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 	}
 
 	registrationGiftCredits := maxSetting(s.settingInt64(systemSettingKeyRegistrationGiftCredits, 3))
+	registrationInviteBonusPoints := int64(0)
+	if inviteCode != "" {
+		registrationInviteBonusPoints = maxSetting(s.settingInt64(systemSettingKeyRegistrationInviteBonusPoints, 0))
+	}
 	var created model.User
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var exists int64
+		var emailExists int64
 		if err := tx.Model(&model.User{}).
-			Where("lower(email) = ? OR username = ?", email, username).
-			Count(&exists).Error; err != nil {
+			Where("lower(email) = ?", email).
+			Count(&emailExists).Error; err != nil {
 			return err
 		}
-		if exists > 0 {
-			return ErrAccountExists
+		if emailExists > 0 {
+			return ErrEmailAlreadyRegistered
+		}
+
+		var usernameExists int64
+		if err := tx.Model(&model.User{}).
+			Where("username = ?", username).
+			Count(&usernameExists).Error; err != nil {
+			return err
+		}
+		if usernameExists > 0 {
+			return ErrUsernameAlreadyRegistered
 		}
 
 		var inviter *model.User
@@ -89,7 +103,7 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 			Username:                 username,
 			Email:                    email,
 			PasswordHash:             hash,
-			PointsBalance:            0,
+			PointsBalance:            registrationInviteBonusPoints,
 			FreeCredits:              registrationGiftCredits,
 			InviteCode:               userInviteCode,
 			CheckinStreak:            0,
@@ -127,6 +141,21 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 			}
 		}
 
+		if registrationInviteBonusPoints > 0 {
+			if err := tx.Create(&model.PointsLog{
+				UserID:        user.ID,
+				ChangeType:    model.PointsChangeTypeRegister,
+				Delta:         registrationInviteBonusPoints,
+				BeforeBalance: 0,
+				AfterBalance:  registrationInviteBonusPoints,
+				BizType:       "register_invite",
+				BizID:         strconv.FormatUint(user.ID, 10),
+				Remark:        "填写邀请码注册赠送",
+			}).Error; err != nil {
+				return err
+			}
+		}
+
 		if inviter != nil {
 			if err := s.createPendingInvitation(tx, inviter.ID, user.ID, inviteCode); err != nil {
 				return err
@@ -142,6 +171,40 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 	return s.authResponse(created)
 }
 
+func (s *Service) CheckRegisterAvailability(ctx context.Context, req dto.CheckRegisterAvailabilityRequest) (dto.CheckRegisterAvailabilityResponse, error) {
+	email := normalizeEmail(req.Email)
+	username := normalizeUsername(req.Username)
+	if email == "" || username == "" {
+		return dto.CheckRegisterAvailabilityResponse{}, ErrAccountExists
+	}
+
+	emailAvailable, err := s.emailAvailable(ctx, email)
+	if err != nil {
+		return dto.CheckRegisterAvailabilityResponse{}, err
+	}
+	usernameAvailable, err := s.usernameAvailable(ctx, username)
+	if err != nil {
+		return dto.CheckRegisterAvailabilityResponse{}, err
+	}
+
+	resp := dto.CheckRegisterAvailabilityResponse{
+		EmailAvailable:    emailAvailable,
+		UsernameAvailable: usernameAvailable,
+		Available:         emailAvailable && usernameAvailable,
+	}
+
+	switch {
+	case !emailAvailable:
+		resp.Message = ErrEmailAlreadyRegistered.Error()
+	case !usernameAvailable:
+		resp.Message = ErrUsernameAlreadyRegistered.Error()
+	default:
+		resp.Message = "邮箱和用户名都可以注册。"
+	}
+
+	return resp, nil
+}
+
 func (s *Service) createPendingInvitation(tx *gorm.DB, inviterUserID uint64, inviteeUserID uint64, inviteCode string) error {
 	return tx.Create(&model.Invitation{
 		InviterUserID: inviterUserID,
@@ -152,7 +215,11 @@ func (s *Service) createPendingInvitation(tx *gorm.DB, inviterUserID uint64, inv
 	}).Error
 }
 
-func (s *Service) grantInviteRewardAfterFirstRedeem(tx *gorm.DB, inviteeUserID uint64) error {
+func (s *Service) grantInviteRewardAfterFirstRedeem(tx *gorm.DB, inviteeUserID uint64, redeemCode string) error {
+	if !isInviteRewardRedeemCode(redeemCode, inviteeUserID) {
+		return nil
+	}
+
 	var invitation model.Invitation
 	query := tx.Where("invitee_user_id = ?", inviteeUserID)
 	if tx.Dialector.Name() == "mysql" {
@@ -208,6 +275,11 @@ func (s *Service) grantInviteRewardAfterFirstRedeem(tx *gorm.DB, inviteeUserID u
 		"reward_points":  rewardPoints,
 		"reward_credits": rewardCredits,
 	}).Error
+}
+
+func isInviteRewardRedeemCode(code string, inviteeUserID uint64) bool {
+	expectedPrefix := "ID" + strconv.FormatUint(inviteeUserID, 10)
+	return strings.HasPrefix(normalizeRedeemCode(code), expectedPrefix)
 }
 
 func (s *Service) grantInviteReward(tx *gorm.DB, inviter *model.User, invitee model.User, inviteCode string, rewardPoints, rewardCredits int64) error {
@@ -305,13 +377,14 @@ func (s *Service) InviteInfo(ctx context.Context, userID uint64) (dto.InviteInfo
 	}
 
 	return dto.InviteInfoResponse{
-		InviteCode:              code,
-		InvitedCount:            total.Count,
-		RewardPointsTotal:       total.RewardPoints,
-		RewardCreditsTotal:      total.RewardCredits,
-		InviteRewardPoints:      s.settingInt64(systemSettingKeyInviteRewardPoints, 0),
-		InviteRewardCredits:     s.settingInt64(systemSettingKeyInviteRewardCredits, 1),
-		RegistrationGiftCredits: s.settingInt64(systemSettingKeyRegistrationGiftCredits, 3),
+		InviteCode:                    code,
+		InvitedCount:                  total.Count,
+		RewardPointsTotal:             total.RewardPoints,
+		RewardCreditsTotal:            total.RewardCredits,
+		InviteRewardPoints:            s.settingInt64(systemSettingKeyInviteRewardPoints, 0),
+		InviteRewardCredits:           s.settingInt64(systemSettingKeyInviteRewardCredits, 1),
+		RegistrationInviteBonusPoints: s.settingInt64(systemSettingKeyRegistrationInviteBonusPoints, 0),
+		RegistrationGiftCredits:       s.settingInt64(systemSettingKeyRegistrationGiftCredits, 3),
 	}, nil
 }
 

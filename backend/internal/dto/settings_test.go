@@ -14,6 +14,7 @@ func TestUpdateBillingSettingsRequestAllowsZeroRewardFields(t *testing.T) {
 		"emailNotifyPointCost": 0,
 		"inviteRewardPoints": 0,
 		"inviteRewardCredits": 0,
+		"registrationInviteBonusPoints": 0,
 		"registrationGiftCredits": 0
 	}`)
 
@@ -30,6 +31,7 @@ func TestUpdateBillingSettingsRequestRequiresRewardFields(t *testing.T) {
 		"checkinCredits": 0,
 		"emailNotifyPointCost": 0,
 		"inviteRewardCredits": 0,
+		"registrationInviteBonusPoints": 0,
 		"registrationGiftCredits": 0
 	}`)
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -177,13 +178,14 @@ func TestAdminStatsExcludesAdminUsersAndSplitsAssetSources(t *testing.T) {
 	}
 	zero := int64(0)
 	if _, err := svc.UpdateBillingSettings(ctx, admin.ID, dto.UpdateBillingSettingsRequest{
-		ImageGeneratePointCost:  10,
-		CheckinPoints:           &zero,
-		CheckinCredits:          &zero,
-		EmailNotifyPointCost:    &zero,
-		InviteRewardPoints:      &zero,
-		InviteRewardCredits:     &zero,
-		RegistrationGiftCredits: &zero,
+		ImageGeneratePointCost:        10,
+		CheckinPoints:                 &zero,
+		CheckinCredits:                &zero,
+		EmailNotifyPointCost:          &zero,
+		InviteRewardPoints:            &zero,
+		InviteRewardCredits:           &zero,
+		RegistrationInviteBonusPoints: &zero,
+		RegistrationGiftCredits:       &zero,
 	}); err != nil {
 		t.Fatalf("update billing settings: %v", err)
 	}
@@ -427,6 +429,59 @@ func TestRegisterGiftsNewUserFreeCredits(t *testing.T) {
 	}
 }
 
+func TestRegisterWithInviteCodeGrantsInviteeBonusPoints(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.RegistrationEnabled = true
+	svc.cfg.EmailCodeCooldown = time.Millisecond
+
+	inviter := createTestUserWithPassword(t, db, "invite_bonus_owner", "invite-bonus-owner@example.com", "password123")
+	if err := db.Model(&model.User{}).Where("id = ?", inviter.ID).Update("invite_code", "BONUS01").Error; err != nil {
+		t.Fatalf("set invite code: %v", err)
+	}
+	bonusPoints := int64(9)
+	if err := upsertSystemSetting(db, systemSettingKeyRegistrationInviteBonusPoints, strconv.FormatInt(bonusPoints, 10), ""); err != nil {
+		t.Fatalf("set invite bonus points: %v", err)
+	}
+	if err := svc.reloadSystemSettings(db); err != nil {
+		t.Fatalf("reload settings: %v", err)
+	}
+
+	captchaID, captchaCode := validCaptchaForTest(t, svc)
+	codeResp, err := svc.SendEmailCode(context.Background(), dto.SendEmailCodeRequest{
+		Email:       "invitee-bonus@example.com",
+		Scene:       "register",
+		CaptchaID:   captchaID,
+		CaptchaCode: captchaCode,
+	})
+	if err != nil {
+		t.Fatalf("send email code: %v", err)
+	}
+
+	authResp, err := svc.Register(context.Background(), dto.RegisterRequest{
+		Email:      "invitee-bonus@example.com",
+		Username:   "invitee_bonus",
+		Password:   "invitee-bonus-password",
+		Code:       codeResp.DebugCode,
+		InviteCode: "BONUS01",
+	})
+	if err != nil {
+		t.Fatalf("register with invite code: %v", err)
+	}
+	if authResp.User.PointsBalance != bonusPoints {
+		t.Fatalf("expected invitee bonus points %d, got %+v", bonusPoints, authResp.User)
+	}
+
+	var pointsLogs int64
+	if err := db.Model(&model.PointsLog{}).
+		Where("user_id = ? AND change_type = ? AND delta = ?", authResp.User.ID, model.PointsChangeTypeRegister, bonusPoints).
+		Count(&pointsLogs).Error; err != nil {
+		t.Fatalf("count invite bonus logs: %v", err)
+	}
+	if pointsLogs != 1 {
+		t.Fatalf("expected one invite bonus points log, got %d", pointsLogs)
+	}
+}
+
 func TestSendEmailCodeDoesNotExposeDebugCodeInProd(t *testing.T) {
 	svc, _ := newTestService(t)
 	svc.cfg.AppEnv = "prod"
@@ -477,6 +532,44 @@ func TestSendEmailCodeChecksRegisteredEmailAfterCaptcha(t *testing.T) {
 	})
 	if !errors.Is(err, ErrEmailAlreadyRegistered) {
 		t.Fatalf("expected registered email error, got %v", err)
+	}
+}
+
+func TestCheckRegisterAvailabilityDetectsEmailAndUsernameConflicts(t *testing.T) {
+	svc, db := newTestService(t)
+	createTestUserWithPassword(t, db, "registered_user", "registered@example.com", "password123")
+
+	resp, err := svc.CheckRegisterAvailability(context.Background(), dto.CheckRegisterAvailabilityRequest{
+		Email:    "registered@example.com",
+		Username: "fresh_user",
+	})
+	if err != nil {
+		t.Fatalf("check register availability by email: %v", err)
+	}
+	if resp.EmailAvailable || !resp.UsernameAvailable || resp.Available {
+		t.Fatalf("unexpected email conflict response: %+v", resp)
+	}
+
+	resp, err = svc.CheckRegisterAvailability(context.Background(), dto.CheckRegisterAvailabilityRequest{
+		Email:    "fresh@example.com",
+		Username: "registered_user",
+	})
+	if err != nil {
+		t.Fatalf("check register availability by username: %v", err)
+	}
+	if !resp.EmailAvailable || resp.UsernameAvailable || resp.Available {
+		t.Fatalf("unexpected username conflict response: %+v", resp)
+	}
+
+	resp, err = svc.CheckRegisterAvailability(context.Background(), dto.CheckRegisterAvailabilityRequest{
+		Email:    "fresh@example.com",
+		Username: "fresh_user",
+	})
+	if err != nil {
+		t.Fatalf("check register availability success: %v", err)
+	}
+	if !resp.EmailAvailable || !resp.UsernameAvailable || !resp.Available {
+		t.Fatalf("unexpected available response: %+v", resp)
 	}
 }
 
@@ -1802,9 +1895,10 @@ func TestInviteRewardGrantedAfterInviteeFirstRedeemCode(t *testing.T) {
 		t.Fatalf("create invitation: %v", err)
 	}
 
-	firstCode := model.RedeemCode{Code: "INVITEREDEEM001", PointsAmount: 1, Status: model.RedeemCodeStatusActive}
-	secondCode := model.RedeemCode{Code: "INVITEREDEEM002", PointsAmount: 1, Status: model.RedeemCodeStatusActive}
-	if err := db.Create(&[]model.RedeemCode{firstCode, secondCode}).Error; err != nil {
+	wrongCode := model.RedeemCode{Code: "INVITEREDEEM001", PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	firstCode := model.RedeemCode{Code: fmt.Sprintf("ID%dREDEEM001", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	secondCode := model.RedeemCode{Code: fmt.Sprintf("ID%dREDEEM002", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	if err := db.Create(&[]model.RedeemCode{wrongCode, firstCode, secondCode}).Error; err != nil {
 		t.Fatalf("create redeem codes: %v", err)
 	}
 
@@ -1814,6 +1908,17 @@ func TestInviteRewardGrantedAfterInviteeFirstRedeemCode(t *testing.T) {
 	}
 	if before.PointsBalance != 5 || before.FreeCredits != 0 {
 		t.Fatalf("invite reward should not be granted before redeem: %+v", before)
+	}
+
+	if _, err := svc.RedeemCode(context.Background(), invitee.ID, dto.RedeemCodeRequest{Code: wrongCode.Code}); err != nil {
+		t.Fatalf("wrong-prefix redeem: %v", err)
+	}
+	var afterWrongPrefix model.User
+	if err := db.First(&afterWrongPrefix, inviter.ID).Error; err != nil {
+		t.Fatalf("load inviter after wrong-prefix redeem: %v", err)
+	}
+	if afterWrongPrefix.PointsBalance != before.PointsBalance || afterWrongPrefix.FreeCredits != before.FreeCredits {
+		t.Fatalf("invite reward should require ID-prefixed redeem code, before=%+v after=%+v", before, afterWrongPrefix)
 	}
 
 	if _, err := svc.RedeemCode(context.Background(), invitee.ID, dto.RedeemCodeRequest{Code: firstCode.Code}); err != nil {

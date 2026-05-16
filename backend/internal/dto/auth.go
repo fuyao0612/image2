@@ -43,6 +43,18 @@ type CheckResetPasswordEmailRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
+type CheckRegisterAvailabilityRequest struct {
+	Email    string `json:"email" binding:"required,email"`
+	Username string `json:"username" binding:"required,min=2,max=32"`
+}
+
+type CheckRegisterAvailabilityResponse struct {
+	EmailAvailable    bool   `json:"emailAvailable"`
+	UsernameAvailable bool   `json:"usernameAvailable"`
+	Available         bool   `json:"available"`
+	Message           string `json:"message,omitempty"`
+}
+
 type CheckResetPasswordEmailResponse struct {
 	Available    bool       `json:"available"`
 	Message      string     `json:"message,omitempty"`

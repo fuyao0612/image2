@@ -689,6 +689,25 @@ func (s *Service) emailExists(ctx context.Context, email string) (bool, error) {
 	return exists > 0, nil
 }
 
+func (s *Service) emailAvailable(ctx context.Context, email string) (bool, error) {
+	exists, err := s.emailExists(ctx, email)
+	if err != nil {
+		return false, err
+	}
+	return !exists, nil
+}
+
+func (s *Service) usernameAvailable(ctx context.Context, username string) (bool, error) {
+	var exists int64
+	if err := s.db.WithContext(ctx).
+		Model(&model.User{}).
+		Where("username = ?", normalizeUsername(username)).
+		Count(&exists).Error; err != nil {
+		return false, err
+	}
+	return exists == 0, nil
+}
+
 // TokenVersionView 读取当前账号会话版本，仅用于鉴权比对。
 func (s *Service) TokenVersionView(ctx context.Context, userID uint64) (TokenVersionView, error) {
 	user, err := s.loadUser(userID)
@@ -2227,6 +2246,14 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, input.Count, activeProvider, batchID, submitted)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
+			message := providerFailureMessage(result, pollErr)
+			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, result, message)
+			if updateErr != nil {
+				log.Printf("image task %d poll timeout handling failed: %v", taskID, updateErr)
+				return
+			}
+			log.Printf("image task %d poll timeout refunded and will not be recovered again, balance=%d reason=%s", taskID, balance, message)
+			return
 			log.Printf("异步生图任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
 			return
 		}
@@ -2296,6 +2323,14 @@ func (s *Service) resumeImageTaskV2(taskID uint64, userID uint64, batchID string
 	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, task.RequestedCount, activeProvider, batchID, seed)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
+			message := providerFailureMessage(result, pollErr)
+			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, result, message)
+			if updateErr != nil {
+				log.Printf("recovered image task %d poll timeout handling failed: %v", taskID, updateErr)
+				return
+			}
+			log.Printf("recovered image task %d poll timeout refunded and will not be recovered again, balance=%d reason=%s", taskID, balance, message)
+			return
 			log.Printf("恢复任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
 			return
 		}

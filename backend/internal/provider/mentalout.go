@@ -657,6 +657,9 @@ func extractGenerateResult(body []byte, batchServiceURL string, providerAPIBaseU
 	}
 	result.ImageURL = absolutizeImageURL(result.ImageURL, batchServiceURL)
 	result.ImageURLs = mergeImageURLs(result.ImageURLs, []string{result.ImageURL})
+	if strings.TrimSpace(result.ImageURL) != "" || len(result.ImageURLs) > 0 {
+		result.Status = model.ImageTaskStatusSuccess
+	}
 	if result.ErrorMessage == "" && result.Status == model.ImageTaskStatusFailed {
 		result.ErrorMessage = inferErrorFromText(rawText)
 	}

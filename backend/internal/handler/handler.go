@@ -140,6 +140,20 @@ func (h *Handler) CheckResetPasswordEmail(c *gin.Context) {
 	response.Success(c, resp)
 }
 
+func (h *Handler) CheckRegisterAvailability(c *gin.Context) {
+	var req dto.CheckRegisterAvailabilityRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数不合法")
+		return
+	}
+	resp, err := h.svc.CheckRegisterAvailability(c.Request.Context(), req)
+	if err != nil {
+		h.writeServiceError(c, err)
+		return
+	}
+	response.Success(c, resp)
+}
+
 func (h *Handler) ResetPassword(c *gin.Context) {
 	var req dto.ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -539,6 +553,8 @@ func (h *Handler) writeServiceError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrEmailDailyLimitReached):
 		response.TooManyRequests(c, err.Error())
 	case errors.Is(err, service.ErrEmailAlreadyRegistered):
+		response.Conflict(c, err.Error())
+	case errors.Is(err, service.ErrUsernameAlreadyRegistered):
 		response.Conflict(c, err.Error())
 	case errors.Is(err, service.ErrAccountExists):
 		response.Conflict(c, err.Error())
