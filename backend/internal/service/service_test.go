@@ -199,6 +199,16 @@ func TestAdminStatsExcludesAdminUsersAndSplitsAssetSources(t *testing.T) {
 	createTestTask(t, db, user.ID, model.ImageTaskStatusSuccess, 0)
 	createTestTask(t, db, user.ID, model.ImageTaskStatusFailed, 0)
 	createTestTask(t, db, admin.ID, model.ImageTaskStatusGenerating, 0)
+	if err := db.Model(&model.ImageTask{}).Where("user_id = ? AND status = ?", user.ID, model.ImageTaskStatusSuccess).Updates(map[string]any{
+		"cost_points":              10,
+		"email_notify_enabled":     true,
+		"email_notify_cost_points": 2,
+		"cost_credits":             1,
+		"requested_count":          1,
+		"created_at":               time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("update success task costs: %v", err)
+	}
 
 	paidAt := time.Now()
 
@@ -270,6 +280,9 @@ func TestAdminStatsExcludesAdminUsersAndSplitsAssetSources(t *testing.T) {
 	}
 	if stats.TasksTotal != 2 || stats.TasksSuccess != 1 || stats.TasksFailed != 1 || stats.TasksGenerating != 0 {
 		t.Fatalf("unexpected task stats: %+v", stats)
+	}
+	if stats.TasksPointsConsumedTotal != 12 || stats.TasksPointsConsumedToday != 12 {
+		t.Fatalf("unexpected task point stats: total=%d today=%d", stats.TasksPointsConsumedTotal, stats.TasksPointsConsumedToday)
 	}
 	if stats.AuditRejected != 1 {
 		t.Fatalf("unexpected audit stats: auditRejected=%d", stats.AuditRejected)
@@ -1439,7 +1452,7 @@ func TestResetAllUsersCreditsClearsEveryUserBalance(t *testing.T) {
 	}
 }
 
-func TestCheckinAwardsConfiguredCreditsOnly(t *testing.T) {
+func TestCheckinAwardsConfiguredPointsAndCredits(t *testing.T) {
 	svc, db := newTestService(t)
 	svc.setSettingsCacheFromValues(map[string]string{
 		systemSettingKeyCheckinPoints:  "6",
@@ -1451,7 +1464,7 @@ func TestCheckinAwardsConfiguredCreditsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkin: %v", err)
 	}
-	if !resp.CheckedIn || resp.GainedPoints != 0 || resp.GainedCredits != 2 || resp.PointsBalance != 0 || resp.FreeCredits != 2 {
+	if !resp.CheckedIn || resp.GainedPoints != 6 || resp.GainedCredits != 2 || resp.PointsBalance != 6 || resp.FreeCredits != 2 {
 		t.Fatalf("unexpected checkin response: %+v", resp)
 	}
 
@@ -1463,8 +1476,16 @@ func TestCheckinAwardsConfiguredCreditsOnly(t *testing.T) {
 	if err := db.Model(&model.CreditLog{}).Where("user_id = ? AND change_type = ?", user.ID, model.CreditChangeTypeCheckin).Count(&creditLogs).Error; err != nil {
 		t.Fatalf("count checkin credit logs: %v", err)
 	}
-	if pointLogs != 0 || creditLogs != 1 {
-		t.Fatalf("expected only one credit checkin log, got point=%d credit=%d", pointLogs, creditLogs)
+	if pointLogs != 1 || creditLogs != 1 {
+		t.Fatalf("expected one point and one credit checkin log, got point=%d credit=%d", pointLogs, creditLogs)
+	}
+
+	pointsResp, err := svc.GetPoints(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("get points after checkin: %v", err)
+	}
+	if pointsResp.CheckinPointsTotal != 6 || pointsResp.CheckinCreditsTotal != 2 {
+		t.Fatalf("unexpected checkin totals: %+v", pointsResp)
 	}
 }
 
@@ -1824,6 +1845,19 @@ func TestAdminListTaskAndRedeemKeywordFilters(t *testing.T) {
 	}
 	if taskResp.Total != 1 || len(taskResp.Items) != 1 || taskResp.Items[0].ID != strconv.FormatUint(task.ID, 10) {
 		t.Fatalf("expected task %d by keyword, got total=%d items=%+v", task.ID, taskResp.Total, taskResp.Items)
+	}
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"email_notify_enabled":     true,
+		"email_notify_cost_points": 3,
+	}).Error; err != nil {
+		t.Fatalf("update task email notify fields: %v", err)
+	}
+	taskResp, err = svc.AdminListImageTasks(context.Background(), admin.ID, "", "skyline", 1, 10)
+	if err != nil {
+		t.Fatalf("list tasks after email notify update: %v", err)
+	}
+	if !taskResp.Items[0].EmailNotifyEnabled || taskResp.Items[0].EmailNotifyCostPoints != 3 {
+		t.Fatalf("expected email notify fields in task item, got %+v", taskResp.Items[0])
 	}
 
 	code := model.RedeemCode{

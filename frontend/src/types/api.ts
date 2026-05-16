@@ -542,6 +542,8 @@ export interface AdminImageTaskItem {
   costCredits: number
   freeCreditsCost?: number
   paidCreditsCost?: number
+  emailNotifyEnabled?: boolean
+  emailNotifyCostPoints?: number
   creditSource?: string
   status: string
   provider?: string

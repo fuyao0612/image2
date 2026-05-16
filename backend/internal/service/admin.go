@@ -109,7 +109,7 @@ func (s *Service) AdminStats(ctx context.Context, adminID uint64) (dto.AdminStat
 	}
 	if err := taskStatsQuery().
 		Where("image_tasks.status = ?", model.ImageTaskStatusSuccess).
-		Select("COALESCE(SUM(image_tasks.cost_points),0)").
+		Select("COALESCE(SUM(image_tasks.cost_points + image_tasks.email_notify_cost_points),0)").
 		Scan(&resp.TasksPointsConsumedTotal).Error; err != nil {
 		return resp, err
 	}
@@ -123,7 +123,7 @@ func (s *Service) AdminStats(ctx context.Context, adminID uint64) (dto.AdminStat
 	if err := taskStatsQuery().
 		Where("image_tasks.status = ?", model.ImageTaskStatusSuccess).
 		Where("image_tasks.created_at >= ? AND image_tasks.created_at < ?", todayStart, tomorrowStart).
-		Select("COALESCE(SUM(image_tasks.cost_points),0)").
+		Select("COALESCE(SUM(image_tasks.cost_points + image_tasks.email_notify_cost_points),0)").
 		Scan(&resp.TasksPointsConsumedToday).Error; err != nil {
 		return resp, err
 	}
@@ -150,7 +150,7 @@ func (s *Service) AdminStats(ctx context.Context, adminID uint64) (dto.AdminStat
 	if err := taskStatsQuery().
 		Where("image_tasks.status = ?", model.ImageTaskStatusSuccess).
 		Where("image_tasks.created_at >= ? AND image_tasks.created_at < ?", yesterdayStart, todayStart).
-		Select("COALESCE(SUM(image_tasks.cost_points),0)").
+		Select("COALESCE(SUM(image_tasks.cost_points + image_tasks.email_notify_cost_points),0)").
 		Scan(&resp.TasksPointsConsumedYesterday).Error; err != nil {
 		return resp, err
 	}
@@ -549,25 +549,27 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 		thumbURLs := s.thumbnailURLsFromTask(ctx, task)
 		imageURLs := imageURLsFromTask(task)
 		items = append(items, dto.AdminImageTaskItem{
-			ID:              strconv.FormatUint(task.ID, 10),
-			UserID:          strconv.FormatUint(task.UserID, 10),
-			Username:        usernames[task.UserID],
-			Prompt:          task.Prompt,
-			ImageURL:        thumbnailURLFromList(imageURLs, 0),
-			ImageURLs:       imageURLs,
-			ThumbnailURL:    thumbnailURLFromList(thumbURLs, 0),
-			ThumbnailURLs:   thumbURLs,
-			CostPoints:      task.CostPoints,
-			CostCredits:     task.CostCredits,
-			FreeCreditsCost: task.FreeCreditsCost,
-			PaidCreditsCost: task.PaidCreditsCost,
-			CreditSource:    task.CreditSource,
-			Status:          string(task.Status),
-			Provider:        task.Provider,
-			RequestParams:   task.RequestParams,
-			ErrorMessage:    task.ErrorMessage,
-			CreatedAt:       task.CreatedAt,
-			UpdatedAt:       task.UpdatedAt,
+			ID:                    strconv.FormatUint(task.ID, 10),
+			UserID:                strconv.FormatUint(task.UserID, 10),
+			Username:              usernames[task.UserID],
+			Prompt:                task.Prompt,
+			ImageURL:              thumbnailURLFromList(imageURLs, 0),
+			ImageURLs:             imageURLs,
+			ThumbnailURL:          thumbnailURLFromList(thumbURLs, 0),
+			ThumbnailURLs:         thumbURLs,
+			CostPoints:            task.CostPoints,
+			CostCredits:           task.CostCredits,
+			FreeCreditsCost:       task.FreeCreditsCost,
+			PaidCreditsCost:       task.PaidCreditsCost,
+			EmailNotifyEnabled:    task.EmailNotifyEnabled,
+			EmailNotifyCostPoints: task.EmailNotifyCostPoints,
+			CreditSource:          task.CreditSource,
+			Status:                string(task.Status),
+			Provider:              task.Provider,
+			RequestParams:         task.RequestParams,
+			ErrorMessage:          task.ErrorMessage,
+			CreatedAt:             task.CreatedAt,
+			UpdatedAt:             task.UpdatedAt,
 		})
 	}
 	return dto.AdminListImageTasksResponse{Items: items, Page: page, PageSize: pageSize, Total: total}, nil

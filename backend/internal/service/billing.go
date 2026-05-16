@@ -94,6 +94,15 @@ func (s *Service) pointsResponse(user model.User, pointsLogs []model.PointsLog, 
 }
 
 func (s *Service) checkinRewardTotals(ctx context.Context, userID uint64) (int64, int64, error) {
+	var pointsTotal int64
+	if err := s.db.WithContext(ctx).
+		Model(&model.PointsLog{}).
+		Where("user_id = ? AND change_type = ?", userID, model.PointsChangeTypeCheckin).
+		Select("COALESCE(SUM(delta), 0)").
+		Scan(&pointsTotal).Error; err != nil {
+		return 0, 0, err
+	}
+
 	var freeCreditsTotal int64
 	if err := s.db.WithContext(ctx).
 		Model(&model.CreditLog{}).
@@ -112,7 +121,7 @@ func (s *Service) checkinRewardTotals(ctx context.Context, userID uint64) (int64
 		return 0, 0, err
 	}
 
-	return 0, freeCreditsTotal + paidCreditsTotal, nil
+	return pointsTotal, freeCreditsTotal + paidCreditsTotal, nil
 }
 
 func (s *Service) ensureBillingPackages(ctx context.Context) error {
@@ -208,36 +217,36 @@ func (s *Service) listBillingPackages(ctx context.Context, onlyEnabled bool, pac
 
 func (s *Service) billingPackageToDTO(pkg model.BillingPackage) dto.PackageItem {
 	return dto.PackageItem{
-		Code:             pkg.Code,
-		Name:             pkg.Name,
-		PackageType:      string(pkg.PackageType),
-		CreditsAmount:    pkg.CreditsAmount,
-		PointsCost:       pkg.PointsCost,
-		AmountCents:      pkg.AmountCents,
-		BonusPoints:      pkg.BonusPoints,
-		ProductURL:       pkg.ProductURL,
-		Enabled:          pkg.Enabled,
-		SortOrder:        pkg.SortOrder,
-		Note:             pkg.Note,
+		Code:          pkg.Code,
+		Name:          pkg.Name,
+		PackageType:   string(pkg.PackageType),
+		CreditsAmount: pkg.CreditsAmount,
+		PointsCost:    pkg.PointsCost,
+		AmountCents:   pkg.AmountCents,
+		BonusPoints:   pkg.BonusPoints,
+		ProductURL:    pkg.ProductURL,
+		Enabled:       pkg.Enabled,
+		SortOrder:     pkg.SortOrder,
+		Note:          pkg.Note,
 	}
 }
 
 func (s *Service) billingPackageToAdminDTO(pkg model.BillingPackage) dto.AdminPackageItem {
 	return dto.AdminPackageItem{
-		ID:               strconv.FormatUint(pkg.ID, 10),
-		Code:             pkg.Code,
-		Name:             pkg.Name,
-		PackageType:      string(pkg.PackageType),
-		CreditsAmount:    pkg.CreditsAmount,
-		PointsCost:       pkg.PointsCost,
-		AmountCents:      pkg.AmountCents,
-		BonusPoints:      pkg.BonusPoints,
-		ProductURL:       pkg.ProductURL,
-		Enabled:          pkg.Enabled,
-		SortOrder:        pkg.SortOrder,
-		Note:             pkg.Note,
-		CreatedAt:        pkg.CreatedAt,
-		UpdatedAt:        pkg.UpdatedAt,
+		ID:            strconv.FormatUint(pkg.ID, 10),
+		Code:          pkg.Code,
+		Name:          pkg.Name,
+		PackageType:   string(pkg.PackageType),
+		CreditsAmount: pkg.CreditsAmount,
+		PointsCost:    pkg.PointsCost,
+		AmountCents:   pkg.AmountCents,
+		BonusPoints:   pkg.BonusPoints,
+		ProductURL:    pkg.ProductURL,
+		Enabled:       pkg.Enabled,
+		SortOrder:     pkg.SortOrder,
+		Note:          pkg.Note,
+		CreatedAt:     pkg.CreatedAt,
+		UpdatedAt:     pkg.UpdatedAt,
 	}
 }
 

@@ -97,25 +97,27 @@ type AdminAdjustPointsResponse struct {
 
 // AdminImageTaskItem 是后台任务列表项。
 type AdminImageTaskItem struct {
-	ID              string    `json:"id"`
-	UserID          string    `json:"userId"`
-	Username        string    `json:"username,omitempty"`
-	Prompt          string    `json:"prompt"`
-	ImageURL        string    `json:"imageUrl,omitempty"`
-	ImageURLs       []string  `json:"imageUrls,omitempty"`
-	ThumbnailURL    string    `json:"thumbnailUrl,omitempty"`
-	ThumbnailURLs   []string  `json:"thumbnailUrls,omitempty"`
-	CostPoints      int64     `json:"costPoints"`
-	CostCredits     int64     `json:"costCredits"`
-	FreeCreditsCost int64     `json:"freeCreditsCost"`
-	PaidCreditsCost int64     `json:"paidCreditsCost"`
-	CreditSource    string    `json:"creditSource"`
-	Status          string    `json:"status"`
-	Provider        string    `json:"provider,omitempty"`
-	RequestParams   string    `json:"requestParams,omitempty"`
-	ErrorMessage    string    `json:"errorMessage,omitempty"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID                    string    `json:"id"`
+	UserID                string    `json:"userId"`
+	Username              string    `json:"username,omitempty"`
+	Prompt                string    `json:"prompt"`
+	ImageURL              string    `json:"imageUrl,omitempty"`
+	ImageURLs             []string  `json:"imageUrls,omitempty"`
+	ThumbnailURL          string    `json:"thumbnailUrl,omitempty"`
+	ThumbnailURLs         []string  `json:"thumbnailUrls,omitempty"`
+	CostPoints            int64     `json:"costPoints"`
+	CostCredits           int64     `json:"costCredits"`
+	FreeCreditsCost       int64     `json:"freeCreditsCost"`
+	PaidCreditsCost       int64     `json:"paidCreditsCost"`
+	EmailNotifyEnabled    bool      `json:"emailNotifyEnabled"`
+	EmailNotifyCostPoints int64     `json:"emailNotifyCostPoints"`
+	CreditSource          string    `json:"creditSource"`
+	Status                string    `json:"status"`
+	Provider              string    `json:"provider,omitempty"`
+	RequestParams         string    `json:"requestParams,omitempty"`
+	ErrorMessage          string    `json:"errorMessage,omitempty"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
 }
 
 // AdminListImageTasksResponse 是后台任务分页。

@@ -54,26 +54,45 @@ func (s *Service) checkInV2(ctx context.Context, userID uint64) (dto.CheckinResp
 			}
 		}
 
-		gainedPoints := int64(0)
+		gainedPoints := s.settingInt64(systemSettingKeyCheckinPoints, 3)
+		if gainedPoints < 0 {
+			gainedPoints = 0
+		}
 		gainedCredits := s.settingInt64(systemSettingKeyCheckinCredits, 1)
 		if gainedCredits < 0 {
 			gainedCredits = 0
 		}
 
 		beforePoints := user.PointsBalance
-		afterPoints := beforePoints
+		afterPoints := beforePoints + gainedPoints
 		beforeCredits := creditBalance{Free: user.FreeCredits, Paid: user.PaidCredits}
 		afterCredits := creditBalance{Free: beforeCredits.Free + gainedCredits, Paid: beforeCredits.Paid}
 		lastCheckinAt := now
 		lastCheckinDate := today
 
 		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+			"points_balance":    afterPoints,
 			"free_credits":      afterCredits.Free,
 			"checkin_streak":    streak,
 			"last_checkin_at":   lastCheckinAt,
 			"last_checkin_date": lastCheckinDate,
 		}).Error; err != nil {
 			return err
+		}
+
+		if gainedPoints > 0 {
+			if err := tx.Create(&model.PointsLog{
+				UserID:        user.ID,
+				ChangeType:    model.PointsChangeTypeCheckin,
+				Delta:         gainedPoints,
+				BeforeBalance: beforePoints,
+				AfterBalance:  afterPoints,
+				BizType:       "checkin",
+				BizID:         dayKey(today),
+				Remark:        "每日签到",
+			}).Error; err != nil {
+				return err
+			}
 		}
 
 		if gainedCredits > 0 {

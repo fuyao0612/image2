@@ -2803,6 +2803,12 @@ function App() {
                   )}
                   {mode === 'register' ? '注册' : mode === 'reset' ? '重置密码' : '登录'}
                 </button>
+                {mode === 'login' ? (
+                  <div className="flex items-center justify-center gap-2 rounded-md border border-emerald-100 bg-emerald-50/80 px-3 py-2 text-xs text-emerald-700">
+                    <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                    <span>本站为正规网站，已完成工信部ICP备案和公安备案</span>
+                  </div>
+                ) : null}
               </form>
 
               <div className="mt-5 border-t border-slate-800 pt-4 text-center text-sm text-slate-400">
@@ -3469,7 +3475,7 @@ function IcpFooter({ className = '' }: { className?: string }) {
         rel="noreferrer"
         className="inline-flex items-center gap-1 transition hover:text-slate-700 dark:hover:text-slate-300"
       >
-        <span className="inline-block h-3.5 w-3.5 rounded-full border border-current text-[9px] leading-[12px]">盾</span>
+        <img src="/police-badge.png" alt="" aria-hidden="true" className="h-3.5 w-3.5 shrink-0 object-contain" />
         {POLICE_RECORD_NUMBER}
       </a>
     </footer>
