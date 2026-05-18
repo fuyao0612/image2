@@ -1210,6 +1210,9 @@ func (s *Service) storeGeneratedImages(taskID uint64, userID uint64, imageURLs [
 	if s == nil || s.imageStore == nil || !s.imageStore.Enabled() || len(imageURLs) == 0 {
 		return imageURLs
 	}
+	if !s.hasRemoteImageURLs(imageURLs) {
+		return imageURLs
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ImageStorageTimeout)
 	defer cancel()
@@ -1223,6 +1226,52 @@ func (s *Service) storeGeneratedImages(taskID uint64, userID uint64, imageURLs [
 		return imageURLs
 	}
 	return storedURLs
+}
+
+func (s *Service) hasRemoteImageURLs(imageURLs []string) bool {
+	for _, candidate := range imageURLs {
+		if !s.isStoredImageURL(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) isStoredImageURL(rawURL string) bool {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return true
+	}
+
+	publicPath := strings.TrimRight(strings.TrimSpace(s.cfg.ImageStoragePublicPath), "/")
+	if publicPath == "" {
+		publicPath = "/uploads"
+	}
+	if strings.HasPrefix(trimmed, publicPath+"/") {
+		return true
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(s.cfg.BackendPublicURL), "/")
+	if baseURL == "" {
+		return false
+	}
+	baseParsed, err := url.Parse(baseURL)
+	if err != nil || baseParsed.Host == "" {
+		return false
+	}
+
+	if !strings.EqualFold(parsed.Host, baseParsed.Host) {
+		return false
+	}
+	return strings.HasPrefix(parsed.Path, publicPath+"/")
 }
 
 func (s *Service) referenceImageForProvider(ctx context.Context, referenceImageURL string) *provider.ReferenceImage {
@@ -2246,15 +2295,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, input.Count, activeProvider, batchID, submitted)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
-			message := providerFailureMessage(result, pollErr)
-			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, result, message)
-			if updateErr != nil {
-				log.Printf("image task %d poll timeout handling failed: %v", taskID, updateErr)
-				return
-			}
-			log.Printf("image task %d poll timeout refunded and will not be recovered again, balance=%d reason=%s", taskID, balance, message)
-			return
-			log.Printf("异步生图任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
+			log.Printf("image task %d poll round timed out, keep generating for later recovery: %v", taskID, pollErr)
 			return
 		}
 		message := providerFailureMessage(result, pollErr)
@@ -2323,15 +2364,7 @@ func (s *Service) resumeImageTaskV2(taskID uint64, userID uint64, batchID string
 	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, task.RequestedCount, activeProvider, batchID, seed)
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
-			message := providerFailureMessage(result, pollErr)
-			balance, updateErr := s.failImageTaskAndRefund(taskID, userID, result, message)
-			if updateErr != nil {
-				log.Printf("recovered image task %d poll timeout handling failed: %v", taskID, updateErr)
-				return
-			}
-			log.Printf("recovered image task %d poll timeout refunded and will not be recovered again, balance=%d reason=%s", taskID, balance, message)
-			return
-			log.Printf("恢复任务 %d 本轮轮询未完成，等待后续恢复: %v", taskID, pollErr)
+			log.Printf("recovered image task %d poll round timed out, keep generating for later recovery: %v", taskID, pollErr)
 			return
 		}
 		message := providerFailureMessage(result, pollErr)
@@ -2382,9 +2415,16 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 	}
 	pollInterval := s.cfg.ImageProviderPollInterval
 	if pollInterval <= 0 {
-		pollInterval = 2 * time.Second
+		pollInterval = 30 * time.Second
+	}
+	if pollInterval >= time.Second && pollInterval < 30*time.Second {
+		pollInterval = 30 * time.Second
 	}
 	temporaryFailures := 0
+	runningFetches := 0
+	const maxTemporaryFailures = 3
+	const maxRunningFetches = 16
+	timeoutMessage := "上游任务长时间未完成，已停止继续查询以避免重复计费"
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -2413,6 +2453,11 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 					result.Status = model.ImageTaskStatusGenerating
 				}
 				result.ErrorMessage = truncateProviderMessage(err.Error())
+				if temporaryFailures >= maxTemporaryFailures {
+					result.Status = model.ImageTaskStatusFailed
+					result.ErrorMessage = timeoutMessage
+					return result, nil
+				}
 				if err := waitWithContext(ctx, temporaryProviderBackoffDelay(temporaryFailures, pollInterval)); err != nil {
 					return result, err
 				}
@@ -2431,12 +2476,20 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 		} else {
 			temporaryFailures = 0
 		}
+		if result.Status == model.ImageTaskStatusGenerating {
+			runningFetches++
+		}
 		if err := s.persistPartialImageTask(ctx, taskID, userID, result); err != nil {
 			log.Printf("生图任务 %d 保存部分结果失败: %v", taskID, err)
 		}
 
 		if hasRequestedImageCount(result, requestedCount) {
 			result.Status = model.ImageTaskStatusSuccess
+			return result, nil
+		}
+		if temporaryFailures >= maxTemporaryFailures || runningFetches >= maxRunningFetches {
+			result.Status = model.ImageTaskStatusFailed
+			result.ErrorMessage = timeoutMessage
 			return result, nil
 		}
 
@@ -2478,6 +2531,7 @@ func (s *Service) persistPartialImageTask(ctx context.Context, taskID uint64, us
 	if len(urls) == 0 && strings.TrimSpace(result.RawResponse) == "" && strings.TrimSpace(result.ErrorMessage) == "" {
 		return nil
 	}
+	urls = s.storeGeneratedImages(taskID, userID, urls)
 
 	updates := map[string]any{}
 	if len(urls) > 0 {

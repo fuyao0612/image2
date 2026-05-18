@@ -131,6 +131,10 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 	if err := s.RequireAdmin(ctx, adminID); err != nil {
 		return dto.BillingSettingsResponse{}, err
 	}
+	before, err := s.BillingSettings(ctx)
+	if err != nil {
+		return dto.BillingSettingsResponse{}, err
+	}
 
 	checkinPoints, ok := requiredNonNegativeSetting(req.CheckinPoints)
 	if !ok {
@@ -164,6 +168,18 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 	if req.ImageGeneratePointCost <= 0 {
 		return dto.BillingSettingsResponse{}, ErrSettingsInvalid
 	}
+	after := dto.BillingSettingsResponse{
+		ImageGeneratePointCost:        req.ImageGeneratePointCost,
+		ImageGenerationEnabled:        settingBoolValue(req.ImageGenerationEnabled, true),
+		EmailNotifyEnabled:            settingBoolValue(req.EmailNotifyEnabled, false),
+		EmailNotifyPointCost:          emailNotifyPointCost,
+		CheckinPoints:                 checkinPoints,
+		CheckinCredits:                checkinCredits,
+		InviteRewardPoints:            inviteRewardPoints,
+		InviteRewardCredits:           inviteRewardCredits,
+		RegistrationInviteBonusPoints: registrationInviteBonusPoints,
+		RegistrationGiftCredits:       registrationGiftCredits,
+	}
 
 	updates := map[string]string{
 		systemSettingKeyImageGeneratePointCost:        strconv.FormatInt(req.ImageGeneratePointCost, 10),
@@ -185,7 +201,10 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 				return err
 			}
 		}
-		return s.reloadSystemSettings(tx)
+		if err := s.reloadSystemSettings(tx); err != nil {
+			return err
+		}
+		return recordAdminActionLog(tx, adminID, "billing_settings.update", "billing_settings", "global", before, after, "积分与奖励规则")
 	}); err != nil {
 		return dto.BillingSettingsResponse{}, err
 	}
@@ -205,6 +224,13 @@ func settingBoolString(value *bool, fallback bool) string {
 		return strconv.FormatBool(fallback)
 	}
 	return strconv.FormatBool(*value)
+}
+
+func settingBoolValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func upsertSystemSetting(tx *gorm.DB, key, value, description string) error {

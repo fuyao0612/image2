@@ -295,6 +295,51 @@ func TestAdminStatsExcludesAdminUsersAndSplitsAssetSources(t *testing.T) {
 	}
 }
 
+func TestUpdateBillingSettingsRecordsAdminActionLog(t *testing.T) {
+	svc, db := newTestService(t)
+	ctx := context.Background()
+	admin := createTestUser(t, db, 0)
+	if err := db.Model(&model.User{}).Where("id = ?", admin.ID).Updates(map[string]any{
+		"role":  model.UserRoleAdmin,
+		"email": "settings-admin@example.com",
+	}).Error; err != nil {
+		t.Fatalf("promote admin: %v", err)
+	}
+
+	enabled := true
+	emailNotifyEnabled := true
+	emailNotifyCost := int64(2)
+	checkinPoints := int64(5)
+	checkinCredits := int64(2)
+	inviteRewardPoints := int64(3)
+	inviteRewardCredits := int64(4)
+	registrationInviteBonusPoints := int64(6)
+	registrationGiftCredits := int64(7)
+
+	if _, err := svc.UpdateBillingSettings(ctx, admin.ID, dto.UpdateBillingSettingsRequest{
+		ImageGeneratePointCost:        22,
+		ImageGenerationEnabled:        &enabled,
+		EmailNotifyEnabled:            &emailNotifyEnabled,
+		EmailNotifyPointCost:          &emailNotifyCost,
+		CheckinPoints:                 &checkinPoints,
+		CheckinCredits:                &checkinCredits,
+		InviteRewardPoints:            &inviteRewardPoints,
+		InviteRewardCredits:           &inviteRewardCredits,
+		RegistrationInviteBonusPoints: &registrationInviteBonusPoints,
+		RegistrationGiftCredits:       &registrationGiftCredits,
+	}); err != nil {
+		t.Fatalf("update billing settings: %v", err)
+	}
+
+	var actionLog model.AdminActionLog
+	if err := db.Where("action = ? AND target_type = ? AND target_id = ?", "billing_settings.update", "billing_settings", "global").First(&actionLog).Error; err != nil {
+		t.Fatalf("expected billing settings action log: %v", err)
+	}
+	if !strings.Contains(actionLog.AfterJSON, `"imageGeneratePointCost":22`) || !strings.Contains(actionLog.BeforeJSON, "imageGeneratePointCost") {
+		t.Fatalf("expected before/after settings snapshots, before=%s after=%s", actionLog.BeforeJSON, actionLog.AfterJSON)
+	}
+}
+
 func createTestUserWithPassword(t *testing.T, db *gorm.DB, username, email, password string) model.User {
 	t.Helper()
 
@@ -923,6 +968,77 @@ func TestPersistPartialImageTaskKeepsGeneratingStatus(t *testing.T) {
 	}
 }
 
+func TestPersistPartialImageTaskStoresRemoteImages(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageStorageDriver = "local"
+	svc.cfg.ImageStorageLocalDir = t.TempDir()
+	svc.cfg.ImageStorageMaxBytes = 1024 * 1024
+	svc.cfg.ImageStoragePublicPath = "/uploads"
+	svc.cfg.BackendPublicURL = "https://example.com"
+	svc.cfg.ImageStorageTimeout = time.Second
+
+	var err error
+	svc.imageStore, err = imagestorage.New(imagestorage.Config{
+		Driver:        svc.cfg.ImageStorageDriver,
+		LocalDir:      svc.cfg.ImageStorageLocalDir,
+		PublicPath:    svc.cfg.ImageStoragePublicPath,
+		Timeout:       time.Second,
+		MaxBytes:      svc.cfg.ImageStorageMaxBytes,
+		PublicBaseURL: svc.cfg.BackendPublicURL,
+	})
+	if err != nil {
+		t.Fatalf("new image store: %v", err)
+	}
+
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 2, 0)
+
+	pngBytes := []byte{
+		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A',
+		'T', 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+		0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+		0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 'I', 'E',
+		'N', 'D', 0xae, 0x42, 0x60, 0x82,
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes)
+	}))
+	defer server.Close()
+
+	err = svc.persistPartialImageTask(context.Background(), task.ID, user.ID, provider.GenerateResult{
+		ProviderTaskID: "batch-partial",
+		Status:         model.ImageTaskStatusGenerating,
+		ImageURL:       server.URL + "/results/batch-partial/one.png",
+		ImageURLs: []string{
+			server.URL + "/results/batch-partial/one.png",
+		},
+		RawResponse: `{"status":"running"}`,
+	})
+	if err != nil {
+		t.Fatalf("persist partial image task: %v", err)
+	}
+
+	var reloaded model.ImageTask
+	if err := db.First(&reloaded, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.Status != model.ImageTaskStatusGenerating {
+		t.Fatalf("expected task to remain generating, got %s", reloaded.Status)
+	}
+	if !strings.HasPrefix(reloaded.ImageURL, "https://example.com/uploads/") {
+		t.Fatalf("expected stored partial image url, got %q", reloaded.ImageURL)
+	}
+	urls := imageURLsFromTask(reloaded)
+	if len(urls) != 1 || !strings.HasPrefix(urls[0], "https://example.com/uploads/") {
+		t.Fatalf("expected one stored partial image url, got %#v", urls)
+	}
+}
+
 func TestPollImageTaskV2ContinuesAfterTemporaryFailedStatus(t *testing.T) {
 	svc, db := newTestService(t)
 	svc.cfg.ImageProviderPollInterval = time.Millisecond
@@ -1029,6 +1145,97 @@ func TestPollImageTaskV2WaitsForRequestedImageCount(t *testing.T) {
 	urls := normalizeGeneratedImageURLs(result, 2, "")
 	if len(urls) != 2 {
 		t.Fatalf("expected two result urls, got %#v", urls)
+	}
+}
+
+func TestPollImageTaskV2AllowsSlowRunningTaskToFinish(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageProviderPollInterval = time.Millisecond
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/batches/batch-slow" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		current := atomic.AddInt32(&attempts, 1)
+		if current < 4 {
+			_, _ = w.Write([]byte(`{"id":"batch-slow","status":"running"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"batch-slow","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-slow/final.png"}]}`))
+	}))
+	defer server.Close()
+
+	activeProvider := provider.NewMentaloutProvider(provider.MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+		PollInterval:       time.Millisecond,
+		Timeout:            time.Second,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := svc.pollImageTaskV2(ctx, task.ID, user.ID, 1, activeProvider, "batch-slow", provider.GenerateResult{
+		ProviderTaskID: "batch-slow",
+		Status:         model.ImageTaskStatusGenerating,
+	})
+	if err != nil {
+		t.Fatalf("poll image task: %v", err)
+	}
+	if result.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected slow running task to succeed, got %s", result.Status)
+	}
+	if atomic.LoadInt32(&attempts) != 4 {
+		t.Fatalf("expected 4 fetch attempts, got %d", attempts)
+	}
+}
+
+func TestPollImageTaskV2StopsAfterRepeatedTemporaryFailures(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageProviderPollInterval = time.Millisecond
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/batches/batch-flaky" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		atomic.AddInt32(&attempts, 1)
+		_, _ = w.Write([]byte(`{"id":"batch-flaky","status":"failed","errorMessage":"status_code=503, temporary upstream unavailable"}`))
+	}))
+	defer server.Close()
+
+	activeProvider := provider.NewMentaloutProvider(provider.MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+		PollInterval:       time.Millisecond,
+		Timeout:            time.Second,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := svc.pollImageTaskV2(ctx, task.ID, user.ID, 1, activeProvider, "batch-flaky", provider.GenerateResult{
+		ProviderTaskID: "batch-flaky",
+		Status:         model.ImageTaskStatusGenerating,
+	})
+	if err != nil {
+		t.Fatalf("poll image task: %v", err)
+	}
+	if result.Status != model.ImageTaskStatusFailed {
+		t.Fatalf("expected repeated temporary failures to stop as failed, got %s", result.Status)
+	}
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Fatalf("expected 3 fetch attempts before stopping, got %d", attempts)
+	}
+	if !strings.Contains(result.ErrorMessage, "长时间未完成") {
+		t.Fatalf("expected protective timeout message, got %q", result.ErrorMessage)
 	}
 }
 

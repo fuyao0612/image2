@@ -302,6 +302,7 @@ const sizeOptions = [
   { value: '1536x1024', label: '1536x1024 横图' },
   { value: '2048x2048', label: '2048x2048 2K 方图' },
   { value: '2048x1152', label: '2048x1152 2K 横图' },
+  { value: '1152x2048', label: '1152x2048 2K 竖图' },
   { value: '3840x2160', label: '3840x2160 4K 横图' },
   { value: '2160x3840', label: '2160x3840 4K 竖图' },
   { value: 'custom', label: '自定义尺寸' },
@@ -429,8 +430,8 @@ function App() {
   const [count, setCount] = useState(1)
   const [quality, setQuality] = useState('auto')
   const [outputFormat, setOutputFormat] = useState('default')
-  const [customWidth, setCustomWidth] = useState(1024)
-  const [customHeight, setCustomHeight] = useState(1024)
+  const [customWidth, setCustomWidth] = useState('1024')
+  const [customHeight, setCustomHeight] = useState('1024')
   const [referenceImageURL, setReferenceImageURL] = useState('')
   const [referenceImageName, setReferenceImageName] = useState('')
   const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
@@ -1994,8 +1995,8 @@ function App() {
     if (sizeState) {
       setSize(sizeState.size)
       if (typeof sizeState.customWidth === 'number' && typeof sizeState.customHeight === 'number') {
-        setCustomWidth(sizeState.customWidth)
-        setCustomHeight(sizeState.customHeight)
+          setCustomWidth(String(sizeState.customWidth))
+          setCustomHeight(String(sizeState.customHeight))
       }
     }
 
@@ -2154,8 +2155,8 @@ function App() {
     setCount(1)
     setQuality('auto')
     setOutputFormat('default')
-    setCustomWidth(1024)
-    setCustomHeight(1024)
+    setCustomWidth('1024')
+    setCustomHeight('1024')
     setEmailNotifyOnComplete(false)
     setReferenceImageURL('')
     setReferenceImageName('')
@@ -2460,8 +2461,8 @@ function App() {
     setCount(1)
     setQuality('auto')
     setOutputFormat('default')
-    setCustomWidth(1024)
-    setCustomHeight(1024)
+    setCustomWidth('1024')
+    setCustomHeight('1024')
     setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
@@ -3139,7 +3140,8 @@ function App() {
                             max={CUSTOM_SIZE_MAX_SIDE}
                             step={64}
                             value={customWidth}
-                            onChange={(event) => setCustomWidth(Number(event.target.value))}
+                            onChange={(event) => setCustomWidth(event.target.value)}
+                            placeholder="1024"
                             className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                           />
                         </label>
@@ -3151,7 +3153,8 @@ function App() {
                             max={CUSTOM_SIZE_MAX_SIDE}
                             step={64}
                             value={customHeight}
-                            onChange={(event) => setCustomHeight(Number(event.target.value))}
+                            onChange={(event) => setCustomHeight(event.target.value)}
+                            placeholder="1024"
                             className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                           />
                         </label>
@@ -5818,29 +5821,35 @@ function ProductPage({
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-5">
         {items.map((item) => {
-          const imageUrl = item.previewThumbUrl || item.previewUrl
+          const imageUrl = item.previewUrl || item.previewThumbUrl
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => onOpenDetail(item)}
-              className="overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+              className="overflow-hidden rounded-[22px] border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
             >
-              <div className="aspect-[4/3] overflow-hidden bg-slate-100 dark:bg-slate-950">
+              <div className="aspect-square overflow-hidden bg-slate-100 dark:bg-slate-950">
                 {imageUrl ? (
-                  <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                  <img
+                    src={imageUrl}
+                    alt={item.name}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <div className="flex h-full items-center justify-center text-slate-400">
                     <ShoppingBag className="h-8 w-8" />
                   </div>
                 )}
               </div>
-              <div className="flex min-h-[96px] flex-col p-3">
-                <h3 className="line-clamp-2 text-center text-[15px] font-semibold leading-5 text-slate-900 dark:text-slate-100">{item.name}</h3>
+              <div className="flex min-h-[92px] flex-col p-3">
+                <h3 className="truncate text-[15px] font-semibold leading-5 text-slate-900 dark:text-slate-100">{item.name}</h3>
                 {item.shortDescription ? (
-                  <p className="mt-1 line-clamp-2 text-xs leading-4 text-slate-500 dark:text-slate-400">{item.shortDescription}</p>
+                  <p className="mt-1 line-clamp-2 text-[12px] leading-4 text-slate-500 dark:text-slate-400">{item.shortDescription}</p>
                 ) : (
-                  <p className="mt-1 text-xs leading-4 text-slate-300 dark:text-slate-600"> </p>
+                  <p className="mt-1 text-[12px] leading-4 text-slate-300 dark:text-slate-600"> </p>
                 )}
                 <div className="mt-auto flex justify-end pt-2 text-sm font-bold text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
               </div>
@@ -5861,21 +5870,24 @@ function ProductDetailDialog({
   onClose: () => void
   onConfirm: () => void
 }) {
-  const imageUrl = item.previewThumbUrl || item.previewUrl
+  const imageUrl = item.previewUrl || item.previewThumbUrl
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
       <button type="button" className="absolute inset-0" aria-label="关闭商品详情" onClick={onClose} />
       <div className="relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <h3 className="line-clamp-2 text-xl font-black tracking-tight text-slate-950 dark:text-slate-100">{item.name}</h3>
+          {item.shortDescription ? (
+            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{item.shortDescription}</p>
+          ) : null}
           <div className="mt-2 text-lg font-black text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           <div className="overflow-hidden rounded-[20px] bg-slate-100 dark:bg-slate-950">
             {imageUrl ? (
-              <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="h-auto w-full object-cover" />
+              <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="aspect-square w-full object-cover" />
             ) : (
-              <div className="flex h-52 items-center justify-center bg-slate-100 text-slate-500 dark:bg-slate-950 dark:text-slate-500">
+              <div className="flex aspect-square items-center justify-center bg-slate-100 text-slate-500 dark:bg-slate-950 dark:text-slate-500">
                 <ShoppingBag className="h-12 w-12" />
               </div>
             )}
@@ -5891,15 +5903,8 @@ function ProductDetailDialog({
           ) : (
             <div className="mt-3 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">未分类</div>
           )}
-          {item.shortDescription ? (
-            <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-              <div className="mb-1 text-xs font-semibold text-slate-400">简短说明</div>
-              {item.shortDescription}
-            </div>
-          ) : null}
           {item.description ? (
-            <div className="mt-3 whitespace-pre-wrap rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
-              <div className="mb-1 text-xs font-semibold text-slate-400">详细说明</div>
+            <div className="mt-4 whitespace-pre-wrap rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
               {item.description}
             </div>
           ) : null}
@@ -6736,23 +6741,23 @@ function progressFromImageTaskItem(item: ImageTaskItem): GenerationProgress {
   }
 }
 
-function resolveSelectedSize(size: string, width: number, height: number): string {
+function resolveSelectedSize(size: string, width: string | number, height: string | number): string {
   if (size !== 'custom') {
     return size
   }
 
-  const safeWidth = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(width || 1024)))
-  const safeHeight = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(height || 1024)))
+  const safeWidth = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(width) || 1024)))
+  const safeHeight = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(height) || 1024)))
   return `${safeWidth}x${safeHeight}`
 }
 
-function validateSelectedSize(size: string, width: number, height: number): string | null {
+function validateSelectedSize(size: string, width: string | number, height: string | number): string | null {
   if (size !== 'custom') {
     return null
   }
 
-  const normalizedWidth = Math.floor(width)
-  const normalizedHeight = Math.floor(height)
+  const normalizedWidth = Math.floor(parseCustomDimension(width))
+  const normalizedHeight = Math.floor(parseCustomDimension(height))
   if (
     !Number.isFinite(normalizedWidth) ||
     !Number.isFinite(normalizedHeight) ||
@@ -6770,6 +6775,17 @@ function validateSelectedSize(size: string, width: number, height: number): stri
   }
 
   return null
+}
+
+function parseCustomDimension(value: string | number): number {
+  if (typeof value === 'number') {
+    return value
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return Number.NaN
+  }
+  return Number(trimmed)
 }
 
 function validateImageOptions(size: string, quality: string): string | null {
