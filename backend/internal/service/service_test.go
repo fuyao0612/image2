@@ -37,6 +37,11 @@ func newTestService(t *testing.T) (*Service, *gorm.DB) {
 	if err := db.AutoMigrate(&model.User{}, &model.PointsLog{}, &model.CreditLog{}, &model.ImageTask{}, &model.ImageProviderKey{}, &model.BillingPackage{}, &model.RedeemCode{}, &model.ContentAuditLog{}, &model.AdminActionLog{}, &model.SystemSetting{}, &model.Invitation{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db handle: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 
 	svc := New(config.Config{
 		JWTSecret:                 "test-secret",
@@ -337,6 +342,45 @@ func TestUpdateBillingSettingsRecordsAdminActionLog(t *testing.T) {
 	}
 	if !strings.Contains(actionLog.AfterJSON, `"imageGeneratePointCost":22`) || !strings.Contains(actionLog.BeforeJSON, "imageGeneratePointCost") {
 		t.Fatalf("expected before/after settings snapshots, before=%s after=%s", actionLog.BeforeJSON, actionLog.AfterJSON)
+	}
+}
+
+func TestMarkImageTaskEmailNotifyFailedRefundsSuccessNotificationCost(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 10, 0, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusSuccess, 1, 0)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"email_notify_enabled":     true,
+		"email_notify_cost_points": 3,
+		"email_notify_status":      model.ImageTaskEmailNotifyStatusSending,
+	}).Error; err != nil {
+		t.Fatalf("set task email notify fields: %v", err)
+	}
+
+	if err := svc.markImageTaskEmailNotifyFailedAndRefund(context.Background(), task.ID, user.ID, "send failed", true); err != nil {
+		t.Fatalf("mark notify failed: %v", err)
+	}
+
+	var reloadedUser model.User
+	if err := db.First(&reloadedUser, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if reloadedUser.PointsBalance != 13 {
+		t.Fatalf("expected refunded points balance 13, got %d", reloadedUser.PointsBalance)
+	}
+	var reloadedTask model.ImageTask
+	if err := db.First(&reloadedTask, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.EmailNotifyStatus != model.ImageTaskEmailNotifyStatusFailed || reloadedTask.EmailNotifyCostPoints != 0 {
+		t.Fatalf("expected failed notification with zero cost, got status=%s cost=%d", reloadedTask.EmailNotifyStatus, reloadedTask.EmailNotifyCostPoints)
+	}
+	var logCount int64
+	if err := db.Model(&model.PointsLog{}).Where("user_id = ? AND change_type = ? AND delta = ?", user.ID, model.PointsChangeTypeRefund, 3).Count(&logCount).Error; err != nil {
+		t.Fatalf("count refund log: %v", err)
+	}
+	if logCount != 1 {
+		t.Fatalf("expected one refund log, got %d", logCount)
 	}
 }
 
@@ -1902,6 +1946,82 @@ func TestSubmitImageTaskWithProviderPoolStopsFailoverOnTemporarySubmitError(t *t
 	}
 }
 
+func TestSubmitImageTaskWithProviderPoolFailsOverOnKeySpecificSubmitError(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var firstPosts int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&firstPosts, 1)
+			http.Error(w, "insufficient balance", http.StatusPaymentRequired)
+			return
+		}
+		t.Fatalf("unexpected first server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer firstServer.Close()
+
+	var secondPosts int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&secondPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-second","status":"running"}`))
+			return
+		}
+		t.Fatalf("unexpected second server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer secondServer.Close()
+
+	keys := []model.ImageProviderKey{
+		{
+			Name:              "low balance key",
+			Provider:          "mentalout",
+			BatchServiceURL:   firstServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-first",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          1,
+			AutoSwitchEnabled: true,
+		},
+		{
+			Name:              "second key",
+			Provider:          "mentalout",
+			BatchServiceURL:   secondServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-second",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          2,
+			AutoSwitchEnabled: true,
+		},
+	}
+	if err := db.Create(&keys).Error; err != nil {
+		t.Fatalf("create provider keys: %v", err)
+	}
+
+	result, _, keyID, err := svc.submitImageTaskWithProviderPool(context.Background(), task.ID, user.ID, provider.GenerateRequest{
+		Prompt: "test prompt",
+		Size:   "1024x1024",
+		Count:  1,
+	})
+	if err != nil {
+		t.Fatalf("expected failover to second key, got err=%v result=%+v", err, result)
+	}
+	if keyID != keys[1].ID {
+		t.Fatalf("expected second key id %d, got %d", keys[1].ID, keyID)
+	}
+	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
+		t.Fatalf("expected both keys tried once, first=%d second=%d", firstPosts, secondPosts)
+	}
+	var firstKey model.ImageProviderKey
+	if err := db.First(&firstKey, keys[0].ID).Error; err != nil {
+		t.Fatalf("load first key: %v", err)
+	}
+	if firstKey.Status != model.ImageProviderKeyStatusLowBalance {
+		t.Fatalf("expected first key low balance, got %s", firstKey.Status)
+	}
+}
+
 func TestAdminListUsersSearchesByID(t *testing.T) {
 	svc, db := newTestService(t)
 	admin := createTestUser(t, db, 0)
@@ -2137,9 +2257,10 @@ func TestInviteRewardGrantedAfterInviteeFirstRedeemCode(t *testing.T) {
 	}
 
 	wrongCode := model.RedeemCode{Code: "INVITEREDEEM001", PointsAmount: 1, Status: model.RedeemCodeStatusActive}
-	firstCode := model.RedeemCode{Code: fmt.Sprintf("ID%dREDEEM001", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
-	secondCode := model.RedeemCode{Code: fmt.Sprintf("ID%dREDEEM002", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
-	if err := db.Create(&[]model.RedeemCode{wrongCode, firstCode, secondCode}).Error; err != nil {
+	ambiguousCode := model.RedeemCode{Code: fmt.Sprintf("ID%d99-REDEEM000", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	firstCode := model.RedeemCode{Code: fmt.Sprintf("ID%d-REDEEM001", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	secondCode := model.RedeemCode{Code: fmt.Sprintf("ID%d-REDEEM002", invitee.ID), PointsAmount: 1, Status: model.RedeemCodeStatusActive}
+	if err := db.Create(&[]model.RedeemCode{wrongCode, ambiguousCode, firstCode, secondCode}).Error; err != nil {
 		t.Fatalf("create redeem codes: %v", err)
 	}
 
@@ -2160,6 +2281,17 @@ func TestInviteRewardGrantedAfterInviteeFirstRedeemCode(t *testing.T) {
 	}
 	if afterWrongPrefix.PointsBalance != before.PointsBalance || afterWrongPrefix.FreeCredits != before.FreeCredits {
 		t.Fatalf("invite reward should require ID-prefixed redeem code, before=%+v after=%+v", before, afterWrongPrefix)
+	}
+
+	if _, err := svc.RedeemCode(context.Background(), invitee.ID, dto.RedeemCodeRequest{Code: ambiguousCode.Code}); err != nil {
+		t.Fatalf("ambiguous-prefix redeem: %v", err)
+	}
+	var afterAmbiguousPrefix model.User
+	if err := db.First(&afterAmbiguousPrefix, inviter.ID).Error; err != nil {
+		t.Fatalf("load inviter after ambiguous-prefix redeem: %v", err)
+	}
+	if afterAmbiguousPrefix.PointsBalance != before.PointsBalance || afterAmbiguousPrefix.FreeCredits != before.FreeCredits {
+		t.Fatalf("invite reward should require exact IDx- prefix, before=%+v after=%+v", before, afterAmbiguousPrefix)
 	}
 
 	if _, err := svc.RedeemCode(context.Background(), invitee.ID, dto.RedeemCodeRequest{Code: firstCode.Code}); err != nil {

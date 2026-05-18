@@ -1136,6 +1136,20 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 	referenceImageURL := referenceImageURLFromRequestParams(taskMeta.RequestParams)
 	imageURLs := normalizeGeneratedImageURLs(result, taskMeta.RequestedCount, referenceImageURL)
 	imageURLs = s.storeGeneratedImages(taskID, userID, imageURLs)
+	requestedCount := taskMeta.RequestedCount
+	if requestedCount <= 0 {
+		requestedCount = 1
+	}
+	if len(imageURLs) < requestedCount {
+		message := "生成图片转存到本站失败，请稍后重试"
+		failResult := provider.GenerateResult{
+			ProviderTaskID: result.ProviderTaskID,
+			Status:         model.ImageTaskStatusFailed,
+			RawResponse:    result.RawResponse,
+			ErrorMessage:   message,
+		}
+		return s.failImageTaskAndRefund(taskID, userID, failResult, message)
+	}
 
 	imageURL := ""
 	if imageURL == "" && len(imageURLs) > 0 {
@@ -1220,12 +1234,15 @@ func (s *Service) storeGeneratedImages(taskID uint64, userID uint64, imageURLs [
 	keyPrefix := fmt.Sprintf("images/%s/user-%d/task-%d", s.now().Format("2006/01/02"), userID, taskID)
 	storedURLs, err := s.imageStore.StoreRemoteImages(ctx, imageURLs, keyPrefix)
 	if err != nil {
-		log.Printf("任务 %d 图片转存部分失败，已保留可用 URL: %v", taskID, err)
+		log.Printf("任务 %d 图片转存部分失败，已丢弃上游原始 URL: %v", taskID, err)
 	}
-	if len(storedURLs) == 0 {
-		return imageURLs
+	localURLs := make([]string, 0, len(storedURLs))
+	for _, storedURL := range storedURLs {
+		if s.isStoredImageURL(storedURL) {
+			localURLs = append(localURLs, storedURL)
+		}
 	}
-	return storedURLs
+	return localURLs
 }
 
 func (s *Service) hasRemoteImageURLs(imageURLs []string) bool {
@@ -2189,7 +2206,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 
 	imageStartedAt := time.Now()
 	if !s.claimImageTaskSubmitInDB(context.Background(), taskID, userID) {
-		log.Printf("寮傛鐢熷浘浠诲姟 %d 宸叉湁鎻愪氦涓爣璁帮紝璺宠繃閲嶅鎻愪氦", taskID)
+		log.Printf("异步生图任务 %d 已有提交中标记，跳过重复提交", taskID)
 		return
 	}
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
@@ -2423,7 +2440,11 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 	temporaryFailures := 0
 	runningFetches := 0
 	const maxTemporaryFailures = 3
-	const maxRunningFetches = 16
+	const maxRunningPollDuration = 8 * time.Minute
+	maxRunningFetches := int(maxRunningPollDuration / pollInterval)
+	if maxRunningFetches < 1 {
+		maxRunningFetches = 1
+	}
 	timeoutMessage := "上游任务长时间未完成，已停止继续查询以避免重复计费"
 
 	ticker := time.NewTicker(pollInterval)
@@ -2727,7 +2748,7 @@ func (s *Service) claimImageTaskSubmitInDB(ctx context.Context, taskID uint64, u
 			taskID, userID, model.ImageTaskStatusGenerating, "", "").
 		Update("provider_response", marker)
 	if result.Error != nil {
-		log.Printf("鐢熷浘浠诲姟 %d 鎻愪氦閿佸畾澶辫触: %v", taskID, result.Error)
+		log.Printf("生图任务 %d 提交锁定失败: %v", taskID, result.Error)
 		return false
 	}
 	return result.RowsAffected == 1

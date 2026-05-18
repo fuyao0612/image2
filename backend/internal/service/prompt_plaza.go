@@ -65,7 +65,7 @@ func (s *Service) SubmitPromptPlaza(ctx context.Context, userID uint64, req dto.
 		return dto.PromptPlazaItem{}, ErrPromptPlazaInvalid
 	}
 	if item.Author == "" {
-		item.Author = "鐢ㄦ埛" + strconv.FormatUint(userID, 10)
+		item.Author = "用户" + strconv.FormatUint(userID, 10)
 	}
 	if err := s.db.WithContext(ctx).Create(&item).Error; err != nil {
 		return dto.PromptPlazaItem{}, err

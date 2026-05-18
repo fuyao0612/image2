@@ -1655,6 +1655,7 @@ function App() {
     const optionsValidationMessage = validateImageOptions(requestSize, quality)
     if (optionsValidationMessage) {
       setMessage(optionsValidationMessage)
+      return
     }
 
     const taskCount = clampCount(count)
@@ -5827,7 +5828,7 @@ function ProductPage({
               key={item.id}
               type="button"
               onClick={() => onOpenDetail(item)}
-              className="overflow-hidden rounded-[22px] border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+              className="overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
             >
               <div className="aspect-square overflow-hidden bg-slate-100 dark:bg-slate-950">
                 {imageUrl ? (
@@ -5874,7 +5875,7 @@ function ProductDetailDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
       <button type="button" className="absolute inset-0" aria-label="关闭商品详情" onClick={onClose} />
-      <div className="relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+      <div className="relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <h3 className="line-clamp-2 text-xl font-black tracking-tight text-slate-950 dark:text-slate-100">{item.name}</h3>
           {item.shortDescription ? (
@@ -5883,7 +5884,7 @@ function ProductDetailDialog({
           <div className="mt-2 text-lg font-black text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="overflow-hidden rounded-[20px] bg-slate-100 dark:bg-slate-950">
+          <div className="overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-950">
             {imageUrl ? (
               <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="aspect-square w-full object-cover" />
             ) : (
@@ -5904,7 +5905,7 @@ function ProductDetailDialog({
             <div className="mt-3 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">未分类</div>
           )}
           {item.description ? (
-            <div className="mt-4 whitespace-pre-wrap rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+            <div className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm leading-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
               {item.description}
             </div>
           ) : null}

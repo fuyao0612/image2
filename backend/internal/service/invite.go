@@ -278,7 +278,7 @@ func (s *Service) grantInviteRewardAfterFirstRedeem(tx *gorm.DB, inviteeUserID u
 }
 
 func isInviteRewardRedeemCode(code string, inviteeUserID uint64) bool {
-	expectedPrefix := "ID" + strconv.FormatUint(inviteeUserID, 10)
+	expectedPrefix := "ID" + strconv.FormatUint(inviteeUserID, 10) + "-"
 	return strings.HasPrefix(normalizeRedeemCode(code), expectedPrefix)
 }
 

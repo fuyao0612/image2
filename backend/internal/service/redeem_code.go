@@ -168,11 +168,12 @@ func (s *Service) AdminListRedeemCodes(ctx context.Context, adminID uint64, stat
 	if keyword = strings.TrimSpace(keyword); keyword != "" {
 		like := "%" + keyword + "%"
 		normalizedCodeLike := "%" + normalizeRedeemCode(keyword) + "%"
+		legacyCodeLike := "%" + strings.ReplaceAll(normalizeRedeemCode(keyword), "-", "") + "%"
 		idKeyword := strings.TrimPrefix(keyword, "#")
 		if id, err := strconv.ParseUint(idKeyword, 10, 64); err == nil && id > 0 {
-			query = query.Where("id = ? OR created_by = ? OR used_by = ? OR code LIKE ? OR batch_no LIKE ? OR note LIKE ?", id, id, id, normalizedCodeLike, like, like)
+			query = query.Where("id = ? OR created_by = ? OR used_by = ? OR code LIKE ? OR code LIKE ? OR batch_no LIKE ? OR note LIKE ?", id, id, id, normalizedCodeLike, legacyCodeLike, like, like)
 		} else {
-			query = query.Where("code LIKE ? OR batch_no LIKE ? OR note LIKE ?", normalizedCodeLike, like, like)
+			query = query.Where("code LIKE ? OR code LIKE ? OR batch_no LIKE ? OR note LIKE ?", normalizedCodeLike, legacyCodeLike, like, like)
 		}
 	}
 
@@ -256,7 +257,6 @@ func redeemCodeToAdminDTO(code model.RedeemCode) dto.AdminRedeemCodeItem {
 func normalizeRedeemCode(value string) string {
 	value = strings.ToUpper(strings.TrimSpace(value))
 	value = strings.ReplaceAll(value, " ", "")
-	value = strings.ReplaceAll(value, "-", "")
 	value = strings.ReplaceAll(value, "_", "")
 	return value
 }

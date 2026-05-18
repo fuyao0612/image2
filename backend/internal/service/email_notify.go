@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"image2/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func emailNotifyStatus(enabled bool) string {
@@ -30,7 +32,7 @@ func (s *Service) notifyUserImageTaskFailureAsync(taskID uint64, userID uint64) 
 }
 
 func (s *Service) notifyUserImageTaskAsync(taskID uint64, userID uint64, success bool) {
-	if s == nil || s.mailer == nil || !s.mailer.TaskNotificationConfigured() {
+	if s == nil || s.db == nil {
 		return
 	}
 
@@ -46,6 +48,11 @@ func (s *Service) notifyUserImageTaskAsync(taskID uint64, userID uint64, success
 			return
 		}
 		if task.EmailNotifyStatus != model.ImageTaskEmailNotifyStatusPending {
+			return
+		}
+
+		if s.mailer == nil || !s.mailer.TaskNotificationConfigured() {
+			_ = s.markImageTaskEmailNotifyFailedAndRefund(ctx, task.ID, userID, "腾讯云任务通知邮件未配置", success)
 			return
 		}
 
@@ -65,13 +72,13 @@ func (s *Service) notifyUserImageTaskAsync(taskID uint64, userID uint64, success
 		}
 		to := normalizeEmail(user.Email)
 		if to == "" {
-			_ = s.markImageTaskEmailNotifyFailed(ctx, task.ID, "用户邮箱为空")
+			_ = s.markImageTaskEmailNotifyFailedAndRefund(ctx, task.ID, userID, "用户邮箱为空", success)
 			return
 		}
 
 		subject, data := s.buildUserImageTaskEmail(task, success)
 		if err := s.mailer.SendTaskNotification(ctx, to, subject, data); err != nil {
-			_ = s.markImageTaskEmailNotifyFailed(ctx, task.ID, err.Error())
+			_ = s.markImageTaskEmailNotifyFailedAndRefund(ctx, task.ID, userID, err.Error(), success)
 			log.Printf("发送用户任务邮件通知失败: to=%s task=%d err=%v", to, task.ID, err)
 			return
 		}
@@ -86,17 +93,43 @@ func (s *Service) notifyUserImageTaskAsync(taskID uint64, userID uint64, success
 	}()
 }
 
-func (s *Service) markImageTaskEmailNotifyFailed(ctx context.Context, taskID uint64, message string) error {
+func (s *Service) markImageTaskEmailNotifyFailedAndRefund(ctx context.Context, taskID uint64, userID uint64, message string, refundCost bool) error {
 	message = strings.TrimSpace(message)
 	if len(message) > 500 {
 		message = message[:500]
 	}
-	return s.db.WithContext(ctx).Model(&model.ImageTask{}).
-		Where("id = ? AND email_notify_enabled = ? AND email_notify_status <> ?", taskID, true, model.ImageTaskEmailNotifyStatusSent).
-		Updates(map[string]any{
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var task model.ImageTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ? AND email_notify_enabled = ? AND email_notify_status <> ?", taskID, userID, true, model.ImageTaskEmailNotifyStatusSent).
+			First(&task).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+
+		updates := map[string]any{
 			"email_notify_status": model.ImageTaskEmailNotifyStatusFailed,
 			"email_notify_error":  message,
-		}).Error
+		}
+		if refundCost && task.EmailNotifyCostPoints > 0 {
+			user, err := s.lockUser(tx, userID)
+			if err != nil {
+				return err
+			}
+			before := user.PointsBalance
+			after := before + task.EmailNotifyCostPoints
+			if err := tx.Model(&model.User{}).Where("id = ?", userID).Update("points_balance", after).Error; err != nil {
+				return err
+			}
+			if err := s.recordPointsLog(tx, userID, model.PointsChangeTypeRefund, task.EmailNotifyCostPoints, before, after, "image_task", strconv.FormatUint(task.ID, 10), "任务邮件通知发送失败退回积分"); err != nil {
+				return err
+			}
+			updates["email_notify_cost_points"] = int64(0)
+		}
+		return tx.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(updates).Error
+	})
 }
 
 func (s *Service) buildUserImageTaskEmail(task model.ImageTask, success bool) (string, mailer.TaskNotification) {
