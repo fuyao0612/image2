@@ -1,4 +1,4 @@
-package service
+﻿package service
 
 import (
 	"context"
@@ -124,7 +124,14 @@ func (s *Service) checkInV2(ctx context.Context, userID uint64) (dto.CheckinResp
 			TotalCredits:  afterCredits.Total(),
 			LastCheckinAt: lastCheckinAt,
 		}
-		return nil
+		return s.recordSiteActionLog(tx, "user", user.ID, "user.checkin", "checkin", dayKey(today), "每日签到", "用户完成今日签到", "success", map[string]any{
+			"streak":        streak,
+			"gainedPoints":  gainedPoints,
+			"gainedCredits": gainedCredits,
+			"afterPoints":   afterPoints,
+			"afterFree":     afterCredits.Free,
+			"afterPaid":     afterCredits.Paid,
+		})
 	})
 	if err != nil {
 		return dto.CheckinResponse{}, err
@@ -361,6 +368,21 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 			if err := s.recordPointsLog(tx, userID, model.PointsChangeTypeGenerate, -emailNotifyCost, beforeNotifyPoints, afterPoints, "image_task", strconv.FormatUint(task.ID, 10), "任务邮件通知消耗"); err != nil {
 				return err
 			}
+		}
+		if err := s.recordSiteActionLog(tx, "user", userID, "image_task.create", "image_task", strconv.FormatUint(task.ID, 10), "提交生图任务", "用户提交新的生图任务", "success", map[string]any{
+			"prompt":                prompt,
+			"size":                  size,
+			"style":                 style,
+			"count":                 requestedCount,
+			"quality":               quality,
+			"outputFormat":          outputFormat,
+			"referenceImageCount":   len(referenceImageURLs),
+			"costPoints":            pointSpend,
+			"costCredits":           creditSpend,
+			"emailNotifyEnabled":    req.EmailNotifyOnComplete,
+			"emailNotifyCostPoints": emailNotifyCost,
+		}); err != nil {
+			return err
 		}
 
 		responseData = dto.CreateImageTaskResponse{

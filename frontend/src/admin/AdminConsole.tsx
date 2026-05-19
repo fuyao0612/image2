@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+﻿import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Activity, AlertTriangle, ArrowLeft, Database, Edit, Eye, FileText, KeyRound, LayoutDashboard, LoaderCircle, LogOut, Menu, RefreshCcw, Save, Search, Sparkles, Timer, TrendingUp, Users, X } from 'lucide-react'
 import { api } from '@/api/client'
@@ -176,7 +176,7 @@ function Products(p: { data: AdminListProductsResponse | null; categories: Produ
 }
 
 function ProviderKeys(p: { data: AdminListProviderKeysResponse | null; busy: Busy; page: number; setPage: (v: number) => void; create: () => void; edit: (item: AdminProviderKeyItem) => void; useKey: (item: AdminProviderKeyItem) => void; del: (item: AdminProviderKeyItem) => void }) {
-  return <Panel title="API Key 配置" desc="维护生图供应商 API Key、优先级和自动切换策略。" actions={<Button primary onClick={p.create}>新建 API Key</Button>}><ResponsiveTable headers={['名称','状态','使用状态','优先级','自动切换','调用统计','最近使用','最近错误','操作']} rows={(p.data?.items ?? []).map(item => [<div><div className="font-semibold">{item.name}</div><div className="text-xs text-slate-500">{item.provider} / {item.apiKeyMasked}</div></div>, <StatusPill value={item.status} />, <StatusPill value={item.isUsing ? '使用中' : '未使用'} />, item.priority, item.autoSwitchEnabled ? '开启' : '关闭', `成功 ${item.successCount} / 失败 ${item.failureCount}`, date(item.lastUsedAt), clip(item.lastError, 32) || '-', <div className="flex flex-wrap gap-2"><Button small disabled={item.isUsing || p.busy === `use-key-${item.id}`} onClick={() => p.useKey(item)}>{item.isUsing ? '使用中' : '使用'}</Button><Button small onClick={() => p.edit(item)}>编辑</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无 API Key" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? 20} onChange={p.setPage} /></Panel>
+  return <Panel title="API Key 配置" desc="维护生图供应商 API Key、优先级和自动切换策略。" actions={<Button primary onClick={p.create}>新建 API Key</Button>}><ResponsiveTable headers={['名称','状态','使用状态','优先级','自动切换','调用统计','最近使用','操作']} rows={(p.data?.items ?? []).map(item => [<div><div className="font-semibold">{item.name}</div><div className="text-xs text-slate-500">{item.provider} / {item.apiKeyMasked}</div></div>, <StatusPill value={item.status} />, <StatusPill value={item.isUsing ? '使用中' : '未使用'} />, item.priority, item.autoSwitchEnabled ? '开启' : '关闭', `成功 ${item.successCount} / 失败 ${item.failureCount}`, date(item.lastUsedAt), <div className="flex flex-wrap gap-2"><Button small disabled={item.isUsing || p.busy === `use-key-${item.id}`} onClick={() => p.useKey(item)}>{item.isUsing ? '使用中' : '使用'}</Button><Button small onClick={() => p.edit(item)}>编辑</Button><Button small danger onClick={() => p.del(item)}>删除</Button></div>])} empty="暂无 API Key" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? 20} onChange={p.setPage} /></Panel>
 }
 
 function Announcements(p: { data: AdminListAnnouncementsResponse | null; page: number; setPage: (v: number) => void; create: () => void; edit: (item: AnnouncementItem) => void; del: (item: AnnouncementItem) => void }) {
@@ -237,8 +237,17 @@ function cleanupTypeLabel(type: DataCleanupRequest['type']) {
   return labels[type] || type
 }
 
+const logTypeOptions: Array<[string, string]> = [
+  ['', '全部日志'],
+  ['site_action', '全站行为'],
+  ['admin_action', '后台操作'],
+  ['points_log', '积分流水'],
+  ['credit_log', '福利次数流水'],
+  ['image_task', '生图任务'],
+]
+
 function Logs(p: { data: AdminListActionLogsResponse | null; targetType: string; targetId: string; setTargetType: (v: string) => void; setTargetId: (v: string) => void; search: () => void; page: number; setPage: (v: number) => void; open: (item: AdminActionLogItem) => void }) {
-  return <Panel title="网站日志" desc="展示全站用户行为和管理员操作，包括生图任务、积分流水、福利次数流水、后台操作等。" actions={<div className="flex flex-wrap gap-2"><LabeledInput label="" value={p.targetType} onChange={p.setTargetType} placeholder="对象类型，可空" /><LabeledInput label="" value={p.targetId} onChange={p.setTargetId} placeholder="对象编号，可空" /><Button onClick={p.search}>搜索</Button></div>}><ResponsiveTable headers={['ID','操作人','日志类型','操作内容','操作对象','简略信息','创建时间','详情']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.id}</Mono>, <span>{item.actorLabel || (item.userId ? `用户 #${item.userId}` : `管理员 #${item.adminId}`)}</span>, siteLogTypeLabel(item), item.title || logActionLabel(item.action), logTargetLabel(item), clip(item.description || item.remark, 64) || '-', date(item.createdAt), <Button small onClick={() => p.open(item)}>详情</Button>])} empty="暂无日志" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
+  return <Panel title="网站日志" desc="展示全站用户行为和管理员操作，包括生图任务、积分流水、福利次数流水、后台操作等。" actions={<div className="flex flex-wrap gap-2"><Select value={p.targetType} onChange={p.setTargetType} options={logTypeOptions} /><LabeledInput label="" value={p.targetId} onChange={p.setTargetId} placeholder="对象编号，可空" /><Button onClick={p.search}>搜索</Button></div>}><ResponsiveTable headers={['ID','操作人','日志类型','操作内容','操作对象','简略信息','创建时间','详情']} rows={(p.data?.items ?? []).map(item => [<Mono>{item.id}</Mono>, <span>{item.actorLabel || (item.userId ? `用户 #${item.userId}` : `管理员 #${item.adminId}`)}</span>, siteLogTypeLabel(item), item.title || logActionLabel(item.action), logTargetLabel(item), clip(item.description || item.remark, 64) || '-', date(item.createdAt), <Button small onClick={() => p.open(item)}>详情</Button>])} empty="暂无日志" /><Pagination page={p.page} total={p.data?.total ?? 0} pageSize={p.data?.pageSize ?? PAGE_SIZE} onChange={p.setPage} /></Panel>
 }
 
 function AllModals(props: { state: Modal; setState: (m: Modal) => void; busy: Busy; categories: ProductCategoryItem[]; onSavePrompt: (item: PromptPlazaItem | null, payload: AdminPromptPlazaPayload) => void; onReviewPrompt: (item: PromptPlazaItem, status: 'approved' | 'rejected', reason?: string) => void; onDeletePrompt: (item: PromptPlazaItem, reason?: string) => void; onSavePackage: (item: AdminPackageItem | null, payload: AdminPackagePayload) => void; onSaveProduct: (item: ProductItem | null, payload: AdminProductPayload) => void; onSaveCategory: (item: ProductCategoryItem | null, payload: AdminProductCategoryPayload) => void; onSaveProviderKey: (item: AdminProviderKeyItem | null, payload: AdminProviderKeyPayload) => void; onSaveAnnouncement: (item: AnnouncementItem | null, payload: AdminAnnouncementPayload) => void; onSavePoints: () => void; onOpenUserLogs: (user: AdminUserItem, page: number) => void }) {
@@ -383,8 +392,19 @@ function logActionLabel(action: string): string {
     'provider_key.create': '新建 API Key',
     'provider_key.update': '修改 API Key',
     'provider_key.delete': '删除 API Key',
+    'provider_key.use': '切换使用中的 API Key',
     'user.status': '修改用户状态',
     'user.points_adjust': '调整用户积分',
+    'user.register': '用户注册',
+    'user.login': '用户登录',
+    'user.reset_password': '重置密码',
+    'user.checkin': '每日签到',
+    'image_task.create': '提交生图任务',
+    'redeem_code.use': '使用兑换码',
+    'announcement.read': '阅读公告',
+    'prompt_plaza.submit': '提交提示词',
+    'prompt_plaza.favorite.add': '收藏提示词',
+    'prompt_plaza.favorite.remove': '取消收藏提示词',
   }
   return map[action] || action.replace(/\./g, ' / ')
 }
@@ -392,6 +412,7 @@ function siteLogTypeLabel(item: AdminActionLogItem): string {
   const type = item.recordType || item.targetType || ''
   const map: Record<string, string> = {
     admin_action: '后台操作',
+    site_action: '全站行为',
     points_log: '积分流水',
     credit_log: '福利次数流水',
     image_task: '生图任务',
@@ -411,6 +432,7 @@ function logTargetLabel(item: AdminActionLogItem): string {
     provider_key: 'API Key',
     user: '用户',
     image_task: '生图任务',
+    announcement_read: '公告阅读',
     order: '订单',
     redeem: '兑换',
     checkin: '签到',

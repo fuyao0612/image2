@@ -95,7 +95,12 @@ func (s *Service) RedeemCode(ctx context.Context, userID uint64, req dto.RedeemC
 			TotalCreditsBalance: freeAfter + paidAfter,
 			RedeemedAt:          now.Format(time.RFC3339),
 		}
-		return nil
+		return s.recordSiteActionLog(tx, "user", userID, "redeem_code.use", "redeem_code", strconv.FormatUint(code.ID, 10), "兑换兑换码", "用户成功使用兑换码", "success", map[string]any{
+			"code":          code.Code,
+			"pointsAmount":  code.PointsAmount,
+			"creditsAmount": code.CreditsAmount,
+			"batchNo":       code.BatchNo,
+		})
 	})
 	return resp, err
 }

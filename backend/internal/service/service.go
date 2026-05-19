@@ -1,4 +1,4 @@
-package service
+﻿package service
 
 import (
 	"context"
@@ -1140,7 +1140,7 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 	if requestedCount <= 0 {
 		requestedCount = 1
 	}
-	if len(imageURLs) < requestedCount {
+	if len(imageURLs) == 0 {
 		message := "生成图片转存到本站失败，请稍后重试"
 		failResult := provider.GenerateResult{
 			ProviderTaskID: result.ProviderTaskID,
@@ -1234,15 +1234,20 @@ func (s *Service) storeGeneratedImages(taskID uint64, userID uint64, imageURLs [
 	keyPrefix := fmt.Sprintf("images/%s/user-%d/task-%d", s.now().Format("2006/01/02"), userID, taskID)
 	storedURLs, err := s.imageStore.StoreRemoteImages(ctx, imageURLs, keyPrefix)
 	if err != nil {
-		log.Printf("任务 %d 图片转存部分失败，已丢弃上游原始 URL: %v", taskID, err)
+		log.Printf("任务 %d 图片转存部分失败，已保留原始 URL：%v", taskID, err)
 	}
-	localURLs := make([]string, 0, len(storedURLs))
+	finalURLs := make([]string, 0, len(storedURLs))
+	fallbackCount := 0
 	for _, storedURL := range storedURLs {
-		if s.isStoredImageURL(storedURL) {
-			localURLs = append(localURLs, storedURL)
+		if !s.isStoredImageURL(storedURL) {
+			fallbackCount++
 		}
+		finalURLs = append(finalURLs, storedURL)
 	}
-	return localURLs
+	if fallbackCount > 0 {
+		log.Printf("任务 %d 图片转存后仍保留 %d 张上游 URL", taskID, fallbackCount)
+	}
+	return finalURLs
 }
 
 func (s *Service) hasRemoteImageURLs(imageURLs []string) bool {

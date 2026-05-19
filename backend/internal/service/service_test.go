@@ -34,7 +34,7 @@ func newTestService(t *testing.T) (*Service, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.PointsLog{}, &model.CreditLog{}, &model.ImageTask{}, &model.ImageProviderKey{}, &model.BillingPackage{}, &model.RedeemCode{}, &model.ContentAuditLog{}, &model.AdminActionLog{}, &model.SystemSetting{}, &model.Invitation{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.PointsLog{}, &model.CreditLog{}, &model.ImageTask{}, &model.ImageProviderKey{}, &model.BillingPackage{}, &model.RedeemCode{}, &model.ContentAuditLog{}, &model.AdminActionLog{}, &model.SiteActionLog{}, &model.SystemSetting{}, &model.Invitation{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	sqlDB, err := db.DB()
@@ -2019,6 +2019,83 @@ func TestSubmitImageTaskWithProviderPoolFailsOverOnKeySpecificSubmitError(t *tes
 	}
 	if firstKey.Status != model.ImageProviderKeyStatusLowBalance {
 		t.Fatalf("expected first key low balance, got %s", firstKey.Status)
+	}
+}
+
+func TestSubmitImageTaskWithProviderPoolFailsOverOnFailedBalanceResult(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var firstPosts int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&firstPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-low-balance","status":"failed","tasks":[{"status":"failed","errorMessage":"upstream http 403: quota left: 0.000000; code=insufficient_user_quota"}]}`))
+			return
+		}
+		t.Fatalf("unexpected first server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer firstServer.Close()
+
+	var secondPosts int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&secondPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-second","status":"running"}`))
+			return
+		}
+		t.Fatalf("unexpected second server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer secondServer.Close()
+
+	keys := []model.ImageProviderKey{
+		{
+			Name:              "low balance result key",
+			Provider:          "mentalout",
+			BatchServiceURL:   firstServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-first",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          1,
+			AutoSwitchEnabled: true,
+		},
+		{
+			Name:              "second key",
+			Provider:          "mentalout",
+			BatchServiceURL:   secondServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-second",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          2,
+			AutoSwitchEnabled: true,
+		},
+	}
+	if err := db.Create(&keys).Error; err != nil {
+		t.Fatalf("create provider keys: %v", err)
+	}
+
+	result, _, keyID, err := svc.submitImageTaskWithProviderPool(context.Background(), task.ID, user.ID, provider.GenerateRequest{
+		Prompt: "test prompt",
+		Size:   "1024x1024",
+		Count:  1,
+	})
+	if err != nil {
+		t.Fatalf("expected failover to second key, got err=%v result=%+v", err, result)
+	}
+	if keyID != keys[1].ID {
+		t.Fatalf("expected second key id %d, got %d", keys[1].ID, keyID)
+	}
+	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
+		t.Fatalf("expected both keys tried once, first=%d second=%d", firstPosts, secondPosts)
+	}
+}
+
+func TestNormalizeProviderFailureMessageTreatsInsufficientUserQuotaAsBalanceError(t *testing.T) {
+	message := `upstream http 403: quota left: 0.000000 (request id: xxx); code=insufficient_user_quota; type=new_api_error`
+	got := normalizeProviderFailureMessage(message)
+	if !strings.Contains(got, "余额或额度不足") {
+		t.Fatalf("expected balance error message, got %q", got)
 	}
 }
 

@@ -1,4 +1,4 @@
-package service
+﻿package service
 
 import (
 	"context"
@@ -193,51 +193,7 @@ func (s *Service) AdminListActionLogs(ctx context.Context, adminID uint64, targe
 		return dto.AdminListActionLogsResponse{}, err
 	}
 	page, pageSize = normalizePage(page, pageSize)
-	if strings.TrimSpace(targetType) == "" && strings.TrimSpace(targetID) == "" && strings.TrimSpace(action) == "" {
-		return s.adminListSiteLogs(ctx, page, pageSize)
-	}
-
-	query := s.db.WithContext(ctx).Model(&model.AdminActionLog{})
-	if targetType = strings.TrimSpace(targetType); targetType != "" {
-		query = query.Where("target_type = ?", targetType)
-	}
-	if targetID = strings.TrimSpace(targetID); targetID != "" {
-		query = query.Where("target_id = ?", targetID)
-	}
-	if action = strings.TrimSpace(action); action != "" {
-		query = query.Where("action = ?", action)
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return dto.AdminListActionLogsResponse{}, err
-	}
-
-	var logs []model.AdminActionLog
-	if err := query.Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
-		return dto.AdminListActionLogsResponse{}, err
-	}
-
-	items := make([]dto.AdminActionLogItem, 0, len(logs))
-	for _, log := range logs {
-		items = append(items, dto.AdminActionLogItem{
-			ID:          strconv.FormatUint(log.ID, 10),
-			AdminID:     strconv.FormatUint(log.AdminID, 10),
-			ActorLabel:  fmt.Sprintf("管理员 #%d", log.AdminID),
-			Action:      log.Action,
-			RecordType:  "admin_action",
-			TargetType:  log.TargetType,
-			TargetID:    log.TargetID,
-			Title:       log.Action,
-			Description: log.Remark,
-			BeforeJSON:  log.BeforeJSON,
-			AfterJSON:   log.AfterJSON,
-			Remark:      log.Remark,
-			CreatedAt:   log.CreatedAt,
-		})
-	}
-
-	return dto.AdminListActionLogsResponse{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+	return s.adminListSiteLogs(ctx, page, pageSize, targetType, targetID, action)
 }
 
 type adminSiteLogRecord struct {
@@ -245,49 +201,151 @@ type adminSiteLogRecord struct {
 	Item      dto.AdminActionLogItem
 }
 
-func (s *Service) adminListSiteLogs(ctx context.Context, page int, pageSize int) (dto.AdminListActionLogsResponse, error) {
+func (s *Service) adminListSiteLogs(ctx context.Context, page int, pageSize int, targetType string, targetID string, action string) (dto.AdminListActionLogsResponse, error) {
 	limit := page * pageSize
 	if limit < pageSize {
 		limit = pageSize
 	}
+	targetType = strings.TrimSpace(targetType)
+	targetID = strings.TrimSpace(targetID)
+	action = strings.TrimSpace(action)
+	recordTypeFilter := targetType
+	targetTypeFilter := targetType
+	switch targetType {
+	case "site_action", "admin_action", "points_log", "credit_log", "image_task":
+		targetTypeFilter = ""
+	default:
+		recordTypeFilter = ""
+	}
 
 	var adminTotal int64
-	if err := s.db.WithContext(ctx).Model(&model.AdminActionLog{}).Count(&adminTotal).Error; err != nil {
+	var adminLogs []model.AdminActionLog
+	if recordTypeFilter != "" && recordTypeFilter != "admin_action" {
+		adminTotal = 0
+	} else {
+	adminQuery := s.db.WithContext(ctx).Model(&model.AdminActionLog{})
+	if targetTypeFilter != "" {
+		adminQuery = adminQuery.Where("target_type = ?", targetTypeFilter)
+	}
+	if targetID != "" {
+		adminQuery = adminQuery.Where("target_id = ?", targetID)
+	}
+	if action != "" {
+		adminQuery = adminQuery.Where("action = ?", action)
+	}
+	if err := adminQuery.Count(&adminTotal).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
 	}
-	var adminLogs []model.AdminActionLog
-	if err := s.db.WithContext(ctx).Order("created_at desc, id desc").Limit(limit).Find(&adminLogs).Error; err != nil {
+	if err := adminQuery.Order("created_at desc, id desc").Limit(limit).Find(&adminLogs).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
+	}
+	}
+
+	var siteTotal int64
+	var siteLogs []model.SiteActionLog
+	if recordTypeFilter != "" && recordTypeFilter != "site_action" {
+		siteTotal = 0
+	} else {
+	siteQuery := s.db.WithContext(ctx).Model(&model.SiteActionLog{})
+	if targetTypeFilter != "" {
+		siteQuery = siteQuery.Where("target_type = ?", targetTypeFilter)
+	}
+	if targetID != "" {
+		siteQuery = siteQuery.Where("target_id = ?", targetID)
+	}
+	if action != "" {
+		siteQuery = siteQuery.Where("action = ?", action)
+	}
+	if err := siteQuery.Count(&siteTotal).Error; err != nil {
+		return dto.AdminListActionLogsResponse{}, err
+	}
+	if err := siteQuery.Order("created_at desc, id desc").Limit(limit).Find(&siteLogs).Error; err != nil {
+		return dto.AdminListActionLogsResponse{}, err
+	}
 	}
 
 	var pointsTotal int64
-	if err := s.db.WithContext(ctx).Model(&model.PointsLog{}).Count(&pointsTotal).Error; err != nil {
+	var pointsLogs []model.PointsLog
+	if recordTypeFilter != "" && recordTypeFilter != "points_log" {
+		pointsTotal = 0
+	} else {
+	pointsQuery := s.db.WithContext(ctx).Model(&model.PointsLog{})
+	if targetTypeFilter != "" {
+		pointsQuery = pointsQuery.Where("biz_type = ?", targetTypeFilter)
+	}
+	if targetID != "" {
+		pointsQuery = pointsQuery.Where("biz_id = ? OR user_id = ?", targetID, targetID)
+	}
+	if action != "" {
+		if strings.HasPrefix(action, "points.") {
+			pointsQuery = pointsQuery.Where("change_type = ?", strings.TrimPrefix(action, "points."))
+		} else {
+			pointsQuery = pointsQuery.Where("1 = 0")
+		}
+	}
+	if err := pointsQuery.Count(&pointsTotal).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
 	}
-	var pointsLogs []model.PointsLog
-	if err := s.db.WithContext(ctx).Order("created_at desc, id desc").Limit(limit).Find(&pointsLogs).Error; err != nil {
+	if err := pointsQuery.Order("created_at desc, id desc").Limit(limit).Find(&pointsLogs).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
+	}
 	}
 
 	var creditTotal int64
-	if err := s.db.WithContext(ctx).Model(&model.CreditLog{}).Count(&creditTotal).Error; err != nil {
+	var creditLogs []model.CreditLog
+	if recordTypeFilter != "" && recordTypeFilter != "credit_log" {
+		creditTotal = 0
+	} else {
+	creditQuery := s.db.WithContext(ctx).Model(&model.CreditLog{})
+	if targetTypeFilter != "" {
+		creditQuery = creditQuery.Where("biz_type = ?", targetTypeFilter)
+	}
+	if targetID != "" {
+		creditQuery = creditQuery.Where("biz_id = ? OR user_id = ?", targetID, targetID)
+	}
+	if action != "" {
+		if strings.HasPrefix(action, "credits.") {
+			creditQuery = creditQuery.Where("change_type = ?", strings.TrimPrefix(action, "credits."))
+		} else {
+			creditQuery = creditQuery.Where("1 = 0")
+		}
+	}
+	if err := creditQuery.Count(&creditTotal).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
 	}
-	var creditLogs []model.CreditLog
-	if err := s.db.WithContext(ctx).Order("created_at desc, id desc").Limit(limit).Find(&creditLogs).Error; err != nil {
+	if err := creditQuery.Order("created_at desc, id desc").Limit(limit).Find(&creditLogs).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
+	}
 	}
 
 	var taskTotal int64
-	if err := s.db.WithContext(ctx).Model(&model.ImageTask{}).Count(&taskTotal).Error; err != nil {
+	var tasks []model.ImageTask
+	if recordTypeFilter != "" && recordTypeFilter != "image_task" {
+		taskTotal = 0
+	} else {
+	taskQuery := s.db.WithContext(ctx).Model(&model.ImageTask{})
+	if targetTypeFilter != "" && targetTypeFilter != "image_task" {
+		taskQuery = taskQuery.Where("1 = 0")
+	}
+	if targetID != "" {
+		taskQuery = taskQuery.Where("id = ? OR user_id = ?", targetID, targetID)
+	}
+	if action != "" {
+		if strings.HasPrefix(action, "image_task.") {
+			taskQuery = taskQuery.Where("status = ?", strings.TrimPrefix(action, "image_task."))
+		} else {
+			taskQuery = taskQuery.Where("1 = 0")
+		}
+	}
+	if err := taskQuery.Count(&taskTotal).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
 	}
-	var tasks []model.ImageTask
-	if err := s.db.WithContext(ctx).Order("created_at desc, id desc").Limit(limit).Find(&tasks).Error; err != nil {
+	if err := taskQuery.Order("created_at desc, id desc").Limit(limit).Find(&tasks).Error; err != nil {
 		return dto.AdminListActionLogsResponse{}, err
+	}
 	}
 
-	records := make([]adminSiteLogRecord, 0, len(adminLogs)+len(pointsLogs)+len(creditLogs)+len(tasks))
+	records := make([]adminSiteLogRecord, 0, len(adminLogs)+len(siteLogs)+len(pointsLogs)+len(creditLogs)+len(tasks))
 	for _, log := range adminLogs {
 		records = append(records, adminSiteLogRecord{
 			CreatedAt: log.CreatedAt,
@@ -304,6 +362,26 @@ func (s *Service) adminListSiteLogs(ctx context.Context, page int, pageSize int)
 				BeforeJSON:  log.BeforeJSON,
 				AfterJSON:   log.AfterJSON,
 				Remark:      log.Remark,
+				CreatedAt:   log.CreatedAt,
+			},
+		})
+	}
+	for _, log := range siteLogs {
+		records = append(records, adminSiteLogRecord{
+			CreatedAt: log.CreatedAt,
+			Item: dto.AdminActionLogItem{
+				ID:          fmt.Sprintf("site-%d", log.ID),
+				AdminID:     actorIDForLog(log.ActorType, "admin", log.ActorID),
+				UserID:      actorIDForLog(log.ActorType, "user", log.ActorID),
+				ActorLabel:  actorLabelForSiteLog(log),
+				Action:      log.Action,
+				RecordType:  "site_action",
+				TargetType:  log.TargetType,
+				TargetID:    log.TargetID,
+				Title:       log.Title,
+				Description: log.Description,
+				Status:      log.Status,
+				AfterJSON:   log.DetailJSON,
 				CreatedAt:   log.CreatedAt,
 			},
 		})
@@ -403,7 +481,46 @@ func (s *Service) adminListSiteLogs(ctx context.Context, page int, pageSize int)
 	for _, record := range records[start:end] {
 		items = append(items, record.Item)
 	}
-	return dto.AdminListActionLogsResponse{Items: items, Page: page, PageSize: pageSize, Total: adminTotal + pointsTotal + creditTotal + taskTotal}, nil
+	return dto.AdminListActionLogsResponse{Items: items, Page: page, PageSize: pageSize, Total: adminTotal + siteTotal + pointsTotal + creditTotal + taskTotal}, nil
+}
+
+func actorIDForLog(actorType string, expected string, actorID uint64) string {
+	if strings.TrimSpace(actorType) != expected || actorID == 0 {
+		return ""
+	}
+	return strconv.FormatUint(actorID, 10)
+}
+
+func actorLabelForSiteLog(log model.SiteActionLog) string {
+	switch strings.TrimSpace(log.ActorType) {
+	case "admin":
+		return fmt.Sprintf("管理员 #%d", log.ActorID)
+	case "system":
+		return "系统"
+	default:
+		if log.ActorID == 0 {
+			return "用户"
+		}
+		return fmt.Sprintf("用户 #%d", log.ActorID)
+	}
+}
+
+func (s *Service) recordSiteActionLog(tx *gorm.DB, actorType string, actorID uint64, action string, targetType string, targetID string, title string, description string, status string, detail any) error {
+	if tx == nil {
+		return nil
+	}
+	entry := model.SiteActionLog{
+		ActorType:   strings.TrimSpace(actorType),
+		ActorID:     actorID,
+		Action:      strings.TrimSpace(action),
+		TargetType:  strings.TrimSpace(targetType),
+		TargetID:    strings.TrimSpace(targetID),
+		Title:       strings.TrimSpace(title),
+		Description: strings.TrimSpace(description),
+		Status:      strings.TrimSpace(status),
+		DetailJSON:  marshalJSON(detail),
+	}
+	return tx.Create(&entry).Error
 }
 
 func mustCompactJSON(value any) string {

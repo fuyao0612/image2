@@ -36,7 +36,7 @@ type AdminListAnnouncementsResponse struct {
 
 type AdminCreateAnnouncementRequest struct {
 	Title        string `json:"title" binding:"required,min=1,max=128"`
-	Content      string `json:"content" binding:"required,min=1,max=10000"`
+	Content      string `json:"content" binding:"omitempty,max=10000"`
 	ImageURL     string `json:"imageUrl,omitempty" binding:"omitempty,max=1024"`
 	Kind         string `json:"kind" binding:"required,oneof=pinned normal personal"`
 	TargetUserID string `json:"targetUserId,omitempty" binding:"omitempty"`

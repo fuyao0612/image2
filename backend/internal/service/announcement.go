@@ -71,6 +71,13 @@ func (s *Service) MarkAnnouncementRead(ctx context.Context, userID uint64, annou
 	}).Create(&read).Error; err != nil {
 		return dto.MarkAnnouncementReadResponse{}, err
 	}
+	if err := s.recordSiteActionLog(s.db.WithContext(ctx), "user", userID, "announcement.read", "announcement", strconv.FormatUint(announcement.ID, 10), "阅读公告", "用户标记公告为已读", "success", map[string]any{
+		"title":  announcement.Title,
+		"kind":   announcement.Kind,
+		"readAt": now,
+	}); err != nil {
+		return dto.MarkAnnouncementReadResponse{}, err
+	}
 
 	return dto.MarkAnnouncementReadResponse{
 		ID:     strconv.FormatUint(announcement.ID, 10),
@@ -282,7 +289,6 @@ func normalizeAnnouncementKind(kind string) model.AnnouncementKind {
 
 func validAnnouncement(announcement model.Announcement) bool {
 	return strings.TrimSpace(announcement.Title) != "" &&
-		strings.TrimSpace(announcement.Content) != "" &&
 		(announcement.Kind == model.AnnouncementKindPinned || announcement.Kind == model.AnnouncementKindNormal || announcement.Kind == model.AnnouncementKindPersonal) &&
 		(announcement.Kind != model.AnnouncementKindPersonal || announcement.TargetUserID > 0)
 }

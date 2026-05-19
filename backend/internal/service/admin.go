@@ -365,6 +365,13 @@ func (s *Service) AdminUpdateUserStatus(ctx context.Context, adminID uint64, tar
 		if err := recordAdminActionLog(tx, adminID, "user.status.update", "user", strconv.FormatUint(id, 10), before, user, remark); err != nil {
 			return err
 		}
+		if err := s.recordSiteActionLog(tx, "admin", adminID, "admin.user_status.update", "user", strconv.FormatUint(id, 10), "修改用户状态", remark, "success", map[string]any{
+			"userId":       id,
+			"beforeStatus": before.Status,
+			"afterStatus":  user.Status,
+		}); err != nil {
+			return err
+		}
 		updated = user
 		return nil
 	})
@@ -424,6 +431,14 @@ func (s *Service) AdminAdjustPoints(ctx context.Context, adminID uint64, targetI
 		afterUser := user
 		afterUser.PointsBalance = after
 		if err := recordAdminActionLog(tx, adminID, "user.points.adjust", "user", strconv.FormatUint(id, 10), user, afterUser, remark); err != nil {
+			return err
+		}
+		if err := s.recordSiteActionLog(tx, "admin", adminID, "admin.user_points.adjust", "user", strconv.FormatUint(id, 10), "调整用户积分", remark, "success", map[string]any{
+			"userId":        id,
+			"delta":         req.Delta,
+			"beforeBalance": before,
+			"afterBalance":  after,
+		}); err != nil {
 			return err
 		}
 		result = dto.AdminAdjustPointsResponse{

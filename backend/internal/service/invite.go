@@ -161,6 +161,16 @@ func (s *Service) Register(ctx context.Context, req dto.RegisterRequest) (dto.Au
 				return err
 			}
 		}
+		if err := s.recordSiteActionLog(tx, "user", user.ID, "user.register", "user", strconv.FormatUint(user.ID, 10), "用户注册", "新用户完成注册", "success", map[string]any{
+			"username":                    user.Username,
+			"email":                       user.Email,
+			"inviteCodeUsed":              inviteCode,
+			"registrationGiftCredits":     registrationGiftCredits,
+			"registrationInviteBonusPoints": registrationInviteBonusPoints,
+			"inviterUserId":               user.InviterUserID,
+		}); err != nil {
+			return err
+		}
 		created = user
 		return nil
 	})

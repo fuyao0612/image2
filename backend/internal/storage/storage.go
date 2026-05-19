@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -12,6 +13,7 @@ import (
 	_ "image/png"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -197,11 +199,12 @@ func (c *Client) StoreRemoteImages(ctx context.Context, imageURLs []string, keyP
 			continue
 		}
 
-		data, contentType, ext, err := c.download(ctx, trimmed)
+		data, contentType, ext, err := c.downloadWithRetry(ctx, trimmed)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
+			// 保留原始 URL，避免某一张图转存失败导致整批结果丢失。
 			storedURLs = mergeURLs(storedURLs, []string{trimmed})
 			continue
 		}
@@ -224,6 +227,56 @@ func (c *Client) StoreRemoteImages(ctx context.Context, imageURLs []string, keyP
 		storedURLs = mergeURLs(storedURLs, []string{storedURL})
 	}
 	return storedURLs, firstErr
+}
+
+func (c *Client) downloadWithRetry(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		data, contentType, ext, err := c.download(ctx, rawURL)
+		if err == nil {
+			return data, contentType, ext, nil
+		}
+		lastErr = err
+		if !isRetryableDownloadError(err) || attempt == 2 {
+			break
+		}
+		delay := time.Duration(attempt+1) * 300 * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, "", "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, "", "", lastErr
+}
+
+func isRetryableDownloadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "http 502"),
+		strings.Contains(msg, "http 503"),
+		strings.Contains(msg, "http 504"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "i/o timeout"),
+		strings.Contains(msg, "timeout"):
+		return true
+	default:
+		return false
+	}
 }
 
 func generatedImageFingerprint(data []byte) (string, bool) {

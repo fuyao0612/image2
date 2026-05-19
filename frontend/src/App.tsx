@@ -418,6 +418,16 @@ function App() {
     available: boolean
     message: string
   } | null>(null)
+  const [registerUsernameCheck, setRegisterUsernameCheck] = useState<{
+    username: string
+    available: boolean
+    message: string
+  } | null>(null)
+  const [registerEmailCheck, setRegisterEmailCheck] = useState<{
+    email: string
+    available: boolean
+    message: string
+  } | null>(null)
   const [resetEmailCheck, setResetEmailCheck] = useState<{ email: string; available: boolean; message: string } | null>(null)
   const [changePasswordForm, setChangePasswordForm] = useState<PasswordChangeForm>({
     currentPassword: '',
@@ -1303,6 +1313,64 @@ function App() {
       }
       setRegisterAvailabilityCheck(next)
       setMessage(next.message)
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleCheckRegisterUsername(): Promise<boolean> {
+    const username = authForm.username.trim()
+    const email = authForm.email.trim() || '__placeholder__@example.com'
+    if (mode !== 'register' || !username) {
+      setRegisterUsernameCheck(null)
+      return false
+    }
+    try {
+      setBusy('check-register-availability')
+      const result = await api.checkRegisterAvailability({ email, username })
+      const available = result.usernameAvailable
+      setRegisterUsernameCheck({
+        username,
+        available,
+        message: available ? '该用户名可以注册。' : '该用户名已被使用，请更换其他用户名。',
+      })
+      return available
+    } catch (error) {
+      setRegisterUsernameCheck({
+        username,
+        available: false,
+        message: error instanceof Error ? error.message : '用户名检查失败',
+      })
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleCheckRegisterEmail(): Promise<boolean> {
+    const email = authForm.email.trim()
+    const username = authForm.username.trim() || 'placeholder123'
+    if (mode !== 'register' || !email) {
+      setRegisterEmailCheck(null)
+      return false
+    }
+    try {
+      setBusy('check-register-availability')
+      const result = await api.checkRegisterAvailability({ email, username })
+      const available = result.emailAvailable
+      setRegisterEmailCheck({
+        email,
+        available,
+        message: available ? '该邮箱可以注册。' : '该邮箱已被注册，请直接登录。',
+      })
+      return available
+    } catch (error) {
+      setRegisterEmailCheck({
+        email,
+        available: false,
+        message: error instanceof Error ? error.message : '邮箱检查失败',
+      })
       return false
     } finally {
       setBusy(null)
@@ -2546,14 +2614,44 @@ function App() {
                         {REGISTRATION_DAILY_LIMIT_MESSAGE}
                       </div>
                     ) : null}
+                    {mode === 'register' ? (
+                      <Field label="用户名" icon={<UserRoundPlus className="h-4 w-4" />}>
+                        <input
+                          name={`register_username_${authFormSeed}`}
+                          autoComplete="off"
+                          value={authForm.username}
+                          onBlur={() => {
+                            if (authForm.username.trim()) {
+                              void handleCheckRegisterUsername()
+                            }
+                          }}
+                          onChange={(event) => {
+                            setAuthForm((current) => ({ ...current, username: event.target.value }))
+                            setRegisterAvailabilityCheck(null)
+                            setRegisterUsernameCheck(null)
+                          }}
+                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
+                          placeholder="请输入用户名（英文或者数字组成）"
+                        />
+                        {registerUsernameCheck?.username === authForm.username.trim() ? (
+                          <div
+                            className={`mt-2 text-xs ${
+                              registerUsernameCheck.available ? 'text-emerald-300' : 'text-amber-300'
+                            }`}
+                          >
+                            {registerUsernameCheck.message}
+                          </div>
+                        ) : null}
+                      </Field>
+                    ) : null}
                     <Field label="邮箱" icon={<Mail className="h-4 w-4" />}>
                       <input
                         name={`${mode}_email_${authFormSeed}`}
                         autoComplete="off"
                         value={authForm.email}
                         onBlur={() => {
-                          if (mode === 'register' && authForm.email.trim() && authForm.username.trim()) {
-                            void handleCheckRegisterAvailability()
+                          if (mode === 'register' && authForm.email.trim()) {
+                            void handleCheckRegisterEmail()
                           }
                           if (mode === 'reset' && authForm.email.trim()) {
                             void handleCheckResetEmail()
@@ -2564,20 +2662,15 @@ function App() {
                           setEmailCodeCountdown(0)
                           setEmailCaptchaPassUntil(0)
                           setRegisterAvailabilityCheck(null)
+                          setRegisterEmailCheck(null)
                           setResetEmailCheck(null)
                         }}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入邮箱"
                       />
-                      {mode === 'register' &&
-                      registerAvailabilityCheck?.email === authForm.email.trim() &&
-                      registerAvailabilityCheck.username === authForm.username.trim() ? (
-                        <div
-                          className={`mt-2 text-xs ${
-                            registerAvailabilityCheck.emailAvailable ? 'text-emerald-300' : 'text-amber-300'
-                          }`}
-                        >
-                          {registerAvailabilityCheck.emailAvailable ? '该邮箱可以注册。' : '该邮箱已被注册，请直接登录。'}
+                      {mode === 'register' && registerEmailCheck?.email === authForm.email.trim() ? (
+                        <div className={`mt-2 text-xs ${registerEmailCheck.available ? 'text-emerald-300' : 'text-amber-300'}`}>
+                          {registerEmailCheck.message}
                         </div>
                       ) : null}
                       {mode === 'reset' && resetEmailCheck?.email === authForm.email.trim() ? (
@@ -2659,36 +2752,6 @@ function App() {
                     </Field>
                     {mode === 'register' ? (
                       <>
-                        <Field label="用户名" icon={<UserRoundPlus className="h-4 w-4" />}>
-                          <input
-                            name={`register_username_${authFormSeed}`}
-                            autoComplete="off"
-                            value={authForm.username}
-                            onBlur={() => {
-                              if (authForm.email.trim() && authForm.username.trim()) {
-                                void handleCheckRegisterAvailability()
-                              }
-                            }}
-                            onChange={(event) => {
-                              setAuthForm((current) => ({ ...current, username: event.target.value }))
-                              setRegisterAvailabilityCheck(null)
-                            }}
-                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-                            placeholder="请输入用户名（英文或者数字组成）"
-                          />
-                          {registerAvailabilityCheck?.email === authForm.email.trim() &&
-                          registerAvailabilityCheck.username === authForm.username.trim() ? (
-                            <div
-                              className={`mt-2 text-xs ${
-                                registerAvailabilityCheck.usernameAvailable ? 'text-emerald-300' : 'text-amber-300'
-                              }`}
-                            >
-                              {registerAvailabilityCheck.usernameAvailable
-                                ? '该用户名可以注册。'
-                                : '该用户名已被使用，请更换其他用户名。'}
-                            </div>
-                          ) : null}
-                        </Field>
                         <Field label="邀请码（选填）" icon={<Gift className="h-4 w-4" />}>
                           <input
                             name={`register_invite_${authFormSeed}`}

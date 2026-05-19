@@ -70,6 +70,14 @@ func (s *Service) SubmitPromptPlaza(ctx context.Context, userID uint64, req dto.
 	if err := s.db.WithContext(ctx).Create(&item).Error; err != nil {
 		return dto.PromptPlazaItem{}, err
 	}
+	if err := s.recordSiteActionLog(s.db.WithContext(ctx), "user", userID, "prompt_plaza.submit", "prompt_plaza", strconv.FormatUint(item.ID, 10), "提交提示词", "用户向提示词广场提交新内容", "success", map[string]any{
+		"title":  item.Title,
+		"author": item.Author,
+		"status": item.Status,
+		"tags":   req.Tags,
+	}); err != nil {
+		return dto.PromptPlazaItem{}, err
+	}
 	return s.promptPlazaItemToDTO(ctx, item, nil), nil
 }
 
@@ -284,7 +292,19 @@ func (s *Service) TogglePromptPlazaFavorite(ctx context.Context, userID uint64, 
 			return err
 		}
 		updated = item
-		return nil
+		action := "prompt_plaza.favorite.add"
+		title := "收藏提示词"
+		description := "用户收藏了提示词"
+		if !isFavorited {
+			action = "prompt_plaza.favorite.remove"
+			title = "取消收藏提示词"
+			description = "用户取消收藏了提示词"
+		}
+		return s.recordSiteActionLog(tx, "user", userID, action, "prompt_plaza", strconv.FormatUint(item.ID, 10), title, description, "success", map[string]any{
+			"title":     item.Title,
+			"favorites": count,
+			"isActive":  isFavorited,
+		})
 	})
 	if err != nil {
 		return dto.PromptPlazaItem{}, err

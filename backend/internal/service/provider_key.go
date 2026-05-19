@@ -223,7 +223,10 @@ func (s *Service) AdminUseProviderKey(ctx context.Context, adminID uint64, provi
 func (s *Service) ListActiveProviderKeys(ctx context.Context) ([]model.ImageProviderKey, error) {
 	var keys []model.ImageProviderKey
 	if err := s.db.WithContext(ctx).
-		Where("provider = ? AND status = ? AND auto_switch_enabled = ?", "mentalout", model.ImageProviderKeyStatusActive, true).
+		Where("provider = ? AND status IN ? AND auto_switch_enabled = ?", "mentalout", []model.ImageProviderKeyStatus{
+			model.ImageProviderKeyStatusActive,
+			model.ImageProviderKeyStatusLowBalance,
+		}, true).
 		Order("is_using desc, priority asc, last_used_at asc, id asc").
 		Find(&keys).Error; err != nil {
 		return nil, err
@@ -301,6 +304,10 @@ func (s *Service) markProviderKeyFailure(ctx context.Context, keyID uint64, reas
 }
 
 func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID uint64, userID uint64, req provider.GenerateRequest) (provider.GenerateResult, *provider.MentaloutProvider, uint64, error) {
+	return s.submitImageTaskWithProviderPoolSkip(ctx, taskID, userID, req, nil)
+}
+
+func (s *Service) submitImageTaskWithProviderPoolSkip(ctx context.Context, taskID uint64, userID uint64, req provider.GenerateRequest, skippedKeyIDs map[uint64]struct{}) (provider.GenerateResult, *provider.MentaloutProvider, uint64, error) {
 	keys, err := s.ListActiveProviderKeys(ctx)
 	if err != nil {
 		return provider.GenerateResult{}, nil, 0, err
@@ -309,6 +316,9 @@ func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID ui
 	var lastResult provider.GenerateResult
 	var lastErr error
 	for _, key := range keys {
+		if _, skipped := skippedKeyIDs[key.ID]; skipped {
+			continue
+		}
 		currentProvider := buildMentaloutProvider(key, s.cfg)
 		if currentProvider == nil || !currentProvider.Configured() {
 			continue
@@ -318,6 +328,15 @@ func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID ui
 			Updates(map[string]any{"provider": currentProvider.Name(), "provider_key_id": key.ID}).Error
 		result, err := currentProvider.Submit(ctx, req)
 		if err == nil {
+			if result.Status == model.ImageTaskStatusFailed {
+				message := providerFailureMessage(result, nil)
+				s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
+				if isProviderBalanceError(message) {
+					lastResult = result
+					log.Printf("生图 Key %d 余额不足，尝试切换下一把 Key: %s", key.ID, message)
+					continue
+				}
+			}
 			s.markProviderKeySuccess(ctx, key.ID)
 			return result, currentProvider, key.ID, nil
 		}

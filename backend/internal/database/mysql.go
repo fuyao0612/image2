@@ -84,6 +84,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.RedeemCode{},
 		&model.ContentAuditLog{},
 		&model.AdminActionLog{},
+		&model.SiteActionLog{},
 		&model.SystemSetting{},
 		&model.Announcement{},
 		&model.AnnouncementRead{},

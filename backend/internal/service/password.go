@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,12 +53,17 @@ func (s *Service) ChangePassword(ctx context.Context, userID uint64, req dto.Cha
 		}
 
 		changedAt = s.now()
-		return tx.Model(&model.User{}).
+		if err := tx.Model(&model.User{}).
 			Where("id = ?", userID).
 			Updates(map[string]any{
 				"password_hash": hash,
 				"token_version": gorm.Expr("token_version + 1"),
-			}).Error
+			}).Error; err != nil {
+			return err
+		}
+		return s.recordSiteActionLog(tx, "user", userID, "user.change_password", "user", strconv.FormatUint(userID, 10), "修改密码", "用户在登录后主动修改密码", "success", map[string]any{
+			"changedAt": changedAt,
+		})
 	})
 	if err != nil {
 		return dto.ChangePasswordResponse{}, err
@@ -118,11 +124,16 @@ func (s *Service) ResetPassword(ctx context.Context, req dto.ResetPasswordReques
 		}
 
 		changedAt = s.now()
-		return tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
 			"password_hash":          hash,
 			"token_version":          gorm.Expr("token_version + 1"),
 			"last_password_reset_at": changedAt,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		return s.recordSiteActionLog(tx, "user", user.ID, "user.reset_password", "user", strconv.FormatUint(user.ID, 10), "重置密码", "用户通过邮箱验证码重置密码", "success", map[string]any{
+			"email": email,
+		})
 	})
 	if err != nil {
 		return dto.ChangePasswordResponse{}, err
