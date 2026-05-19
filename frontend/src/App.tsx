@@ -322,9 +322,9 @@ const styleOptions = [
 
 const qualityOptions = [
   { value: 'auto', label: '自动' },
-  { value: 'low', label: '低' },
+  { value: 'low', label: '低质量，通常更快' },
   { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
+  { value: 'high', label: '高质量，通常更慢' },
 ]
 
 const outputFormatOptions = [
@@ -351,7 +351,7 @@ const emptyGenerationProgress: GenerationProgress = {
 }
 
 const GENERATION_WAITING_NOTICE =
-  '请耐心等待，图片生成时间会随着尺寸、张数和质量档位提高而增长。高质量或 4K 图片对上游通道压力更大，可能偶发失败；如生成失败，本次消耗的积分或福利次数会原路退回，错误信息也会通知管理员，我们会尽快处理。'
+  '请耐心等待，图片生成时间会随着尺寸、张数和质量档位提高而增长。高质量或 4K 图片通常会更慢，也更容易偶发失败；如生成失败，本次消耗会自动退回。'
 
 const emptyPreview: ImageTaskDetailResponse = {
   taskId: '-',
@@ -375,9 +375,8 @@ const FLOW_LOG_PAGE_SIZE = 10
 const CUSTOM_SIZE_MAX_SIDE = 3840
 const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
-const HIGH_QUALITY_MAX_PIXELS = 4194304
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
-const HIGH_QUALITY_SIZE_LIMIT_MESSAGE = '4K 或超大尺寸使用高质量时，上游失败率较高；如果失败会自动退回消耗，可改用“自动”或“中”质量提升成功率。'
+const HIGH_QUALITY_SIZE_HINT = '4K 或超大尺寸也可以使用高质量；如果偶尔失败，消耗会自动退回，改用“自动”或“中”质量通常会更稳。'
 
 function App() {
   const [mode, setMode] = useState<AuthMode>(() =>
@@ -1723,12 +1722,6 @@ function App() {
     }
 
     const requestSize = resolveSelectedSize(size, customWidth, customHeight)
-    const optionsValidationMessage = validateImageOptions(requestSize, quality)
-    if (optionsValidationMessage) {
-      setMessage(optionsValidationMessage)
-      return
-    }
-
     const taskCount = clampCount(count)
     const requestSnapshot = {
       prompt: promptText,
@@ -3257,6 +3250,9 @@ function App() {
                             </option>
                           ))}
                         </select>
+                        {quality.trim().toLowerCase() === 'high' ? (
+                          <p className="mt-2 text-xs text-slate-500">{HIGH_QUALITY_SIZE_HINT}</p>
+                        ) : null}
                       </label>
 
                       <label className="block min-w-0">
@@ -6853,17 +6849,6 @@ function parseCustomDimension(value: string | number): number {
     return Number.NaN
   }
   return Number(trimmed)
-}
-
-function validateImageOptions(size: string, quality: string): string | null {
-  if (quality.trim().toLowerCase() !== 'high') {
-    return null
-  }
-  const dimensions = parseImageSize(size)
-  if (!dimensions) {
-    return null
-  }
-  return dimensions.width * dimensions.height > HIGH_QUALITY_MAX_PIXELS ? HIGH_QUALITY_SIZE_LIMIT_MESSAGE : null
 }
 
 function parseImageSize(size: string): { width: number; height: number } | null {

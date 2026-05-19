@@ -380,8 +380,11 @@ func TestSubmitBatchDoesNotRetryEOFAndUsesBrowserHeaders(t *testing.T) {
 func TestFetchBatchReturnsTemporaryNetworkErrorWithoutImmediateRetry(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/batches/batch-test" {
+		if r.URL.Path != "/api/batches/status" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
 		}
 		atomic.AddInt32(&attempts, 1)
 		hijacker, ok := w.(http.Hijacker)
@@ -408,6 +411,54 @@ func TestFetchBatchReturnsTemporaryNetworkErrorWithoutImmediateRetry(t *testing.
 	}
 	if atomic.LoadInt32(&attempts) != 1 {
 		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
+func TestFetchBatchFallsBackToDetailEndpointWhenStatusEndpointFails(t *testing.T) {
+	var statusAttempts int32
+	var detailAttempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/batches/status":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected status method: %s", r.Method)
+			}
+			atomic.AddInt32(&statusAttempts, 1)
+			http.Error(w, `{"error":"temporary unavailable"}`, http.StatusNotFound)
+		case "/api/batches/batch-test":
+			if r.Method != http.MethodGet {
+				t.Fatalf("unexpected detail method: %s", r.Method)
+			}
+			atomic.AddInt32(&detailAttempts, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"batch-test","status":"success","imageUrl":"https://image.mentalout.top/results/demo.png"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewMentaloutProvider(MentaloutConfig{
+		BatchServiceURL:    server.URL,
+		ProviderAPIBaseURL: "https://chunfeng.mentalout.top",
+		APIKey:             "test-key",
+	})
+
+	result, err := provider.fetchBatch(context.Background(), "batch-test")
+	if err != nil {
+		t.Fatalf("expected fallback fetch to succeed, got %v", err)
+	}
+	if result.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected success status, got %q", result.Status)
+	}
+	if result.ImageURL != "https://image.mentalout.top/results/demo.png" {
+		t.Fatalf("unexpected image url: %q", result.ImageURL)
+	}
+	if atomic.LoadInt32(&statusAttempts) != 1 {
+		t.Fatalf("expected 1 status attempt, got %d", statusAttempts)
+	}
+	if atomic.LoadInt32(&detailAttempts) != 1 {
+		t.Fatalf("expected 1 detail attempt, got %d", detailAttempts)
 	}
 }
 

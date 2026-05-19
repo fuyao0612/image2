@@ -513,6 +513,7 @@ func (s *Service) listImageTasksV2(ctx context.Context, userID uint64, page, pag
 func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result provider.GenerateResult, message string) (int64, error) {
 	rawMessage := strings.TrimSpace(message)
 	message = buildImageTaskFailureUserMessage(rawMessage)
+	adminMessage := truncateProviderMessage(rawMessage)
 
 	var balance int64
 	var notice *imageTaskFailureNotice
@@ -628,6 +629,7 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 				UserID:         task.UserID,
 				Prompt:         task.Prompt,
 				Message:        partialMessage,
+				AdminMessage:   adminMessage,
 				Provider:       task.Provider,
 				ProviderTaskID: providerTaskID,
 				RawResponse:    truncateProviderMessage(result.RawResponse),
@@ -728,6 +730,7 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 			UserID:         task.UserID,
 			Prompt:         task.Prompt,
 			Message:        message,
+			AdminMessage:   adminMessage,
 			Provider:       task.Provider,
 			ProviderTaskID: strings.TrimSpace(result.ProviderTaskID),
 			RawResponse:    truncateProviderMessage(result.RawResponse),

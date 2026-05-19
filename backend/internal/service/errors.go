@@ -2,7 +2,7 @@ package service
 
 import "errors"
 
-var ErrImageGenerationDisabled = errors.New("生图功能暂时关闭，详情见公告")
+var ErrImageGenerationDisabled = errors.New("生图功能暂时不可用，请稍后再试")
 
 var (
 	ErrInvalidVerificationCode      = errors.New("验证码错误或已过期")
@@ -25,26 +25,26 @@ var (
 	ErrPasswordConfirmationMismatch = errors.New("两次输入的新密码不一致")
 	ErrPasswordUnchanged            = errors.New("新密码不能和当前密码相同")
 	ErrAlreadyCheckedIn             = errors.New("今日已签到")
-	ErrInsufficientPoints           = errors.New("积分不足")
+	ErrInsufficientPoints           = errors.New("积分不够了，补充积分后就可以继续生成")
 	ErrUserNotFound                 = errors.New("用户不存在")
-	ErrTaskNotFound                 = errors.New("任务不存在")
-	ErrTaskStillGenerating          = errors.New("任务仍在生成中，不能重试")
+	ErrTaskNotFound                 = errors.New("没找到这条生成记录，刷新一下再试试")
+	ErrTaskStillGenerating          = errors.New("这张图还在生成中，先等它出结果，再决定要不要重试")
 	ErrAuditNotFound                = errors.New("内容审核记录不存在")
 	ErrPackageInvalid               = errors.New("套餐不存在或参数不合法")
 	ErrPackageProtected             = errors.New("至少需要保留一个启用套餐")
 	ErrSettingsInvalid              = errors.New("系统配置参数不合法")
-	ErrInsufficientCredits          = errors.New("福利次数不足")
-	ErrPromptRequired               = errors.New("提示词不能为空")
-	ErrInvalidImageSize             = errors.New("当前尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间")
-	ErrProviderNotConfigured        = errors.New("图片服务未配置")
+	ErrInsufficientCredits          = errors.New("免费的生成次数已经用完了，可以明天再来，或改用积分继续生成")
+	ErrPromptRequired               = errors.New("还没填写提示词，写一句你想生成的内容再试试")
+	ErrInvalidImageSize             = errors.New("这个尺寸暂时不支持，试着降低尺寸后再生成一次会更稳")
+	ErrProviderNotConfigured        = errors.New("生图服务暂时不可用，我们已经记录这个问题，请稍后再试")
 	ErrEmailSenderNotConfigured     = errors.New("邮件发送服务未配置")
 	ErrForbidden                    = errors.New("无权限执行该操作")
-	ErrContentRejected              = errors.New("内容安全审核未通过")
-	ErrUploadFileRequired           = errors.New("请选择要上传的图片")
-	ErrUploadFileTooLarge           = errors.New("图片大小超出限制")
-	ErrUploadUnsupportedType        = errors.New("仅支持上传 JPEG、PNG、WebP 或 GIF 图片")
-	ErrUploadStorageNotConfig       = errors.New("图片存储未配置")
-	ErrInvalidReferenceImageURL     = errors.New("参考图地址不合法，请先上传参考图后再使用")
+	ErrContentRejected              = errors.New("这次描述可能触发了安全限制，换个更温和、明确的说法再试试")
+	ErrUploadFileRequired           = errors.New("还没选参考图，上传后再试试")
+	ErrUploadFileTooLarge           = errors.New("这张参考图有点大，压缩一下或换一张再试试")
+	ErrUploadUnsupportedType        = errors.New("这张参考图格式不支持，换成 JPG、PNG、WebP 或 GIF 再试试")
+	ErrUploadStorageNotConfig       = errors.New("图片上传功能暂时不可用，我们已经记录这个问题，请稍后再试")
+	ErrInvalidReferenceImageURL     = errors.New("这张参考图不能直接使用，重新上传一张再试试会更稳妥")
 	ErrRedeemCodeInvalid            = errors.New("兑换码不存在或不可用")
 	ErrRedeemCodeUsed               = errors.New("兑换码已被使用")
 	ErrRedeemCodeExpired            = errors.New("兑换码已过期")
@@ -53,8 +53,8 @@ var (
 )
 
 var (
-	ErrImageNotFound       = errors.New("图片不存在")
-	ErrImageDownloadFailed = errors.New("图片下载失败")
+	ErrImageNotFound       = errors.New("图片没找到，可能已经失效或被删除了")
+	ErrImageDownloadFailed = errors.New("图片加载失败了，刷新一下再试试")
 )
 
 var (

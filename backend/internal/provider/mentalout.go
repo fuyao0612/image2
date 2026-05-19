@@ -442,11 +442,35 @@ func isSupportedReferenceImageContentType(contentType string) bool {
 }
 
 func (p *MentaloutProvider) fetchBatch(ctx context.Context, batchID string) (GenerateResult, error) {
+	statusBody, statusCode, statusErr := p.doJSONRequest(ctx, http.MethodPost, p.fetchStatusURL(), map[string]any{
+		"ids": []string{strings.TrimSpace(batchID)},
+	})
+	if statusErr == nil && statusCode >= 200 && statusCode < 300 {
+		result := extractGenerateResult(statusBody, p.cfg.BatchServiceURL, p.cfg.ProviderAPIBaseURL)
+		if result.ProviderTaskID == "" {
+			result.ProviderTaskID = batchID
+		}
+		return result, nil
+	}
+	if statusErr != nil {
+		return GenerateResult{}, statusErr
+	}
+
 	body, status, err := p.doJSONRequest(ctx, http.MethodGet, p.fetchURL(batchID), nil)
 	if err != nil {
 		return GenerateResult{}, err
 	}
 	if status < 200 || status >= 300 {
+		if statusErr == nil && statusCode >= 200 && statusCode < 300 {
+			result := extractGenerateResult(statusBody, p.cfg.BatchServiceURL, p.cfg.ProviderAPIBaseURL)
+			if result.ProviderTaskID == "" {
+				result.ProviderTaskID = batchID
+			}
+			return result, nil
+		}
+		if statusErr == nil && statusCode > 0 {
+			return GenerateResult{}, fmt.Errorf("fetch batch failed: status http %d: %s; detail http %d: %s", statusCode, truncateText(string(statusBody), 500), status, truncateText(string(body), 500))
+		}
 		return GenerateResult{}, fmt.Errorf("fetch batch failed: http %d: %s", status, truncateText(string(body), 500))
 	}
 
@@ -587,6 +611,10 @@ func (p *MentaloutProvider) submitURL() string {
 
 func (p *MentaloutProvider) fetchURL(batchID string) string {
 	return joinURL(p.cfg.BatchServiceURL, "/api/batches/"+url.PathEscape(strings.TrimSpace(batchID)))
+}
+
+func (p *MentaloutProvider) fetchStatusURL() string {
+	return joinURL(p.cfg.BatchServiceURL, "/api/batches/status")
 }
 
 func mergeResult(base GenerateResult, next GenerateResult) GenerateResult {

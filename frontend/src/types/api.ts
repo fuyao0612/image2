@@ -554,6 +554,7 @@ export interface AdminImageTaskItem {
   providerResponse?: string
   requestParams?: string
   errorMessage?: string
+  adminErrorMessage?: string
   createdAt: string
   updatedAt: string
 }

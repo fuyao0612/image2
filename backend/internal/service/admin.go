@@ -12,6 +12,7 @@ import (
 
 	"image2/backend/internal/dto"
 	"image2/backend/internal/model"
+	"image2/backend/internal/provider"
 
 	"gorm.io/gorm"
 )
@@ -581,8 +582,11 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 			CreditSource:          task.CreditSource,
 			Status:                string(task.Status),
 			Provider:              task.Provider,
+			ProviderTaskID:        task.ProviderTaskID,
+			ProviderResponse:      task.ProviderResponse,
 			RequestParams:         task.RequestParams,
 			ErrorMessage:          task.ErrorMessage,
+			AdminErrorMessage:     providerFailureAdminMessage(provider.GenerateResult{ErrorMessage: task.ErrorMessage, RawResponse: task.ProviderResponse}, nil),
 			CreatedAt:             task.CreatedAt,
 			UpdatedAt:             task.UpdatedAt,
 		})

@@ -792,7 +792,7 @@ func TestFailImageTaskAndRefundIsIdempotent(t *testing.T) {
 	if err := db.First(&reloadedTask, task.ID).Error; err != nil {
 		t.Fatalf("reload task: %v", err)
 	}
-	for _, part := range []string{"provider failed", "已原路退回", "邮件通知管理员", "尽快处理"} {
+	for _, part := range []string{"provider failed", "消耗已经退回", "不用担心", "会继续处理"} {
 		if !strings.Contains(reloadedTask.ErrorMessage, part) {
 			t.Fatalf("expected failure message to contain %q, got %q", part, reloadedTask.ErrorMessage)
 		}
@@ -1091,15 +1091,15 @@ func TestPollImageTaskV2ContinuesAfterTemporaryFailedStatus(t *testing.T) {
 
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/batches/batch-temp" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/batches/status" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if atomic.AddInt32(&attempts, 1) == 1 {
-			_, _ = w.Write([]byte(`{"id":"batch-temp","status":"failed","errorMessage":"status_code=502, stream disconnected before completion"}`))
+			_, _ = w.Write([]byte(`{"items":[{"id":"batch-temp","status":"failed","errorMessage":"status_code=502, stream disconnected before completion"}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":"batch-temp","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-temp/final.png"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":"batch-temp","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-temp/final.png"}]}]}`))
 	}))
 	defer server.Close()
 
@@ -1151,15 +1151,15 @@ func TestPollImageTaskV2WaitsForRequestedImageCount(t *testing.T) {
 
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/batches/batch-two" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/batches/status" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if atomic.AddInt32(&attempts, 1) == 1 {
-			_, _ = w.Write([]byte(`{"id":"batch-two","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-two/one.png"}]}`))
+			_, _ = w.Write([]byte(`{"items":[{"id":"batch-two","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-two/one.png"}]}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":"batch-two","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-two/one.png"},{"status":"succeeded","imageUrl":"/results/batch-two/two.png"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":"batch-two","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-two/one.png"},{"status":"succeeded","imageUrl":"/results/batch-two/two.png"}]}]}`))
 	}))
 	defer server.Close()
 
@@ -1200,16 +1200,16 @@ func TestPollImageTaskV2AllowsSlowRunningTaskToFinish(t *testing.T) {
 
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/batches/batch-slow" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/batches/status" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		current := atomic.AddInt32(&attempts, 1)
 		if current < 4 {
-			_, _ = w.Write([]byte(`{"id":"batch-slow","status":"running"}`))
+			_, _ = w.Write([]byte(`{"items":[{"id":"batch-slow","status":"running"}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":"batch-slow","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-slow/final.png"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":"batch-slow","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-slow/final.png"}]}]}`))
 	}))
 	defer server.Close()
 
@@ -1246,12 +1246,12 @@ func TestPollImageTaskV2StopsAfterRepeatedTemporaryFailures(t *testing.T) {
 
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/batches/batch-flaky" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/batches/status" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		atomic.AddInt32(&attempts, 1)
-		_, _ = w.Write([]byte(`{"id":"batch-flaky","status":"failed","errorMessage":"status_code=503, temporary upstream unavailable"}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":"batch-flaky","status":"failed","errorMessage":"status_code=503, temporary upstream unavailable"}]}`))
 	}))
 	defer server.Close()
 
@@ -1278,7 +1278,7 @@ func TestPollImageTaskV2StopsAfterRepeatedTemporaryFailures(t *testing.T) {
 	if atomic.LoadInt32(&attempts) != 3 {
 		t.Fatalf("expected 3 fetch attempts before stopping, got %d", attempts)
 	}
-	if !strings.Contains(result.ErrorMessage, "长时间未完成") {
+	if !strings.Contains(result.ErrorMessage, "停止继续等待") {
 		t.Fatalf("expected protective timeout message, got %q", result.ErrorMessage)
 	}
 }
@@ -1312,10 +1312,24 @@ func TestProcessImageTaskV2SubmitsMultipleImagesAsSingleImageBatches(t *testing.
 			}
 			attempt := atomic.AddInt32(&postAttempts, 1)
 			_, _ = w.Write([]byte(`{"id":"batch-serial-` + strconv.FormatInt(int64(attempt), 10) + `","status":"running"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/batches/batch-serial-1":
-			_, _ = w.Write([]byte(`{"id":"batch-serial-1","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-serial-1/one.png"}]}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/batches/batch-serial-2":
-			_, _ = w.Write([]byte(`{"id":"batch-serial-2","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-serial-2/two.png"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/batches/status":
+			var payload struct {
+				IDs []string `json:"ids"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode status payload: %v", err)
+			}
+			if len(payload.IDs) != 1 {
+				t.Fatalf("expected one batch id, got %#v", payload.IDs)
+			}
+			switch payload.IDs[0] {
+			case "batch-serial-1":
+				_, _ = w.Write([]byte(`{"items":[{"id":"batch-serial-1","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-serial-1/one.png"}]}]}`))
+			case "batch-serial-2":
+				_, _ = w.Write([]byte(`{"items":[{"id":"batch-serial-2","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-serial-2/two.png"}]}]}`))
+			default:
+				t.Fatalf("unexpected batch id payload: %#v", payload.IDs)
+			}
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -2093,8 +2107,8 @@ func TestSubmitImageTaskWithProviderPoolFailsOverOnFailedBalanceResult(t *testin
 
 func TestNormalizeProviderFailureMessageTreatsInsufficientUserQuotaAsBalanceError(t *testing.T) {
 	message := `upstream http 403: quota left: 0.000000 (request id: xxx); code=insufficient_user_quota; type=new_api_error`
-	got := normalizeProviderFailureMessage(message)
-	if !strings.Contains(got, "余额或额度不足") {
+	got := normalizeProviderFailureMessage(message, true)
+	if !strings.Contains(got, "额度有点紧张") {
 		t.Fatalf("expected balance error message, got %q", got)
 	}
 }
@@ -2479,7 +2493,7 @@ func TestProviderFailureMessageNormalizesCooldown(t *testing.T) {
 		ErrorMessage: "upstream http 429: All credentials for model gpt-5.4-mini are cooling down; code=model_cooldown; type=upstream_error",
 	}, nil)
 
-	if !strings.Contains(message, "gpt-5.4-mini") || !strings.Contains(message, "限流冷却") {
+	if !strings.Contains(message, "gpt-5.4-mini") || !strings.Contains(message, "有点忙") {
 		t.Fatalf("unexpected normalized message: %s", message)
 	}
 }
@@ -2493,47 +2507,47 @@ func TestProviderFailureMessageNormalizesCommonUpstreamErrors(t *testing.T) {
 		{
 			name:     "model channel missing",
 			raw:      "upstream http 503: No available channel for model gpt-image-2 under group gpt (distributor) (request id: 202605110328368060305868268d9d6oMr8kCN1); code=model_not_found; type=new_api_error",
-			contains: []string{"gpt-image-2", "没有可用的生图模型通道"},
+			contains: []string{"gpt-image-2", "暂时不可用"},
 		},
 		{
 			name:     "invalid key",
 			raw:      "upstream http 401: Invalid token; code=invalid_api_key; type=new_api_error",
-			contains: []string{"API Key", "无效"},
+			contains: []string{"暂时不可用", "稍后再试"},
 		},
 		{
 			name:     "quota",
 			raw:      "upstream http 429: insufficient quota; code=insufficient_quota; type=new_api_error",
-			contains: []string{"余额", "额度不足"},
+			contains: []string{"额度有点紧张", "自动切换"},
 		},
 		{
 			name:     "temporary upstream",
 			raw:      "upstream http 502: bad gateway; type=upstream_error",
-			contains: []string{"暂时不可用"},
+			contains: []string{"有点不稳定", "再试试"},
 		},
 		{
 			name:     "internal server stream error",
 			raw:      "upstream http 500: stream error: stream ID 15403; INTERNAL_ERROR; received from peer; code=internal_server_error; type=server_error",
-			contains: []string{"暂时不可用", "服务商通道状态"},
+			contains: []string{"有点不稳定", "再试试"},
 		},
 		{
 			name:     "protocol mismatch",
 			raw:      "upstream http 400: 400 The plain HTTP request was sent to HTTPS port",
-			contains: []string{"协议配置不匹配", "API Base URL"},
+			contains: []string{"暂时连不上", "稍后再试"},
 		},
 		{
 			name:     "reference image",
 			raw:      "reference image content type is not supported: text/html",
-			contains: []string{"参考图处理失败", "重新上传"},
+			contains: []string{"参考图这次没处理成功", "更清晰一点"},
 		},
 		{
 			name:     "network lookup",
 			raw:      "Post \"https://image.mentalout.top/api/batches\": dial tcp: lookup image.mentalout.top: no such host",
-			contains: []string{"无法连接上游生图服务", "服务器网络"},
+			contains: []string{"生图服务暂时连不上", "等一会儿再试试"},
 		},
 		{
 			name:     "generic bad request",
 			raw:      "upstream http 400: invalid request",
-			contains: []string{"1024x1024", "1 张", "模型和 Key 配置"},
+			contains: []string{"降低尺寸", "生成质量", "参考图"},
 		},
 	}
 
@@ -2555,6 +2569,7 @@ func TestBuildImageFailureEmailIncludesKeyFields(t *testing.T) {
 		UserID:         456,
 		Prompt:         "a tiny robot on a rainy street",
 		Message:        "上游模型 gpt-image-2 当前限流冷却中",
+		AdminMessage:   "upstream http 429: All credentials for model gpt-image-2 are cooling down; code=model_cooldown",
 		Provider:       "mentalout",
 		ProviderTaskID: "batch-abc123",
 		RawResponse:    "raw upstream response",

@@ -114,8 +114,11 @@ type AdminImageTaskItem struct {
 	CreditSource          string    `json:"creditSource"`
 	Status                string    `json:"status"`
 	Provider              string    `json:"provider,omitempty"`
+	ProviderTaskID        string    `json:"providerTaskId,omitempty"`
+	ProviderResponse      string    `json:"providerResponse,omitempty"`
 	RequestParams         string    `json:"requestParams,omitempty"`
 	ErrorMessage          string    `json:"errorMessage,omitempty"`
+	AdminErrorMessage     string    `json:"adminErrorMessage,omitempty"`
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
