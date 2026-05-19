@@ -257,7 +257,7 @@ function AllModals(props: { state: Modal; setState: (m: Modal) => void; busy: Bu
 }
 function renderModal(s: Modal, p: Parameters<typeof AllModals>[0]): ReactNode {
   if (s.type === 'confirm') return <div className="space-y-5"><div className="text-slate-600">{s.data.content}</div><div className="flex justify-end gap-2"><Button onClick={() => p.setState({ type: 'none' })}>取消</Button><Button danger={s.data.danger} primary={!s.data.danger} onClick={s.data.onConfirm}>{s.data.confirmText || '确定'}</Button></div></div>
-  if (s.type === 'task') return <Detail rows={[["任务ID", s.item.id], ["用户", s.item.username || s.item.userId], ["状态", s.item.status], ["是否发送邮件", s.item.emailNotifyEnabled ? '是' : '否'], ["邮件通知额外积分", `${s.item.emailNotifyCostPoints || 0}`], ["提示词", s.item.prompt], ["错误信息", s.item.errorMessage], ["图片", <TaskImages item={s.item} />], ["请求参数", pretty(s.item.requestParams)], ["创建时间", date(s.item.createdAt)], ["更新时间", date(s.item.updatedAt)]]} />
+  if (s.type === 'task') return <Detail rows={[["任务ID", s.item.id], ["用户", s.item.username || s.item.userId], ["状态", s.item.status], ["是否发送邮件", s.item.emailNotifyEnabled ? '是' : '否'], ["邮件通知额外积分", `${s.item.emailNotifyCostPoints || 0}`], ["服务商", s.item.provider || '-'], ["上游任务ID", s.item.providerTaskId || '-'], ["提示词", s.item.prompt], ["错误信息", s.item.errorMessage], ["上游原始返回", <PreText value={pretty(s.item.providerResponse)} />], ["图片", <TaskImages item={s.item} />], ["请求参数", pretty(s.item.requestParams)], ["创建时间", date(s.item.createdAt)], ["更新时间", date(s.item.updatedAt)]]} />
   if (s.type === 'redeemCode') return <RedeemCodeDetail item={s.item} />
   if (s.type === 'prompt') return <PromptForm item={s.item} save={payload => p.onSavePrompt(s.item, payload)} />
   if (s.type === 'promptReason') return <ReasonForm state={s} setState={p.setState} submit={reason => s.action === 'reject' ? p.onReviewPrompt(s.item, 'rejected', reason) : p.onDeletePrompt(s.item, reason)} />
@@ -268,8 +268,28 @@ function renderModal(s: Modal, p: Parameters<typeof AllModals>[0]): ReactNode {
   if (s.type === 'announcement') return <AnnouncementForm item={s.item} save={payload => p.onSaveAnnouncement(s.item, payload)} />
   if (s.type === 'points') return <PointsForm state={s} setState={p.setState} save={p.onSavePoints} />
   if (s.type === 'userLogs') return <UserLogs state={s} page={(page) => p.onOpenUserLogs(s.user, page)} />
-  if (s.type === 'log') return <Detail rows={[["日志ID", s.item.id], ["操作人", s.item.actorLabel || (s.item.userId ? `用户 #${s.item.userId}` : `管理员 #${s.item.adminId}`)], ["日志类型", siteLogTypeLabel(s.item)], ["操作内容", s.item.title || logActionLabel(s.item.action)], ["操作对象", logTargetLabel(s.item)], ["简略信息", s.item.description || s.item.remark || '-'], ["状态", s.item.status ? statusText(s.item.status) : '-'], ["变更前", <PreText value={pretty(s.item.beforeJson)} />], ["详情", <PreText value={pretty(s.item.afterJson)} />], ["时间", date(s.item.createdAt)]]} />
+  if (s.type === 'log') return <LogDetail item={s.item} />
   return null
+}
+
+function LogDetail({ item }: { item: AdminActionLogItem }) {
+  const parsedBefore = parseJSONLike(item.beforeJson)
+  const parsedAfter = parseJSONLike(item.afterJson)
+  const imageTaskRows = buildImageTaskLogRows(item, parsedAfter)
+
+  return <Detail rows={[
+    ["日志ID", item.id],
+    ["操作人", item.actorLabel || (item.userId ? `用户 #${item.userId}` : `管理员 #${item.adminId}`)],
+    ["日志类型", siteLogTypeLabel(item)],
+    ["操作内容", item.title || logActionLabel(item.action)],
+    ["操作对象", logTargetLabel(item)],
+    ["简略信息", item.description || item.remark || '-'],
+    ["状态", item.status ? statusText(item.status) : '-'],
+    ...imageTaskRows,
+    ["变更前", <PreText value={pretty(parsedBefore)} />],
+    ["原始详情", <PreText value={pretty(parsedAfter)} />],
+    ["时间", date(item.createdAt)],
+  ]} />
 }
 
 function RedeemCodeDetail({ item }: { item: AdminRedeemCodeItem }) {
@@ -366,6 +386,89 @@ function date(v?: string | null): string { if (!v) return '-'; const d = new Dat
 function money(cents: number): string { return `${(Number(cents || 0) / 100).toFixed(2)} 元` }
 function clip(v: unknown, len = 24): string { const s = String(v || ''); return s.length > len ? `${s.slice(0, len)}...` : s }
 function pretty(v: unknown): string { if (!v) return ''; try { return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v, null, 2) } catch { return String(v) } }
+function parseJSONLike(value: unknown): Record<string, unknown> | null {
+  if (!value) return null
+  if (typeof value === 'object') return value as Record<string, unknown>
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+function textValue(value: unknown): string {
+  if (value == null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+function numberValue(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+function arrayText(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(textValue).filter(Boolean) : []
+}
+function buildImageTaskLogRows(item: AdminActionLogItem, detail: Record<string, unknown> | null): Array<[string, ReactNode]> {
+  const action = item.action || ''
+  const isImageTaskLog =
+    item.recordType === 'image_task' ||
+    item.targetType === 'image_task' ||
+    action.startsWith('image_task.')
+
+  if (!isImageTaskLog || !detail) {
+    return []
+  }
+
+  const requestedCount = numberValue(detail.requestedCount)
+  const succeededCount = numberValue(detail.succeededCount)
+  const failedCount = numberValue(detail.failedCount)
+  const costPoints = numberValue(detail.costPoints)
+  const costCredits = numberValue(detail.costCredits)
+  const refundPoints = numberValue(detail.refundPoints)
+  const refundCredits = numberValue(detail.refundCredits)
+  const refundFreeCredits = numberValue(detail.refundFreeCredits)
+  const refundPaidCredits = numberValue(detail.refundPaidCredits)
+  const provider = textValue(detail.provider)
+  const providerTaskId = textValue(detail.providerTaskId)
+  const message = textValue(detail.message)
+  const rawErrorMessage = textValue(detail.rawErrorMessage)
+  const providerResponse = textValue(detail.providerResponse)
+  const requestParams = detail.requestParams
+  const imageURLs = arrayText(detail.imageURLs)
+
+  const rows: Array<[string, ReactNode]> = []
+  rows.push(["任务编号", textValue(detail.taskId) || item.targetId || '-'])
+  rows.push(["用户编号", textValue(detail.userId) || item.userId || '-'])
+  rows.push(["服务商", provider || '-'])
+  rows.push(["上游任务ID", providerTaskId || '-'])
+  if (requestedCount !== null || succeededCount !== null || failedCount !== null) {
+    rows.push(["任务数量", `${requestedCount ?? '-'} 张 / 成功 ${succeededCount ?? 0} / 失败 ${failedCount ?? 0}`])
+  }
+  if (costPoints !== null || costCredits !== null) {
+    rows.push(["实际消耗", `${costPoints ?? 0} 积分 / ${costCredits ?? 0} 次数`])
+  }
+  if (refundPoints !== null || refundCredits !== null || refundFreeCredits !== null || refundPaidCredits !== null) {
+    rows.push(["退回结果", `${refundPoints ?? 0} 积分 / ${refundCredits ?? 0} 次数（免费 ${refundFreeCredits ?? 0} / 付费 ${refundPaidCredits ?? 0}）`])
+  }
+  if (message) {
+    rows.push(["用户侧提示", message])
+  }
+  if (rawErrorMessage) {
+    rows.push(["上游错误摘要", rawErrorMessage])
+  }
+  if (providerResponse) {
+    rows.push(["上游原始返回", <PreText value={pretty(providerResponse)} />])
+  }
+  if (requestParams) {
+    rows.push(["请求参数", <PreText value={pretty(requestParams)} />])
+  }
+  if (imageURLs.length > 0) {
+    rows.push(["结果图片", imageURLs.join('\n')])
+  }
+  return rows
+}
 function kindLabel(kind: AnnouncementItem['kind']): string { if (kind === 'pinned') return '置顶'; if (kind === 'personal') return '个人公告'; return '普通' }
 function statusText(v: string): string { const map: Record<string, string> = { success: '成功', failed: '失败', generating: '生成中', running: '进行中', approved: '已通过', rejected: '已驳回', pending: '待审核', active: '可用', used: '已使用', disabled: '已禁用', expired: '已过期', low_balance: '余额低', error: '异常' }; return map[v] || v }
 function logActionLabel(action: string): string {

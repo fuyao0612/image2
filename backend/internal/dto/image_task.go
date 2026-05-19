@@ -72,6 +72,9 @@ type ImageTaskDetailResponse struct {
 	ImageElapsedSeconds   []int64   `json:"imageElapsedSeconds,omitempty"`
 	ThumbnailURL          string    `json:"thumbnailUrl,omitempty"`
 	ThumbnailURLs         []string  `json:"thumbnailUrls,omitempty"`
+	Provider              string    `json:"provider,omitempty"`
+	ProviderTaskID        string    `json:"providerTaskId,omitempty"`
+	ProviderResponse      string    `json:"providerResponse,omitempty"`
 	CostPoints            int64     `json:"costPoints"`
 	CostCredits           int64     `json:"costCredits"`
 	FreeCreditsCost       int64     `json:"freeCreditsCost"`

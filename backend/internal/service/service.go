@@ -1,4 +1,4 @@
-﻿package service
+package service
 
 import (
 	"context"
@@ -1377,35 +1377,35 @@ func normalizeProviderFailureMessage(message string) string {
 			return "上游没有可用的生图模型通道，请在服务商后台检查模型名称、分组和渠道配置。"
 		}
 		return fmt.Sprintf("上游没有可用的生图模型通道：%s。请在服务商后台检查模型名称、分组和渠道配置。", model)
+	case code == "insufficient_user_quota" || code == "insufficient_quota" || code == "billing_not_active" || isProviderBalanceError(trimmed):
+		return "这把生图 Key 余额或额度不足，我会自动换下一把再试。"
 	case code == "invalid_api_key" || code == "invalid_token" || strings.Contains(lower, "invalid token") || strings.Contains(lower, "incorrect api key") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "http 401") || strings.Contains(lower, "http 403"):
-		return "上游 API Key 无效或未授权，请在管理员后台检查生图 Key 是否正确、是否已启用。"
-	case code == "insufficient_quota" || code == "billing_not_active" || isProviderBalanceError(trimmed):
-		return "上游账号余额或额度不足，请在服务商后台充值，或在管理员后台切换可用的生图 Key。"
+		return "这把生图 API Key 无效或未授权，管理员检查后就可以恢复。"
 	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "http 429"):
-		return "上游请求过于频繁，当前被限流了，请稍后重试；如果经常出现，请增加 Key 池或降低并发。"
+		return "现在请求有点多，稍等一会儿再试通常就好；如果经常这样，管理员可以扩充 Key 池。"
 	case isProviderContentRejectedError(lower):
-		return "上游拒绝了这次提示词或参考图内容，请换一种更安全、具体的描述后重试。"
+		return "这次内容被上游拦下来了，换个更清楚、更稳妥一点的描述再试试。"
 	case isProviderTimeoutError(lower):
-		return "上游生图响应超时，请稍后重试。"
+		return "这次出图有点慢，稍后再试一次就好。"
 	case isProviderReferenceImageError(lower):
-		return "参考图处理失败，请重新上传清晰的 JPG、PNG、WebP 或 GIF 图片后再试。"
+		return "参考图处理失败了，请重新上传一张清晰的 JPG、PNG、WebP 或 GIF 再试。"
 	case isProviderTemporaryServerError(lower):
-		return "上游生图服务暂时不可用，请稍后重试；如果持续失败，请检查服务商通道状态。"
+		return "上游生图服务暂时不可用，可能是服务商通道状态有波动，过一会儿再试通常就好了。"
 	case isProviderNetworkError(lower):
-		return "暂时无法连接上游生图服务，请稍后重试；如果持续失败，请联系管理员检查服务器网络或服务商域名。"
+		return "暂时无法连接上游生图服务，稍后再试一下；如果一直这样，管理员需要检查服务器网络。"
 	case strings.Contains(lower, "unsupported size") || strings.Contains(lower, "invalid size") || strings.Contains(lower, "size is not supported") || strings.Contains(lower, "invalid image size"):
-		return "当前尺寸暂不支持，请改用 1024x1024、1024x1536、1536x1024 或自动尺寸后重试。"
+		return "这个尺寸上游暂时不支持，换成 1024x1024、1024x1536、1536x1024 或自动再试试。"
 	case strings.Contains(lower, "unsupported quality") || strings.Contains(lower, "invalid quality"):
-		return "当前质量档位暂不支持，请改为“自动”或“低/中/高”后重试。"
+		return "这个画质档位上游暂时不支持，改成自动或者低/中/高再试。"
 	case strings.Contains(lower, "unsupported output") || strings.Contains(lower, "invalid output") || strings.Contains(lower, "output format"):
-		return "当前输出格式暂不支持，请改为默认、PNG、JPEG 或 WebP 后重试。"
+		return "这个输出格式上游暂时不支持，换成默认、PNG、JPEG 或 WebP 再试。"
 	case strings.Contains(lower, "count") && (strings.Contains(lower, "invalid") || strings.Contains(lower, "unsupported") || strings.Contains(lower, "too many")):
-		return "生成张数不被上游接受，请改为 1 到 6 张后重试。"
+		return "这次选择的张数上游不接受，先改成 1 到 6 张试试。"
 	case strings.Contains(lower, "http 400") || strings.Contains(lower, "bad request") || strings.Contains(lower, "invalid request"):
-		return "上游拒绝了这次生图请求。请先用 1024x1024、1 张、自动质量、不带参考图重试；如果仍失败，请联系管理员检查模型和 Key 配置。"
+		return "上游拒绝了这次生图请求，先换成 1024x1024、1 张、自动质量、不要带参考图再试；如果还是不行，联系管理员检查模型和 Key 配置。"
 	}
 
-	return fmt.Sprintf("上游生图失败：%s", trimmed)
+	return fmt.Sprintf("上游这次没跑通：%s", trimmed)
 }
 
 func (s *Service) notifyImageTaskFailureAsync(notice imageTaskFailureNotice) {
@@ -1668,14 +1668,15 @@ func isProviderTemporaryServerError(lower string) bool {
 }
 
 const imageTaskFailureUserNotice = "本次消耗的积分或福利次数已原路退回；失败信息已邮件通知管理员，我们会尽快处理。"
+const imageTaskFailureUserNoticeSimple = "这次没生成成功，消耗的积分或福利次数已原路退回，失败信息会邮件通知管理员，我们会尽快处理。"
 
 func buildImageTaskFailureUserMessage(message string) string {
 	base := strings.TrimSpace(message)
 	if base == "" {
-		base = "图片生成失败"
+		base = "这次图片还没生成成功"
 	}
 	base = strings.TrimSuffix(base, "。")
-	notice := imageTaskFailureUserNotice
+	notice := imageTaskFailureUserNoticeSimple
 	if strings.Contains(base, notice) {
 		return truncateRunes(base, 500)
 	}
@@ -1704,14 +1705,14 @@ func buildImageTaskPartialSuccessUserMessage(message string, succeeded int, requ
 	failed := requested - succeeded
 	base := strings.TrimSpace(message)
 	if base == "" {
-		base = "上游部分图片生成未完成"
+		base = "有几张图片这次还没生成出来"
 	}
 	base = strings.TrimSuffix(base, "。")
 	notice := fmt.Sprintf("已生成 %d/%d 张图片", succeeded, requested)
 	if failed > 0 {
-		notice += fmt.Sprintf("，剩余 %d 张未完成", failed)
+		notice += fmt.Sprintf("，还有 %d 张还没完成", failed)
 	}
-	notice += "；未完成部分的积分或福利次数已原路退回；失败信息已邮件通知管理员，我们会尽快处理。"
+	notice += "；未完成部分的积分或福利次数已原路退回，失败信息已邮件通知管理员。"
 	if strings.Contains(base, notice) {
 		return truncateRunes(base, 500)
 	}
@@ -2577,6 +2578,9 @@ func (s *Service) persistPartialImageTask(ctx context.Context, taskID uint64, us
 	}
 	if strings.TrimSpace(result.ErrorMessage) != "" && result.Status == model.ImageTaskStatusFailed {
 		updates["error_message"] = truncateProviderMessage(result.ErrorMessage)
+	}
+	if taskLogID, ok := updates["provider_task_id"]; ok || len(urls) > 0 || strings.TrimSpace(result.ErrorMessage) != "" {
+		log.Printf("生图任务 %d 持久化部分结果：status=%s providerTaskID=%v urls=%d rawLen=%d errLen=%d", taskID, result.Status, taskLogID, len(urls), len([]rune(result.RawResponse)), len([]rune(result.ErrorMessage)))
 	}
 	if len(updates) == 0 {
 		return nil

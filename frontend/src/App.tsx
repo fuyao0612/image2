@@ -848,7 +848,7 @@ function App() {
 
           setPreview((current) =>
             current.taskId === taskId
-              ? {
+                ? {
                   ...current,
                   requestedCount: detail.requestedCount || detailCount,
                   prompt: detail.prompt,
@@ -857,6 +857,9 @@ function App() {
                   imageElapsedSeconds: persistedElapsedSeconds,
                   thumbnailUrl: detail.thumbnailUrl,
                   thumbnailUrls: detail.thumbnailUrls,
+                  provider: detail.provider,
+                  providerTaskId: detail.providerTaskId,
+                  providerResponse: detail.providerResponse,
                   costPoints: detail.costPoints,
                   costCredits: detail.costCredits,
                   freeCreditsCost: detail.freeCreditsCost,
@@ -874,15 +877,15 @@ function App() {
             current.map((item) =>
               item.id === taskId
                 ? {
-                    ...item,
-                    requestedCount: detail.requestedCount || detailCount,
-                    prompt: detail.prompt,
-                    imageUrl: detail.imageUrl,
-                    imageUrls: imageURLs,
-                    imageElapsedSeconds: persistedElapsedSeconds,
-                    thumbnailUrl: detail.thumbnailUrl,
-                    thumbnailUrls: detail.thumbnailUrls,
-                    costPoints: detail.costPoints,
+                  ...item,
+                  requestedCount: detail.requestedCount || detailCount,
+                  prompt: detail.prompt,
+                  imageUrl: detail.imageUrl,
+                  imageUrls: imageURLs,
+                  imageElapsedSeconds: persistedElapsedSeconds,
+                  thumbnailUrl: detail.thumbnailUrl,
+                  thumbnailUrls: detail.thumbnailUrls,
+                  costPoints: detail.costPoints,
                     costCredits: detail.costCredits,
                     freeCreditsCost: detail.freeCreditsCost,
                     paidCreditsCost: detail.paidCreditsCost,
@@ -1807,7 +1810,7 @@ function App() {
               : `任务已提交，任务编号：${result.taskId}，生成失败。`,
       })
       if (generationStatus === 'failed') {
-        setMessage(`任务已提交，任务编号：${result.taskId}，但生成失败。`)
+        setMessage(`任务已提交，任务编号：${result.taskId}，${result.errorMessage || '但生成失败。'}`)
       }
     } catch (error) {
       handleApiError(error, '提交失败')
@@ -1893,7 +1896,7 @@ function App() {
               : `任务已重试，任务编号：${result.taskId}，生成失败。`,
       })
       if (generationStatus === 'failed') {
-        setMessage(`任务已重试，任务编号：${result.taskId}，但生成失败。`)
+        setMessage(`任务已重试，任务编号：${result.taskId}，${result.errorMessage || '但生成失败。'}`)
       }
     } catch (error) {
       handleApiError(error, '重试任务失败')
@@ -7155,6 +7158,9 @@ function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailRespon
     imageElapsedSeconds: normalizeElapsedSeconds(detail.imageElapsedSeconds),
     thumbnailUrl: detail.thumbnailUrl,
     thumbnailUrls: limitImageURLs(normalizeImageURLs(detail.thumbnailUrls, detail.thumbnailUrl), detail.requestedCount),
+    provider: detail.provider,
+    providerTaskId: detail.providerTaskId,
+    providerResponse: detail.providerResponse,
     costPoints: detail.costPoints,
     costCredits: detail.costCredits,
     freeCreditsCost: detail.freeCreditsCost,

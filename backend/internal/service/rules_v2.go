@@ -1,4 +1,4 @@
-﻿package service
+package service
 
 import (
 	"context"
@@ -442,6 +442,9 @@ func (s *Service) getImageTaskV2(ctx context.Context, userID uint64, taskID stri
 		ImageElapsedSeconds:   imageElapsedSecondsFromTask(task),
 		ThumbnailURL:          thumbnailURLFromList(thumbURLs, 0),
 		ThumbnailURLs:         thumbURLs,
+		Provider:              task.Provider,
+		ProviderTaskID:        task.ProviderTaskID,
+		ProviderResponse:      task.ProviderResponse,
 		CostPoints:            task.CostPoints,
 		CostCredits:           task.CostCredits,
 		FreeCreditsCost:       task.FreeCreditsCost,
@@ -672,6 +675,28 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 			if settlement.ConsumedCredits == 0 {
 				balance = currentPoints
 			}
+			if err := s.recordSiteActionLog(tx, "system", 0, "image_task.partial_success", "image_task", strconv.FormatUint(task.ID, 10), "生图任务部分成功", "任务完成了部分图片，未完成部分已退款", "warning", map[string]any{
+				"userId":            task.UserID,
+				"taskId":            task.ID,
+				"provider":          task.Provider,
+				"providerTaskId":    providerTaskID,
+				"requestedCount":    settlement.Requested,
+				"succeededCount":    settlement.Succeeded,
+				"failedCount":       settlement.Failed,
+				"costPoints":        settlement.ConsumedPoints,
+				"costCredits":       settlement.ConsumedCredits,
+				"refundPoints":      settlement.RefundPoints,
+				"refundCredits":     settlement.RefundCredits,
+				"refundFreeCredits": settlement.RefundFree,
+				"refundPaidCredits": settlement.RefundPaid,
+				"message":           partialMessage,
+				"rawErrorMessage":   truncateProviderMessage(result.ErrorMessage),
+				"providerResponse":  truncateProviderMessage(result.RawResponse),
+				"imageCount":        len(successfulURLs),
+				"imageURLs":         successfulURLs,
+			}); err != nil {
+				return err
+			}
 			return nil
 		}
 
@@ -758,6 +783,25 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 		}
 		if task.CostCredits == 0 {
 			balance = refundedPoints
+		}
+		if err := s.recordSiteActionLog(tx, "system", 0, "image_task.failed", "image_task", strconv.FormatUint(task.ID, 10), "生图任务失败", "任务失败并已执行退款", "failed", map[string]any{
+			"userId":              task.UserID,
+			"taskId":              task.ID,
+			"provider":            task.Provider,
+			"providerTaskId":      strings.TrimSpace(result.ProviderTaskID),
+			"requestedCount":      task.RequestedCount,
+			"costPoints":          task.CostPoints,
+			"costCredits":         task.CostCredits,
+			"refundPoints":        task.CostPoints,
+			"refundFreeCredits":   task.FreeCreditsCost,
+			"refundPaidCredits":   task.PaidCreditsCost,
+			"emailNotifyRefunded": task.EmailNotifyEnabled && task.EmailNotifyCostPoints > 0,
+			"message":             message,
+			"rawErrorMessage":     truncateProviderMessage(result.ErrorMessage),
+			"providerResponse":    truncateProviderMessage(result.RawResponse),
+			"requestParams":       truncateProviderMessage(task.RequestParams),
+		}); err != nil {
+			return err
 		}
 		return nil
 	})

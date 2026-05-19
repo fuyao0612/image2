@@ -313,6 +313,9 @@ export interface ImageTaskDetailResponse {
   imageElapsedSeconds?: number[]
   thumbnailUrl?: string
   thumbnailUrls?: string[]
+  provider?: string
+  providerTaskId?: string
+  providerResponse?: string
   costPoints: number
   costCredits: number
   freeCreditsCost?: number
@@ -547,6 +550,8 @@ export interface AdminImageTaskItem {
   creditSource?: string
   status: string
   provider?: string
+  providerTaskId?: string
+  providerResponse?: string
   requestParams?: string
   errorMessage?: string
   createdAt: string
