@@ -2474,7 +2474,7 @@ func (s *Service) pollImageTaskV2(ctx context.Context, taskID uint64, userID uin
 	temporaryFailures := 0
 	runningFetches := 0
 	const maxTemporaryFailures = 3
-	const maxRunningPollDuration = 8 * time.Minute
+	const maxRunningPollDuration = 12 * time.Minute
 	maxRunningFetches := int(maxRunningPollDuration / pollInterval)
 	if maxRunningFetches < 1 {
 		maxRunningFetches = 1
