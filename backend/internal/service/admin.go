@@ -564,6 +564,12 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 	for _, task := range tasks {
 		thumbURLs := s.thumbnailURLsFromTask(ctx, task)
 		imageURLs := imageURLsFromTask(task)
+		adminErrorMessage := ""
+		if task.Status == model.ImageTaskStatusFailed {
+			adminErrorMessage = providerFailureAdminMessage(provider.GenerateResult{
+				RawResponse: task.ProviderResponse,
+			}, nil)
+		}
 		items = append(items, dto.AdminImageTaskItem{
 			ID:                    strconv.FormatUint(task.ID, 10),
 			UserID:                strconv.FormatUint(task.UserID, 10),
@@ -586,7 +592,7 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 			ProviderResponse:      task.ProviderResponse,
 			RequestParams:         task.RequestParams,
 			ErrorMessage:          task.ErrorMessage,
-			AdminErrorMessage:     providerFailureAdminMessage(provider.GenerateResult{ErrorMessage: task.ErrorMessage, RawResponse: task.ProviderResponse}, nil),
+			AdminErrorMessage:     adminErrorMessage,
 			CreatedAt:             task.CreatedAt,
 			UpdatedAt:             task.UpdatedAt,
 		})

@@ -2298,6 +2298,68 @@ func TestAdminListTaskAndRedeemKeywordFilters(t *testing.T) {
 	}
 }
 
+func TestAdminListImageTasksSeparatesAdminErrorMessageFromUserMessage(t *testing.T) {
+	svc, db := newTestService(t)
+	admin := createTestUser(t, db, 0)
+	user := createTestUser(t, db, 10)
+	if err := db.Model(&model.User{}).Where("id = ?", admin.ID).Updates(map[string]any{
+		"email": "admin@example.com",
+		"role":  model.UserRoleAdmin,
+	}).Error; err != nil {
+		t.Fatalf("promote admin: %v", err)
+	}
+
+	successTask := createTestTask(t, db, user.ID, model.ImageTaskStatusSuccess, 1)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", successTask.ID).Updates(map[string]any{
+		"prompt":            "success task",
+		"provider":          "mentalout",
+		"error_message":     "这次生成失败了，我们已经记录问题。",
+		"provider_response": `{"error":{"message":"upstream should not leak on success"}}`,
+	}).Error; err != nil {
+		t.Fatalf("update success task: %v", err)
+	}
+
+	failedTask := createTestTask(t, db, user.ID, model.ImageTaskStatusFailed, 0)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", failedTask.ID).Updates(map[string]any{
+		"prompt":            "failed task",
+		"provider":          "mentalout",
+		"error_message":     "这次生成失败了，我们已经记录问题。",
+		"provider_response": `{"error":{"message":"Tool choice 'image_generation' not found in 'tools' parameter.","type":"invalid_request_error"}}`,
+	}).Error; err != nil {
+		t.Fatalf("update failed task: %v", err)
+	}
+
+	resp, err := svc.AdminListImageTasks(context.Background(), admin.ID, "", "", 1, 20)
+	if err != nil {
+		t.Fatalf("list image tasks: %v", err)
+	}
+
+	var gotSuccess *dto.AdminImageTaskItem
+	var gotFailed *dto.AdminImageTaskItem
+	for i := range resp.Items {
+		item := &resp.Items[i]
+		switch item.ID {
+		case strconv.FormatUint(successTask.ID, 10):
+			gotSuccess = item
+		case strconv.FormatUint(failedTask.ID, 10):
+			gotFailed = item
+		}
+	}
+
+	if gotSuccess == nil || gotFailed == nil {
+		t.Fatalf("expected both tasks in response, got %+v", resp.Items)
+	}
+	if gotSuccess.AdminErrorMessage != "" {
+		t.Fatalf("expected success task admin error message empty, got %q", gotSuccess.AdminErrorMessage)
+	}
+	if gotFailed.AdminErrorMessage == "" {
+		t.Fatalf("expected failed task admin error message to be populated")
+	}
+	if gotFailed.AdminErrorMessage == gotFailed.ErrorMessage {
+		t.Fatalf("expected admin and user messages to differ for failed task, got %q", gotFailed.AdminErrorMessage)
+	}
+}
+
 func TestRedeemCodeRejectsExpiredCode(t *testing.T) {
 	svc, db := newTestService(t)
 	user := createTestUser(t, db, 0)

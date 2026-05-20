@@ -376,8 +376,6 @@ const CUSTOM_SIZE_MAX_SIDE = 3840
 const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
-const HIGH_QUALITY_SIZE_HINT = '4K 或超大尺寸也可以使用高质量；如果偶尔失败，消耗会自动退回，改用“自动”或“中”质量通常会更稳。'
-
 function App() {
   const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
@@ -1684,6 +1682,10 @@ function App() {
       setMessage('提示词不能为空。')
       return
     }
+    if (referenceImageUploading || busy === 'upload-reference') {
+      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
+      return
+    }
     setGenerateConfirmOpen(true)
   }
 
@@ -1711,6 +1713,10 @@ function App() {
 
     if (!prompt.trim()) {
       setMessage('提示词不能为空。')
+      return
+    }
+    if (referenceImageUploading || busy === 'upload-reference') {
+      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
       return
     }
 
@@ -3250,9 +3256,6 @@ function App() {
                             </option>
                           ))}
                         </select>
-                        {quality.trim().toLowerCase() === 'high' ? (
-                          <p className="mt-2 text-xs text-slate-500">{HIGH_QUALITY_SIZE_HINT}</p>
-                        ) : null}
                       </label>
 
                       <label className="block min-w-0">
@@ -3275,15 +3278,21 @@ function App() {
                       <button
                         type="button"
                         onClick={handleOpenCreateTaskConfirm}
-                        disabled={!isAuthed || busy === 'create-task' || !prompt.trim() || !imageGenerationEnabled}
+                        disabled={!isAuthed || busy === 'create-task' || busy === 'upload-reference' || referenceImageUploading || !prompt.trim() || !imageGenerationEnabled}
                         className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {busy === 'create-task' ? (
                           <LoaderCircle className="h-4 w-4 animate-spin" />
+                        ) : referenceImageUploading || busy === 'upload-reference' ? (
+                          <LoaderCircle className="h-4 w-4 animate-spin" />
                         ) : (
                           <Sparkles className="h-4 w-4" />
                         )}
-                        {imageGenerationEnabled ? `生成图片，本次预计消耗 ${estimatedGenerationPointCost} 积分` : '暂时关闭，详情见公告'}
+                        {imageGenerationEnabled
+                          ? referenceImageUploading || busy === 'upload-reference'
+                            ? '参考图上传中...'
+                            : `生成图片，本次预计消耗 ${estimatedGenerationPointCost} 积分`
+                          : '暂时关闭，详情见公告'}
                       </button>
                     </div>
                   </section>
@@ -3468,6 +3477,7 @@ function App() {
           title="确认提交生图任务"
           lines={[
             '确认是否提交生图任务？',
+            `上传参考图：${referenceImages.length} 张`,
             `生成张数：${clampCount(Number(count) || 1)} 张`,
             `本次预计消耗：${estimatedGenerationPointCost} 积分`,
           ]}
