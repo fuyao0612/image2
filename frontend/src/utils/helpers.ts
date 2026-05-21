@@ -1,3 +1,5 @@
+import { FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES } from '../constants/app'
+import type { ReferenceImageItem } from '../types/app'
 import type { CreditLogItem, UserActivityItem } from '@/types/api'
 
 // ── Formatting ──────────────────────────────────────────────────────
@@ -278,4 +280,31 @@ export function formatInviteReward(credits: number, points: number): string {
     parts.push(`${points} 积分`)
   }
   return parts.length > 0 ? parts.join(' + ') : '0 奖励'
+}
+
+// ── Reference Images ────────────────────────────────────────────────
+
+export function getReferenceImageNameFromURL(rawURL: string): string {
+  try {
+    const parsed = new URL(rawURL, window.location.origin)
+    const fileName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '')
+    return fileName || ''
+  } catch {
+    return rawURL.split('/').filter(Boolean).pop() || ''
+  }
+}
+
+export function syncPrimaryReferenceImage(images: ReferenceImageItem[]): ReferenceImageItem[] {
+  return images
+    .map((image) => ({
+      ...image,
+      url: image.url.trim(),
+      name: image.name.trim(),
+    }))
+    .filter((image) => image.url)
+    .slice(0, MAX_REFERENCE_IMAGES)
+}
+
+export function getReferenceImageExtraPointCost(count: number): number {
+  return Math.max(0, count - FREE_REFERENCE_IMAGE_COUNT)
 }

@@ -1,4 +1,12 @@
-import React, { useRef, useState, useEffect } from 'react';
+
+
+
+
+
+
+
+
+import React, { useRef, useState, useEffect, DragEvent, ClipboardEvent, ChangeEvent } from 'react';
 import {
   ArrowUpDown, BadgeCheck, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
   Copy, Download, Eye, EyeOff, Gift, Heart, History, Home, Image as ImageIcon,
@@ -9,6 +17,10 @@ import {
 } from 'lucide-react';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from '../constants/app';
 import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams } from '../utils/imageTasks';
+import * as api from "../api/client";
+import type { UploadImageResponse } from "../types/api";
+import type { ReferenceImageSource, ReferenceImageItem } from "../types/app";
+import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost } from '../utils/helpers';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
 
 export interface HomePageProps {
@@ -20,17 +32,7 @@ export interface HomePageProps {
   emailNotifyOnComplete: boolean;
   setEmailNotifyOnComplete: (val: boolean) => void;
   emailNotifyPointCost: number;
-  handlePromptDrag: (e: any) => void;
-  handlePromptDragLeave: (e: any) => void;
-  handlePromptDrop: (e: any) => void;
-  handlePromptPaste: (e: any) => void;
-  referenceImageInputRef: any;
-  referenceImageUploading: any;
   busy: any;
-  handleNetworkReferenceImageInput: (e: any) => void;
-  referenceImages: any[];
-  handleDeleteReferenceImage: (index: number) => void;
-  getReferenceImageExtraPointCost: (count: number) => number;
   clampCount: (val: number) => number;
   estimatedGenerationPointCost: number;
   handleOpenCreateTaskConfirm: () => void;
@@ -56,8 +58,6 @@ export interface HomePageProps {
   setWechatSaveGuide: (val: any) => void;
   generateConfirmOpen: boolean;
   setGenerateConfirmOpen: (val: boolean) => void;
-  handleLocalReferenceImageChange: (e: any) => void;
-  handleAddNetworkReferenceImage: () => void;
   isAuthed: boolean;
   imageGenerationEnabled: boolean;
   handleOpenPreviewDetail: (item: any) => void;
@@ -65,7 +65,10 @@ export interface HomePageProps {
   previewThumbnailURLs: string[];
   handleCancelCreateTaskConfirm: () => void;
   handleConfirmCreateTask: () => void;
-  onFormSnapshotChange?: (snapshot: { count: number }) => void;
+  onFormSnapshotChange?: (snapshot: { count: number, referenceImageCount: number }) => void;
+  setMessage: (msg: string) => void;
+  setBusy: (busy: any) => void;
+  handleApiError: (err: any, fallback: string) => void;
 }
 
 export function HomePage(props: HomePageProps) {
@@ -82,32 +85,163 @@ export function HomePage(props: HomePageProps) {
   const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
   const [promptDragActive, setPromptDragActive] = useState(false)
 
+  const [referenceImageName, setReferenceImageName] = useState('')
+  const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
+  const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
+  const [referenceImageUploading, setReferenceImageUploading] = useState(false)
+  const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
+
+  async function uploadLocalReferenceImage(file?: File) {
+    if (!file) {
+      return
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      setMessage('仅支持上传 JPEG、PNG、WebP 或 GIF 图片。')
+      return
+    }
+
+    try {
+      setReferenceImageUploading(true)
+      setBusy('upload-reference')
+      if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
+        setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+        return
+      }
+      const result: UploadImageResponse = await api.uploadReferenceImage(file)
+      const nextImage: ReferenceImageItem = {
+        url: result.imageUrl,
+        name: result.fileName || file.name,
+        source: 'local',
+      }
+      setReferenceImages((current: any) => syncPrimaryReferenceImage([...current, nextImage]))
+      setReferenceImageURL(nextImage.url)
+      setReferenceImageName(nextImage.name)
+      setReferenceImageSource('local')
+      setShowNetworkImageInput(false)
+    } catch (error) {
+      handleApiError(error, '上传图片失败')
+    } finally {
+      setReferenceImageUploading(false)
+      setBusy(null)
+    }
+    }
+
+  async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
+      await uploadLocalReferenceImage(file)
+    }
+    if (files.length > MAX_REFERENCE_IMAGES - referenceImages.length) {
+      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+    }
+    }
+
+  function handleNetworkReferenceImageInput(value: string) {
+    setReferenceImageURL(value)
+    setReferenceImageSource(value.trim() ? 'network' : 'none')
+    }
+
+  function handleAddNetworkReferenceImage() {
+    const trimmed = (referenceImageURL || '').trim()
+    if (!trimmed) {
+      setMessage('请输入网络图片链接。')
+      return
+    }
+    if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
+      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+      return
+    }
+    const nextImage: ReferenceImageItem = {
+      url: trimmed,
+      name: getReferenceImageNameFromURL(trimmed) || '网络图片',
+      source: 'network',
+    }
+    setReferenceImages((current: any) => syncPrimaryReferenceImage([...current, nextImage]))
+    setReferenceImageName(nextImage.name)
+    setReferenceImageSource('network')
+    setReferenceImageURL('')
+    setShowNetworkImageInput(false)
+    }
+
+  function handleDeleteReferenceImage(index: number) {
+    setReferenceImages((current: any) => {
+      const next = syncPrimaryReferenceImage(current.filter((_: any, itemIndex: number) => itemIndex !== index))
+      const first = next[0]
+      setReferenceImageURL(first?.url || '')
+      setReferenceImageName(first?.name || '')
+      setReferenceImageSource(first?.source || 'none')
+      if (!next.length) {
+        setReferenceImagesDialogOpen(false)
+      }
+      return next
+    })
+    }
+
+  function handlePromptDrag(event: DragEvent<HTMLTextAreaElement>) {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) {
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    setPromptDragActive(true)
+    }
+
+  function handlePromptDragLeave(event: DragEvent<HTMLTextAreaElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return
+    }
+    setPromptDragActive(false)
+    }
+
+  async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
+    event.preventDefault()
+    setPromptDragActive(false)
+    const files = Array.from(event.dataTransfer.files).filter((item) => item.type.startsWith('image/'))
+    if (!files.length) {
+      setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
+      return
+    }
+    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
+      await uploadLocalReferenceImage(file)
+    }
+    }
+
+  async function handlePromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files).filter((item) => item.type.startsWith('image/'))
+    if (!files.length) {
+      return
+    }
+    event.preventDefault()
+    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
+      await uploadLocalReferenceImage(file)
+    }
+    }
+
+
   useEffect(() => {
     if (props.homeStateRef) {
       props.homeStateRef.current = {
         prompt, setPrompt, size, setSize, customWidth, setCustomWidth, customHeight, setCustomHeight,
         style, setStyle, count, setCount, quality, setQuality, outputFormat, setOutputFormat,
         showNetworkImageInput, setShowNetworkImageInput, referenceImageURL, setReferenceImageURL,
-        promptDragActive, setPromptDragActive, referenceImagesDialogOpen, setReferenceImagesDialogOpen
+        promptDragActive, setPromptDragActive, referenceImagesDialogOpen, setReferenceImagesDialogOpen, referenceImages, setReferenceImages, referenceImageUploading, setReferenceImageUploading, referenceImageName, setReferenceImageName, referenceImageSource, setReferenceImageSource, referenceImageInputRef
       }
     }
-    props.onFormSnapshotChange?.({ count })
-  }, [props.homeStateRef, props.onFormSnapshotChange, count])
+    props.onFormSnapshotChange?.({ count, referenceImageCount: referenceImages.length })
+  }, [props.homeStateRef, props.onFormSnapshotChange, count, referenceImages.length])
 
   const {
+    setMessage, setBusy, handleApiError,
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
-    setEmailNotifyOnComplete, emailNotifyPointCost, handlePromptDrag,
-    handlePromptDragLeave, handlePromptDrop, handlePromptPaste, referenceImageInputRef,
-    referenceImageUploading, busy, handleNetworkReferenceImageInput, referenceImages, handleDeleteReferenceImage,
-    getReferenceImageExtraPointCost, clampCount,
+    setEmailNotifyOnComplete, emailNotifyPointCost, busy, clampCount,
     estimatedGenerationPointCost,
     handleOpenCreateTaskConfirm, hasRunningGeneration, handleClearPromptOptions,
     preview, setPreview, previewImageIndex, setPreviewImageIndex, previewDetailOpen,
     setPreviewDetailOpen, handleSaveCurrentImage, handlePreviousPreviewImage,
     handleNextPreviewImage, loadPreviewTaskDetail, generationProgresses, history,
     historyPage, historyTotal, loadHistoryPage, handleSelectTask, wechatSaveGuide,
-    setWechatSaveGuide, generateConfirmOpen, setGenerateConfirmOpen,
-    handleLocalReferenceImageChange, handleAddNetworkReferenceImage, isAuthed, imageGenerationEnabled,
+    setWechatSaveGuide, generateConfirmOpen, setGenerateConfirmOpen, isAuthed, imageGenerationEnabled,
     handleOpenPreviewDetail, previewImageURLs, previewThumbnailURLs,
     handleCancelCreateTaskConfirm, handleConfirmCreateTask
   } = props;

@@ -95,6 +95,7 @@ import type { AppContextType } from './contexts/AppContext';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from './constants/app';
 import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, clampCount } from './utils/imageTasks';
 import { MiniStat, PanelPagination } from './components/shared';
+import { getReferenceImageNameFromURL, syncPrimaryReferenceImage, getReferenceImageExtraPointCost } from './utils/helpers';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from './components/home';
 
 
@@ -361,7 +362,7 @@ function App() {
         ? 'register'
         : 'login',
     )
-    const [homeFormSnapshot, setHomeFormSnapshot] = useState({ count: 1 })
+    const [homeFormSnapshot, setHomeFormSnapshot] = useState({ count: 1, referenceImageCount: 0 })
     const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
     const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -489,21 +490,22 @@ function App() {
     const taskCount = clampCount(Number(homeFormSnapshot.count) || 1)
     const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
     const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
-    const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
+    const referenceExtraPointCost = getReferenceImageExtraPointCost(homeFormSnapshot.referenceImageCount)
     const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
     return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
     }, [
     homeFormSnapshot.count,
+    homeFormSnapshot.referenceImageCount,
     emailNotifyAvailable,
     emailNotifyOnComplete,
     emailNotifyPointCost,
     imageGeneratePointCost,
     points?.totalCredits,
-    referenceImages.length,
+    (homeStateRef.current.referenceImages || []).length,
     ])
     const promptGalleryItems = useMemo(
     () =>
-      [...serverPromptItems, ...featuredPromptItems].map((item) => ({
+      [...serverPromptItems, ...featuredPromptItems].map((item: any) => ({
         ...item,
         tags: normalizePromptTags(item.tags ?? []),
         approvedAt: item.approvedAt ?? (item.status === 'approved' ? item.createdAt : undefined),
@@ -624,7 +626,7 @@ function App() {
 
     const timers = [0, 150, 500].map((delay) =>
       window.setTimeout(() => {
-        setAuthForm((current) => {
+        setAuthForm((current: any) => {
           if (!current.account && !current.password) {
             return current
           }
@@ -949,8 +951,8 @@ function App() {
                 
                 const runningTasks = latestResult.items.filter((item: any) => item.status === 'generating' || item.status === 'running');
                 if (runningTasks.length > 0) {
-                  setGenerationProgresses((current) => {
-                    const currentIds = new Set(current.map((item) => item.taskId));
+                  setGenerationProgresses((current: any) => {
+                    const currentIds = new Set(current.map((item: any) => item.taskId));
                     const next = [...current];
                     for (const task of [...runningTasks].reverse()) {
                       if (currentIds.has(task.id)) continue;
@@ -1006,7 +1008,7 @@ function App() {
       setCaptcha(result)
       setRegistrationDailyLimitReached(false)
       setEmailCaptchaPassUntil(0)
-      setAuthForm((current) => ({ ...current, captchaCode: '' }))
+      setAuthForm((current: any) => ({ ...current, captchaCode: '' }))
       if (showMessage) {
         setMessage('图形验证码已刷新。')
       }
@@ -1064,7 +1066,7 @@ function App() {
         captchaId: hasCaptchaPass ? undefined : captcha?.captchaId,
         captchaCode: hasCaptchaPass ? undefined : authForm.captchaCode,
       })
-      setAuthForm((current) => ({ ...current, code: '' }))
+      setAuthForm((current: any) => ({ ...current, code: '' }))
       setEmailCaptchaPassUntil(Date.now() + result.expiresIn * 1000)
       setEmailCodeCountdown(60)
       setMessage(`验证码已发送，请查收最新一封邮件。有效时间 ${Math.floor(result.expiresIn / 60)} 分钟。`)
@@ -1331,7 +1333,7 @@ function App() {
       setMessage('提示词不能为空。')
       return
     }
-    if (referenceImageUploading || busy === 'upload-reference') {
+    if (homeStateRef.current.referenceImageUploading || busy === 'upload-reference') {
       setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
       return
     }
@@ -1364,7 +1366,7 @@ function App() {
       setMessage('提示词不能为空。')
       return
     }
-    if (referenceImageUploading || busy === 'upload-reference') {
+    if (homeStateRef.current.referenceImageUploading || busy === 'upload-reference') {
       setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
       return
     }
@@ -1385,8 +1387,8 @@ function App() {
       count: taskCount,
       quality: homeStateRef.current.quality,
       outputFormat: homeStateRef.current.outputFormat,
-      referenceImageUrl: referenceImages[0]?.url || (homeStateRef.current.referenceImageURL || '').trim() || undefined,
-      referenceImageUrls: referenceImages.map((item) => item.url).filter(Boolean),
+      referenceImageUrl: (homeStateRef.current.referenceImages || [])[0]?.url || (homeStateRef.current.referenceImageURL || '').trim() || undefined,
+      referenceImageUrls: (homeStateRef.current.referenceImages || []).map((item: any) => item.url).filter(Boolean),
       referenceImages,
       emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
     } satisfies TaskRequestSnapshot
@@ -1423,7 +1425,7 @@ function App() {
       setPreviewImageIndex(0)
       setHistoryPage(1)
       void loadHistoryPage(1, { showBusy: false })
-      setPoints((current) => {
+      setPoints((current: any) => {
         if (!current) {
           return current
         }
@@ -1509,7 +1511,7 @@ function App() {
       setPreviewImageIndex(0)
       setHistoryPage(1)
       void loadHistoryPage(1, { showBusy: false })
-      setPoints((current) => {
+      setPoints((current: any) => {
         if (!current) {
           return current
         }
@@ -1569,7 +1571,7 @@ function App() {
     }
 
     function handlePreviousPreviewImage() {
-    setPreviewImageIndex((current) => {
+    setPreviewImageIndex((current: any) => {
       const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
@@ -1579,7 +1581,7 @@ function App() {
     }
 
     function handleNextPreviewImage() {
-    setPreviewImageIndex((current) => {
+    setPreviewImageIndex((current: any) => {
       const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
@@ -1722,10 +1724,10 @@ function App() {
 
     const parsedReferenceImages = normalizeReferenceImagesFromSnapshot(parsed)
     const firstReferenceImage = parsedReferenceImages[0]
-    setReferenceImages(parsedReferenceImages)
+    homeStateRef.current.setReferenceImages(parsedReferenceImages)
     homeStateRef.current.setReferenceImageURL(firstReferenceImage?.url || '')
-    setReferenceImageName(firstReferenceImage?.name || '')
-    setReferenceImageSource(firstReferenceImage?.source || 'none')
+    homeStateRef.current.setReferenceImageName(firstReferenceImage?.name || '')
+    homeStateRef.current.setReferenceImageSource(firstReferenceImage?.source || 'none')
     homeStateRef.current.setShowNetworkImageInput(false)
     setActivePage('home')
     setSidebarOpen(false)
@@ -1760,7 +1762,7 @@ function App() {
     }
 
     function handleToggleAdmin() {
-    setAdminOpen((current) => !current)
+    setAdminOpen((current: any) => !current)
     }
 
     function handleExitAdmin() {
@@ -1920,144 +1922,35 @@ function App() {
     }
 
 
-    async function uploadLocalReferenceImage(file?: File) {
-    if (!file) {
-      return
-    }
-    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
-      setMessage('仅支持上传 JPEG、PNG、WebP 或 GIF 图片。')
-      return
-    }
+    
 
-    try {
-      setReferenceImageUploading(true)
-      setBusy('upload-reference')
-      if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
-        setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
-        return
-      }
-      const result: UploadImageResponse = await api.uploadReferenceImage(file)
-      const nextImage: ReferenceImageItem = {
-        url: result.imageUrl,
-        name: result.fileName || file.name,
-        source: 'local',
-      }
-      setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
-      homeStateRef.current.setReferenceImageURL(nextImage.url)
-      setReferenceImageName(nextImage.name)
-      setReferenceImageSource('local')
-      homeStateRef.current.setShowNetworkImageInput(false)
-    } catch (error) {
-      handleApiError(error, '上传图片失败')
-    } finally {
-      setReferenceImageUploading(false)
-      setBusy(null)
-    }
-    }
+    
 
-    async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? [])
-    event.target.value = ''
-    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
-      await uploadLocalReferenceImage(file)
-    }
-    if (files.length > MAX_REFERENCE_IMAGES - referenceImages.length) {
-      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
-    }
-    }
+    
 
-    function handlePromptDrag(event: DragEvent<HTMLTextAreaElement>) {
-    if (!Array.from(event.dataTransfer.types).includes('Files')) {
-      return
-    }
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'copy'
-    homeStateRef.current.setPromptDragActive(true)
-    }
+    
 
-    function handlePromptDragLeave(event: DragEvent<HTMLTextAreaElement>) {
-    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      return
-    }
-    homeStateRef.current.setPromptDragActive(false)
-    }
+    
 
-    async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
-    event.preventDefault()
-    homeStateRef.current.setPromptDragActive(false)
-    const files = Array.from(event.dataTransfer.files).filter((item) => item.type.startsWith('image/'))
-    if (!files.length) {
-      setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
-      return
-    }
-    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
-      await uploadLocalReferenceImage(file)
-    }
-    }
+    
 
-    async function handlePromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const files = Array.from(event.clipboardData.files).filter((item) => item.type.startsWith('image/'))
-    if (!files.length) {
-      return
-    }
-    event.preventDefault()
-    for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
-      await uploadLocalReferenceImage(file)
-    }
-    }
+    
 
-    function handleNetworkReferenceImageInput(value: string) {
-    homeStateRef.current.setReferenceImageURL(value)
-    setReferenceImageSource(value.trim() ? 'network' : 'none')
-    }
-
-    function handleAddNetworkReferenceImage() {
-    const trimmed = (homeStateRef.current.referenceImageURL || '').trim()
-    if (!trimmed) {
-      setMessage('请输入网络图片链接。')
-      return
-    }
-    if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
-      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
-      return
-    }
-    const nextImage: ReferenceImageItem = {
-      url: trimmed,
-      name: getReferenceImageNameFromURL(trimmed) || '网络图片',
-      source: 'network',
-    }
-    setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
-    setReferenceImageName(nextImage.name)
-    setReferenceImageSource('network')
-    homeStateRef.current.setReferenceImageURL('')
-    homeStateRef.current.setShowNetworkImageInput(false)
-    }
+    
 
     function handleClearReferenceImage() {
     homeStateRef.current.setReferenceImageURL('')
-    setReferenceImageName('')
-    setReferenceImageSource('none')
-    setReferenceImages([])
+    homeStateRef.current.setReferenceImageName('')
+    homeStateRef.current.setReferenceImageSource('none')
+    homeStateRef.current.setReferenceImages([])
     homeStateRef.current.setReferenceImagesDialogOpen(false)
     homeStateRef.current.setShowNetworkImageInput(false)
-    if (referenceImageInputRef.current) {
-      referenceImageInputRef.current.value = ''
+    if ((homeStateRef.current.referenceImageInputRef?.current)) {
+      (homeStateRef.current.referenceImageInputRef?.current).value = ''
     }
     }
 
-    function handleDeleteReferenceImage(index: number) {
-    setReferenceImages((current) => {
-      const next = syncPrimaryReferenceImage(current.filter((_, itemIndex) => itemIndex !== index))
-      const first = next[0]
-      homeStateRef.current.setReferenceImageURL(first?.url || '')
-      setReferenceImageName(first?.name || '')
-      setReferenceImageSource(first?.source || 'none')
-      if (!next.length) {
-        homeStateRef.current.setReferenceImagesDialogOpen(false)
-      }
-      return next
-    })
-    }
+    
 
     function handleClearPromptOptions() {
     const confirmed = window.confirm('是否清除当前提示词以及选项信息？')
@@ -2074,11 +1967,11 @@ function App() {
     homeStateRef.current.setCustomWidth('1024')
     homeStateRef.current.setCustomHeight('1024')
     homeStateRef.current.setReferenceImageURL('')
-    setReferenceImageName('')
-    setReferenceImageSource('none')
+    homeStateRef.current.setReferenceImageName('')
+    homeStateRef.current.setReferenceImageSource('none')
     homeStateRef.current.setShowNetworkImageInput(false)
-    if (referenceImageInputRef.current) {
-      referenceImageInputRef.current.value = ''
+    if ((homeStateRef.current.referenceImageInputRef?.current)) {
+      (homeStateRef.current.referenceImageInputRef?.current).value = ''
     }
     }
 
@@ -2161,7 +2054,7 @@ function App() {
                             }
                           }}
                           onChange={(event) => {
-                            setAuthForm((current) => ({ ...current, username: event.target.value }))
+                            setAuthForm((current: any) => ({ ...current, username: event.target.value }))
                             setRegisterAvailabilityCheck(null)
                             setRegisterUsernameCheck(null)
                           }}
@@ -2193,7 +2086,7 @@ function App() {
                           }
                         }}
                         onChange={(event) => {
-                          setAuthForm((current) => ({ ...current, email: event.target.value }))
+                          setAuthForm((current: any) => ({ ...current, email: event.target.value }))
                           setEmailCodeCountdown(0)
                           setEmailCaptchaPassUntil(0)
                           setRegisterAvailabilityCheck(null)
@@ -2311,13 +2204,13 @@ function App() {
                           autoComplete="new-password"
                           type={showRegisterPassword ? 'text' : 'password'}
                           value={authForm.password}
-                          onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
+                          onChange={(event) => setAuthForm((current: any) => ({ ...current, password: event.target.value }))}
                           className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                           placeholder="请设置至少 8 位密码"
                         />
                         <button
                           type="button"
-                          onClick={() => setShowRegisterPassword((current) => !current)}
+                          onClick={() => setShowRegisterPassword((current: any) => !current)}
                           aria-label={showRegisterPassword ? '隐藏密码' : '显示密码'}
                           className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 transition hover:text-slate-200"
                         >
@@ -2333,14 +2226,14 @@ function App() {
                           type={showRegisterPassword ? 'text' : 'password'}
                           value={authForm.confirmPassword}
                           onChange={(event) =>
-                            setAuthForm((current) => ({ ...current, confirmPassword: event.target.value }))
+                            setAuthForm((current: any) => ({ ...current, confirmPassword: event.target.value }))
                           }
                           className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                           placeholder="请再次输入密码"
                         />
                         <button
                           type="button"
-                          onClick={() => setShowRegisterPassword((current) => !current)}
+                          onClick={() => setShowRegisterPassword((current: any) => !current)}
                           aria-label={showRegisterPassword ? '隐藏密码' : '显示密码'}
                           className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 transition hover:text-slate-200"
                         >
@@ -2356,7 +2249,7 @@ function App() {
                         name={`login_account_${authFormSeed}`}
                         autoComplete="off"
                         value={authForm.account}
-                        onChange={(event) => setAuthForm((current) => ({ ...current, account: event.target.value }))}
+                        onChange={(event) => setAuthForm((current: any) => ({ ...current, account: event.target.value }))}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入用户名或邮箱"
                       />
@@ -2367,7 +2260,7 @@ function App() {
                         autoComplete="new-password"
                         type="password"
                         value={authForm.password}
-                        onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
+                        onChange={(event) => setAuthForm((current: any) => ({ ...current, password: event.target.value }))}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入密码"
                       />
@@ -2380,7 +2273,7 @@ function App() {
                       <input
                         type="checkbox"
                         checked={authForm.rememberMe}
-                        onChange={(event) => setAuthForm((current) => ({ ...current, rememberMe: event.target.checked }))}
+                        onChange={(event) => setAuthForm((current: any) => ({ ...current, rememberMe: event.target.checked }))}
                         className="h-4 w-4 shrink-0 rounded border-slate-300 bg-white text-violet-500 accent-violet-500"
                       />
                     </label>
@@ -2527,7 +2420,7 @@ function App() {
           open={sidebarOpen}
           onNavigate={navigateToPage}
           onToggleCollapsed={() => {
-            setSidebarCollapsed((current) => !current)
+            setSidebarCollapsed((current: any) => !current)
           }}
           onCloseMobile={() => {
             setSidebarOpen(false)
@@ -2543,7 +2436,7 @@ function App() {
             setSidebarOpen(true)
           }}
           onToggleUserTheme={() => {
-            setUserTheme((current) => (current === 'light' ? 'dark' : 'light'))
+            setUserTheme((current: any) => (current === 'light' ? 'dark' : 'light'))
           }}
           onNavigate={navigateToPage}
           onToggleAdmin={handleToggleAdmin}
@@ -2556,6 +2449,9 @@ function App() {
         <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
             <div className={activePage === 'home' ? 'block' : 'hidden'}>
               <HomePage
+                setMessage={setMessage}
+                setBusy={setBusy}
+                handleApiError={handleApiError}
                 onFormSnapshotChange={setHomeFormSnapshot} homeStateRef={homeStateRef}
                 activePage={activePage}
                 points={points}
@@ -2564,19 +2460,7 @@ function App() {
                 emailNotifyOnComplete={emailNotifyOnComplete}
                 setEmailNotifyOnComplete={setEmailNotifyOnComplete}
                 emailNotifyPointCost={emailNotifyPointCost}
-                handlePromptDrag={handlePromptDrag}
-                handlePromptDragLeave={handlePromptDragLeave}
-                handlePromptDrop={handlePromptDrop}
-                handlePromptPaste={handlePromptPaste}
-                referenceImageInputRef={referenceImageInputRef}
-                referenceImageUploading={referenceImageUploading}
                 busy={busy}
-
-                handleNetworkReferenceImageInput={handleNetworkReferenceImageInput}
-                referenceImages={referenceImages}
-                handleDeleteReferenceImage={handleDeleteReferenceImage}
-
-                getReferenceImageExtraPointCost={getReferenceImageExtraPointCost}
                 clampCount={clampCount}
                 estimatedGenerationPointCost={estimatedGenerationPointCost}
                 handleOpenCreateTaskConfirm={handleOpenCreateTaskConfirm}
@@ -2602,9 +2486,6 @@ function App() {
                 setWechatSaveGuide={setWechatSaveGuide}
                 generateConfirmOpen={generateConfirmOpen}
                 setGenerateConfirmOpen={setGenerateConfirmOpen}
-                handleLocalReferenceImageChange={handleLocalReferenceImageChange}
-
-                handleAddNetworkReferenceImage={handleAddNetworkReferenceImage}
                 isAuthed={isAuthed}
                 imageGenerationEnabled={imageGenerationEnabled}
                 handleOpenPreviewDetail={handleOpenPreviewDetail}
@@ -2634,7 +2515,7 @@ function App() {
           title="确认提交生图任务"
           lines={[
             '确认是否提交生图任务？',
-            `上传参考图：${referenceImages.length} 张`,
+            `上传参考图：${homeFormSnapshot.referenceImageCount} 张`,
             `生成张数：${clampCount(Number(homeFormSnapshot.count) || 1)} 张`,
             `本次预计消耗：${estimatedGenerationPointCost} 积分`,
           ]}
@@ -3022,7 +2903,7 @@ function AppTopBar({
           >
             <button
               type="button"
-              onClick={() => setUserMenuOpen((current) => !current)}
+              onClick={() => setUserMenuOpen((current: any) => !current)}
               className="inline-flex h-9 max-w-[42vw] items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 min-[380px]:max-w-[48vw] sm:max-w-none"
               title={currentUser ? currentUser.username : '已登录'}
               aria-expanded={userMenuOpen}
@@ -3649,30 +3530,11 @@ function stringifyTaskRequestSnapshot(snapshot: TaskRequestSnapshot): string {
 }
 
 
-function syncPrimaryReferenceImage(images: ReferenceImageItem[]): ReferenceImageItem[] {
-  return images
-    .map((image) => ({
-      ...image,
-      url: image.url.trim(),
-      name: image.name.trim(),
-    }))
-    .filter((image) => image.url)
-    .slice(0, MAX_REFERENCE_IMAGES)
-}
 
-function getReferenceImageExtraPointCost(count: number): number {
-  return Math.max(0, count - FREE_REFERENCE_IMAGE_COUNT)
-}
 
-function getReferenceImageNameFromURL(rawURL: string): string {
-  try {
-    const parsed = new URL(rawURL, window.location.origin)
-    const fileName = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '')
-    return fileName || ''
-  } catch {
-    return rawURL.split('/').filter(Boolean).pop() || ''
-  }
-}
+
+
+
 
 function normalizeReferenceImagesFromSnapshot(snapshot: TaskRequestSnapshot | null): ReferenceImageItem[] {
   if (!snapshot) {
