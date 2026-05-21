@@ -6,7 +6,7 @@
 
 
 
-import React, { useRef, useState, useEffect, DragEvent, ClipboardEvent, ChangeEvent } from 'react';
+import React, { useRef, useState, useEffect, useMemo, DragEvent, ClipboardEvent, ChangeEvent } from 'react';
 import {
   ArrowUpDown, BadgeCheck, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
   Copy, Download, Eye, EyeOff, Gift, Heart, History, Home, Image as ImageIcon,
@@ -21,9 +21,11 @@ import * as api from "../api/client";
 import type { UploadImageResponse } from "../types/api";
 import type { ReferenceImageSource, ReferenceImageItem } from "../types/app";
 import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost } from '../utils/helpers';
+import { RechargeConfirmDialog } from './RechargePage';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
 
 export interface HomePageProps {
+  handleCreateTask: () => void;
   homeStateRef?: any;
   activePage: string;
   points: any;
@@ -34,8 +36,6 @@ export interface HomePageProps {
   emailNotifyPointCost: number;
   busy: any;
   clampCount: (val: number) => number;
-  estimatedGenerationPointCost: number;
-  handleOpenCreateTaskConfirm: () => void;
   hasRunningGeneration: boolean;
   handleClearPromptOptions: (e?: any) => void;
   preview: any;
@@ -56,16 +56,11 @@ export interface HomePageProps {
   handleSelectTask: (task: any) => void;
   wechatSaveGuide: any;
   setWechatSaveGuide: (val: any) => void;
-  generateConfirmOpen: boolean;
-  setGenerateConfirmOpen: (val: boolean) => void;
   isAuthed: boolean;
   imageGenerationEnabled: boolean;
   handleOpenPreviewDetail: (item: any) => void;
   previewImageURLs: string[];
   previewThumbnailURLs: string[];
-  handleCancelCreateTaskConfirm: () => void;
-  handleConfirmCreateTask: () => void;
-  onFormSnapshotChange?: (snapshot: { count: number, referenceImageCount: number }) => void;
   setMessage: (msg: string) => void;
   setBusy: (busy: any) => void;
   handleApiError: (err: any, fallback: string) => void;
@@ -228,23 +223,72 @@ export function HomePage(props: HomePageProps) {
         promptDragActive, setPromptDragActive, referenceImagesDialogOpen, setReferenceImagesDialogOpen, referenceImages, setReferenceImages, referenceImageUploading, setReferenceImageUploading, referenceImageName, setReferenceImageName, referenceImageSource, setReferenceImageSource, referenceImageInputRef
       }
     }
-    props.onFormSnapshotChange?.({ count, referenceImageCount: referenceImages.length })
-  }, [props.homeStateRef, props.onFormSnapshotChange, count, referenceImages.length])
+  }, [props.homeStateRef, count, referenceImages.length])
 
   const {
     setMessage, setBusy, handleApiError,
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
     setEmailNotifyOnComplete, emailNotifyPointCost, busy, clampCount,
-    estimatedGenerationPointCost,
-    handleOpenCreateTaskConfirm, hasRunningGeneration, handleClearPromptOptions,
+hasRunningGeneration, handleClearPromptOptions,
     preview, setPreview, previewImageIndex, setPreviewImageIndex, previewDetailOpen,
     setPreviewDetailOpen, handleSaveCurrentImage, handlePreviousPreviewImage,
     handleNextPreviewImage, loadPreviewTaskDetail, generationProgresses, history,
     historyPage, historyTotal, loadHistoryPage, handleSelectTask, wechatSaveGuide,
-    setWechatSaveGuide, generateConfirmOpen, setGenerateConfirmOpen, isAuthed, imageGenerationEnabled,
+    setWechatSaveGuide, isAuthed, imageGenerationEnabled,
     handleOpenPreviewDetail, previewImageURLs, previewThumbnailURLs,
-    handleCancelCreateTaskConfirm, handleConfirmCreateTask
+
   } = props;
+
+    const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
+  const imageGeneratePointCost = Math.max(0, Math.floor(Number(billingSettings?.imageGeneratePointCost ?? 20)))
+
+  const estimatedGenerationPointCost = useMemo(() => {
+    const taskCount = clampCount(Number(count) || 1)
+    const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
+    const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
+    const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
+    const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
+    return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
+  }, [
+    count,
+    referenceImages.length,
+    emailNotifyAvailable,
+    emailNotifyOnComplete,
+    emailNotifyPointCost,
+    imageGeneratePointCost,
+    points?.totalCredits,
+  ])
+
+  function handleOpenCreateTaskConfirm() {
+    if (busy === 'create-task') {
+      return
+    }
+    if (!isAuthed) {
+      setMessage('请先登录，再提交生图任务。')
+      return
+    }
+    if (!imageGenerationEnabled) {
+      return
+    }
+    if (!(prompt || '').trim()) {
+      setMessage('提示词不能为空。')
+      return
+    }
+    if (referenceImageUploading || busy === 'upload-reference') {
+      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
+      return
+    }
+    setGenerateConfirmOpen(true)
+  }
+
+  function handleCancelCreateTaskConfirm() {
+    setGenerateConfirmOpen(false)
+  }
+
+  function handleConfirmCreateTask() {
+    setGenerateConfirmOpen(false)
+    void props.handleCreateTask()
+  }
 
   return (
     <div className={activePage === 'home' ? 'block' : 'hidden'}>
@@ -582,6 +626,22 @@ export function HomePage(props: HomePageProps) {
         />
       ) : null}
 
+    
+      {generateConfirmOpen ? (
+        <RechargeConfirmDialog
+          title="确认提交生图任务"
+          lines={[
+            '确认是否提交生图任务？',
+            `上传参考图：${referenceImages.length} 张`,
+            `生成张数：${clampCount(Number(count) || 1)} 张`,
+            `本次预计消耗：${estimatedGenerationPointCost} 积分`,
+          ]}
+          confirmLabel="确定"
+          busy={busy === 'create-task'}
+          onCancel={handleCancelCreateTaskConfirm}
+          onConfirm={handleConfirmCreateTask}
+        />
+      ) : null}
     </div>
   );
 }

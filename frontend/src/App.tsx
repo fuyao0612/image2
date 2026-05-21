@@ -98,7 +98,6 @@ import { MiniStat, PanelPagination } from './components/shared';
 import { getReferenceImageNameFromURL, syncPrimaryReferenceImage, getReferenceImageExtraPointCost } from './utils/helpers';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from './components/home';
 
-
 type AuthMode = 'login' | 'register' | 'reset'
 type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
 type UserTheme = 'light' | 'dark'
@@ -190,7 +189,6 @@ interface PromptGalleryItem {
 }
 
 export type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
-
 
 interface PasswordChangeForm {
   currentPassword: string
@@ -311,10 +309,6 @@ const appNavItems: Array<{
 
 const featuredPromptItems: PromptGalleryItem[] = []
 
-
-
-
-
 const emptyGenerationProgress: GenerationProgress = {
   taskId: null,
   prompt: '',
@@ -330,7 +324,6 @@ const emptyGenerationProgress: GenerationProgress = {
   backendUrl: api.API_BASE_URL,
   message: '等待提交',
 }
-
 
 const emptyPreview: ImageTaskDetailResponse = {
   taskId: '-',
@@ -362,7 +355,6 @@ function App() {
         ? 'register'
         : 'login',
     )
-    const [homeFormSnapshot, setHomeFormSnapshot] = useState({ count: 1, referenceImageCount: 0 })
     const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
     const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -410,16 +402,7 @@ function App() {
     newPassword: '',
     confirmNewPassword: '',
     })
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
     
     const [showRegisterPassword, setShowRegisterPassword] = useState(false)
@@ -452,7 +435,6 @@ function App() {
     const [rechargeConfirmDialog, setRechargeConfirmDialog] = useState<RechargeConfirmDialogState>({
     open: false,
     })
-    const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
     const [serverPromptItems, setServerPromptItems] = useState<PromptGalleryItem[]>([])
     const [promptSubmission, setPromptSubmission] = useState({
     title: '',
@@ -480,22 +462,7 @@ function App() {
       (billingSettings?.emailNotifyEnabled ?? false) &&
       emailNotifyPointCost > 0,
     )
-    const estimatedGenerationPointCost = useMemo(() => {
-    const taskCount = clampCount(Number(homeFormSnapshot.count) || 1)
-    const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
-    const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
-    const referenceExtraPointCost = getReferenceImageExtraPointCost(homeFormSnapshot.referenceImageCount)
-    const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
-    return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
-    }, [
-    homeFormSnapshot.count,
-    homeFormSnapshot.referenceImageCount,
-    emailNotifyAvailable,
-    emailNotifyOnComplete,
-    emailNotifyPointCost,
-    imageGeneratePointCost,
-    points?.totalCredits,
-    ])
+    
     const promptGalleryItems = useMemo(
     () =>
       [...serverPromptItems, ...featuredPromptItems].map((item: any) => ({
@@ -558,7 +525,6 @@ function App() {
     useEffect(() => {
     void loadPackages()
     }, [])
-
 
     useEffect(() => {
     previewTaskIdRef.current = preview.taskId
@@ -903,7 +869,6 @@ function App() {
     }
     }
 
-
     async function loadDashboard(options: { showBusy?: boolean; updatePreview?: boolean; updateMessage?: boolean } = {}) {
 
               const { showBusy = true, updateMessage = true } = options;
@@ -966,7 +931,6 @@ function App() {
             
     }
 
-
     async function loadHistoryPage(page: number, options: { showBusy?: boolean } = {}) {
     const { showBusy = false } = options
     try {
@@ -985,8 +949,6 @@ function App() {
       }
     }
     }
-
-
 
     async function refreshCaptcha(showMessage = false) {
     if (mode !== 'register' && mode !== 'reset') {
@@ -1293,9 +1255,6 @@ function App() {
     }
     }
 
-
-
-
     async function confirmPackageRecharge(packageCode: string) {
     const selectedPackage = packages.find((item) => item.code === packageCode)
     if (!selectedPackage?.productUrl) {
@@ -1307,39 +1266,6 @@ function App() {
     window.open(selectedPackage.productUrl, '_blank', 'noopener,noreferrer')
     setRechargeConfirmDialog({ open: false })
     setMessage('已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
-    }
-
-
-
-    function handleOpenCreateTaskConfirm() {
-    if (busy === 'create-task') {
-      return
-    }
-    if (!isAuthed) {
-      setMessage('请先登录，再提交生图任务。')
-      return
-    }
-    if (!imageGenerationEnabled) {
-      return
-    }
-    if (!(homeStateRef.current.prompt || '').trim()) {
-      setMessage('提示词不能为空。')
-      return
-    }
-    if (homeStateRef.current.referenceImageUploading || busy === 'upload-reference') {
-      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
-      return
-    }
-    setGenerateConfirmOpen(true)
-    }
-
-    function handleCancelCreateTaskConfirm() {
-    setGenerateConfirmOpen(false)
-    }
-
-    function handleConfirmCreateTask() {
-    setGenerateConfirmOpen(false)
-    void handleCreateTask()
     }
 
     async function handleCreateTask() {
@@ -1833,8 +1759,6 @@ function App() {
     }
     }
 
-
-
     function handleApiError(error: unknown, fallback: string) {
     if (shouldForceLogout(error)) {
       handleLogout()
@@ -1915,23 +1839,6 @@ function App() {
     setSidebarOpen(false)
     }
 
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
     function handleClearReferenceImage() {
     homeStateRef.current.setReferenceImageURL('')
     homeStateRef.current.setReferenceImageName('')
@@ -1943,8 +1850,6 @@ function App() {
       (homeStateRef.current.referenceImageInputRef?.current).value = ''
     }
     }
-
-    
 
     function handleClearPromptOptions() {
     const confirmed = window.confirm('是否清除当前提示词以及选项信息？')
@@ -1968,7 +1873,6 @@ function App() {
       (homeStateRef.current.referenceImageInputRef?.current).value = ''
     }
     }
-
 
     const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
     const previewThumbnailURLs = limitImageURLs(
@@ -2443,10 +2347,11 @@ function App() {
         <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
             <div className={activePage === 'home' ? 'block' : 'hidden'}>
               <HomePage
+                handleCreateTask={handleCreateTask}
                 setMessage={setMessage}
                 setBusy={setBusy}
                 handleApiError={handleApiError}
-                onFormSnapshotChange={setHomeFormSnapshot} homeStateRef={homeStateRef}
+                homeStateRef={homeStateRef}
                 activePage={activePage}
                 points={points}
                 billingSettings={billingSettings}
@@ -2456,8 +2361,6 @@ function App() {
                 emailNotifyPointCost={emailNotifyPointCost}
                 busy={busy}
                 clampCount={clampCount}
-                estimatedGenerationPointCost={estimatedGenerationPointCost}
-                handleOpenCreateTaskConfirm={handleOpenCreateTaskConfirm}
                 hasRunningGeneration={hasRunningGeneration}
                 handleClearPromptOptions={handleClearPromptOptions}
                 preview={preview}
@@ -2478,15 +2381,11 @@ function App() {
                 handleSelectTask={handleSelectTask}
                 wechatSaveGuide={wechatSaveGuide}
                 setWechatSaveGuide={setWechatSaveGuide}
-                generateConfirmOpen={generateConfirmOpen}
-                setGenerateConfirmOpen={setGenerateConfirmOpen}
                 isAuthed={isAuthed}
                 imageGenerationEnabled={imageGenerationEnabled}
                 handleOpenPreviewDetail={handleOpenPreviewDetail}
                 previewImageURLs={previewImageURLs}
                 previewThumbnailURLs={previewThumbnailURLs}
-                handleCancelCreateTaskConfirm={handleCancelCreateTaskConfirm}
-                handleConfirmCreateTask={handleConfirmCreateTask}
               />
             </div>
 
@@ -2504,21 +2403,6 @@ function App() {
         </main>
       </div>
 
-      {generateConfirmOpen ? (
-        <RechargeConfirmDialog
-          title="确认提交生图任务"
-          lines={[
-            '确认是否提交生图任务？',
-            `上传参考图：${homeFormSnapshot.referenceImageCount} 张`,
-            `生成张数：${clampCount(Number(homeFormSnapshot.count) || 1)} 张`,
-            `本次预计消耗：${estimatedGenerationPointCost} 积分`,
-          ]}
-          confirmLabel="确定"
-          busy={busy === 'create-task'}
-          onCancel={handleCancelCreateTaskConfirm}
-          onConfirm={handleConfirmCreateTask}
-        />
-      ) : null}
       {wechatSaveGuide.open ? (
         <WechatSaveGuide
           imageUrl={wechatSaveGuide.imageUrl}
@@ -2533,8 +2417,6 @@ function App() {
           onApply={handleApplyPreviewDetail}
         />
       ) : null}
-
-
 
       {announcementDialogOpen ? (
         <AnnouncementDialog
@@ -2747,9 +2629,6 @@ function AnnouncementListGroup({
     </div>
   )
 }
-
-
-
 
 export function Field({
   label,
@@ -3095,8 +2974,6 @@ export function PageHeader({
   )
 }
 
-
-
 export function FlowLogTabButton({
   active,
   icon,
@@ -3121,8 +2998,6 @@ export function FlowLogTabButton({
     </button>
   )
 }
-
-
 
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   const value = String(text ?? '')
@@ -3176,8 +3051,6 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
 
   return copied
 }
-
-
 
 function normalizePromptGalleryItem(item: PromptGalleryItem): PromptGalleryItem {
   return {
@@ -3373,9 +3246,6 @@ function StatCard({ label, value }: { label: string; value: string }) {
   )
 }
 
-
-
-
 export function RewardLines({ points, credits }: { points: number; credits: number }) {
   return (
     <div className="space-y-1 leading-tight">
@@ -3428,9 +3298,6 @@ export function CreditLogRow({ item }: { item: CreditLogItem }) {
   )
 }
 
-
-
-
 function getTaskStatusLabel(status: string): string {
   switch (status) {
     case 'idle':
@@ -3448,8 +3315,6 @@ function getTaskStatusLabel(status: string): string {
       return status || '未知'
   }
 }
-
-
 
 export function getActivityRecordLabel(recordType: UserActivityItem['recordType']): string {
   switch (recordType) {
@@ -3523,13 +3388,6 @@ function stringifyTaskRequestSnapshot(snapshot: TaskRequestSnapshot): string {
   return JSON.stringify(snapshot)
 }
 
-
-
-
-
-
-
-
 function normalizeReferenceImagesFromSnapshot(snapshot: TaskRequestSnapshot | null): ReferenceImageItem[] {
   if (!snapshot) {
     return []
@@ -3582,8 +3440,6 @@ function parsePreviewSizeState(size?: string): { size: string; customWidth?: num
   }
 }
 
-
-
 function formatPreviewOptionValue(
   value: string | undefined,
   options: Array<{ value: string; label: string }>,
@@ -3596,7 +3452,6 @@ function formatPreviewOptionValue(
   const matched = options.find((option) => option.value === trimmed)
   return matched?.label ?? (trimmed || '-')
 }
-
 
 function normalizeElapsedSeconds(values: number[] | undefined): number[] {
   if (!Array.isArray(values)) {
@@ -3627,8 +3482,6 @@ function buildImageElapsedSeconds(
   }
   return result
 }
-
-
 
 function getPointsChangeTypeLabel(changeType: string): string {
   switch (changeType) {
@@ -3736,7 +3589,6 @@ function getPackageTypeLabel(packageType: string): string {
   }
 }
 
-
 function clampDimension(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return 1024
@@ -3842,9 +3694,6 @@ function parseImageSize(size: string): { width: number; height: number } | null 
   }
   return { width, height }
 }
-
-
-
 
 function normalizeImageUrlForDedupe(rawUrl: string): string {
   const trimmed = rawUrl.trim()
@@ -4020,7 +3869,6 @@ function getAdminStatsCreditsTotal(stats: AdminStatsResponse | null): number {
   )
 }
 
-
 function getCreditLogTotals(item: CreditLogItem): { beforeTotal: number; afterTotal: number; deltaTotal: number } {
   const beforeTotal = Number(item.beforeCredits ?? item.beforeFree + item.beforePaid)
   const afterTotal = Number(item.afterCredits ?? item.afterFree + item.afterPaid)
@@ -4090,7 +3938,6 @@ function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailRespon
     updatedAt: detail.updatedAt,
   }
 }
-
 
 function triggerImageDownload(blob: Blob, fileName: string): void {
   const downloadBlob = blob.type === 'application/octet-stream' ? blob : new Blob([blob], { type: 'application/octet-stream' })
