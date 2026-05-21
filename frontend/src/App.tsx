@@ -93,10 +93,10 @@ import { RechargeConfirmDialog } from "./pages/RechargePage";
 import { AppProvider } from './contexts/AppContext';
 import type { AppContextType } from './contexts/AppContext';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from './constants/app';
-import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, clampCount, normalizeElapsedSeconds, buildImageElapsedSeconds, limitGenerationProgresses, normalizeGenerationStatus, detailToPreview, toPreview, getDownloadCacheKey, trimDownloadFileCache } from './utils/imageTasks';
+import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, clampCount, normalizeElapsedSeconds, buildImageElapsedSeconds, normalizeGenerationStatus, detailToPreview, toPreview, getDownloadCacheKey, trimDownloadFileCache } from './utils/imageTasks';
 import { MiniStat, PanelPagination } from './components/shared';
 import { getReferenceImageNameFromURL, syncPrimaryReferenceImage, getReferenceImageExtraPointCost } from './utils/helpers';
-import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from './components/home';
+import { TaskDetailPanel } from './components/home';
 
 type AuthMode = 'login' | 'register' | 'reset'
 type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
@@ -143,21 +143,7 @@ const POLICE_RECORD_URL = 'https://beian.mps.gov.cn/#/query/webSearch?code=44050
 const APP_PAGES: AppPage[] = ['home', 'orders', 'profile', 'flows', 'recharge', 'prompts', 'products']
 const REGISTRATION_DAILY_LIMIT_MESSAGE = '当日注册额度已达到上限，请0点后再尝试'
 
-interface GenerationProgress {
-  taskId: string | null
-  prompt: string
-  status: GenerationStatus
-  startedAt: number | null
-  elapsedSeconds: number
-  imageElapsedSeconds: number[]
-  total: number
-  completed: number
-  success: number
-  running: number
-  attempt: number
-  backendUrl: string
-  message: string
-}
+
 
 interface TaskRequestSnapshot {
   prompt?: string
@@ -309,21 +295,7 @@ const appNavItems: Array<{
 
 const featuredPromptItems: PromptGalleryItem[] = []
 
-const emptyGenerationProgress: GenerationProgress = {
-  taskId: null,
-  prompt: '',
-  status: 'idle',
-  startedAt: null,
-  elapsedSeconds: 0,
-  imageElapsedSeconds: [],
-  total: 1,
-  completed: 0,
-  success: 0,
-  running: 0,
-  attempt: 0,
-  backendUrl: api.API_BASE_URL,
-  message: '等待提交',
-}
+
 
 const emptyPreview: ImageTaskDetailResponse = {
   taskId: '-',
@@ -411,7 +383,6 @@ function App() {
     const [adminAudits, setAdminAudits] = useState<AdminContentAuditItem[]>([])
     const [adminActionLogs, setAdminActionLogs] = useState<AdminActionLogItem[]>([])
     const [adminPackages, setAdminPackages] = useState<AdminPackageItem[]>([])
-    const [generationProgresses, setGenerationProgresses] = useState<GenerationProgress[]>([])
     const [points, setPoints] = useState<PointsResponse | null>(null)
     const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState<{timestamp: number, resetPage?: boolean}>({ timestamp: 0 })
     const [packages, setPackages] = useState<PackageItem[]>([])
@@ -434,8 +405,6 @@ function App() {
     previewUrl: '',
     tags: [''],
     })
-    const [polledPreviewUpdate, setPolledPreviewUpdate] = useState<any>(null)
-    const [polledHistoryUpdate, setPolledHistoryUpdate] = useState<any>(null)
     const checkinInFlightRef = useRef(false)
 
     const isAuthed = token.length > 0
@@ -1705,7 +1674,9 @@ function App() {
                 normalizeImageURLs={normalizeImageURLs}
                 historyRefreshTrigger={historyRefreshTrigger}
                 isAuthed={isAuthed}
-                imageGenerationEnabled={imageGenerationEnabled} dashboardRunningTasks={dashboardRunningTasks} onDashboardRefresh={() => loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })}
+                imageGenerationEnabled={imageGenerationEnabled}
+                dashboardRunningTasks={dashboardRunningTasks}
+                onDashboardRefresh={() => loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })}
               />
             </div>
 
