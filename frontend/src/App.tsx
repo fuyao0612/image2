@@ -316,7 +316,7 @@ const emptyPreview: ImageTaskDetailResponse = {
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
 function App() {
-    let dashboardRunningTasks = useState<any[]>([]);
+    const [dashboardRunningTasks, setDashboardRunningTasks] = useState<any[]>([]);
     const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
       ? 'reset'
@@ -631,8 +631,7 @@ function App() {
                 }
                 
                 const runningTasks = latestResult.items.filter((item: any) => item.status === 'generating' || item.status === 'running');
-                if (runningTasks.length > 0) {
-                }
+                setDashboardRunningTasks(runningTasks);
                 
                 if (updateMessage) {
                   setMessage('');
