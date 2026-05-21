@@ -16,10 +16,10 @@ import {
   ShieldCheck, Wallet, XCircle
 } from 'lucide-react';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from '../constants/app';
-import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams } from '../utils/imageTasks';
+import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, limitGenerationProgresses, progressFromImageTaskItem, normalizeElapsedSeconds, buildImageElapsedSeconds, detailToPreview } from '../utils/imageTasks';
 import * as api from "../api/client";
 import type { UploadImageResponse, ImageTaskItem, ImageTaskDetailResponse } from "../types/api";
-import type { ReferenceImageSource, ReferenceImageItem, TaskRequestSnapshot } from "../types/app";
+import type { ReferenceImageSource, ReferenceImageItem, TaskRequestSnapshot, GenerationProgress } from "../types/app";
 import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost } from '../utils/helpers';
 import { RechargeConfirmDialog } from './RechargePage';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
@@ -75,8 +75,6 @@ function validateSelectedSize(size: string, width: string | number, height: stri
 
 export interface HomePageProps {
   historyRefreshTrigger?: {timestamp: number, resetPage?: boolean};
-  polledHistoryUpdate?: any;
-  polledPreviewUpdate?: any;
   emptyPreview?: any;
   toPreview?: any;
   detailToPreview?: any;
@@ -99,17 +97,20 @@ export interface HomePageProps {
   emailNotifyPointCost: number;
   busy: any;
   clampCount: (val: number) => number;
-  hasRunningGeneration: boolean;
-                        generationProgresses: any[];
         isAuthed: boolean;
   imageGenerationEnabled: boolean;
         setMessage: (msg: string) => void;
   setBusy: (busy: any) => void;
   handleApiError: (err: any, fallback: string) => void;
+    dashboardRunningTasks?: any[];
+    onDashboardRefresh: () => void;
 }
 
 export function HomePage(props: HomePageProps) {
+  const [generationProgresses, setGenerationProgresses] = useState<GenerationProgress[]>([]);
   const [prompt, setPrompt] = useState('')
+    let pollingTaskIdsRef = useRef<Set<string>>(new Set());
+    const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId);
   const [size, setSize] = useState('1024x1024')
   const [style, setStyle] = useState('')
   const [count, setCount] = useState(1)
@@ -133,15 +134,15 @@ export function HomePage(props: HomePageProps) {
       return
     }
     if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
-      setMessage('仅支持上传 JPEG、PNG、WebP 或 GIF 图片。')
+      props.setMessage('仅支持上传 JPEG、PNG、WebP 或 GIF 图片。')
       return
     }
 
     try {
       setReferenceImageUploading(true)
-      setBusy('upload-reference')
+      props.setBusy('upload-reference')
       if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
-        setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+        props.setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
         return
       }
       const result: UploadImageResponse = await api.uploadReferenceImage(file)
@@ -156,10 +157,10 @@ export function HomePage(props: HomePageProps) {
       setReferenceImageSource('local')
       setShowNetworkImageInput(false)
     } catch (error) {
-      handleApiError(error, '上传图片失败')
+      props.handleApiError(error, '上传图片失败')
     } finally {
       setReferenceImageUploading(false)
-      setBusy(null)
+      props.setBusy(null)
     }
     }
 
@@ -170,7 +171,7 @@ export function HomePage(props: HomePageProps) {
       await uploadLocalReferenceImage(file)
     }
     if (files.length > MAX_REFERENCE_IMAGES - referenceImages.length) {
-      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+      props.setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
     }
     }
 
@@ -182,11 +183,11 @@ export function HomePage(props: HomePageProps) {
   function handleAddNetworkReferenceImage() {
     const trimmed = (referenceImageURL || '').trim()
     if (!trimmed) {
-      setMessage('请输入网络图片链接。')
+      props.setMessage('请输入网络图片链接。')
       return
     }
     if (referenceImages.length >= MAX_REFERENCE_IMAGES) {
-      setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
+      props.setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
       return
     }
     const nextImage: ReferenceImageItem = {
@@ -236,7 +237,7 @@ export function HomePage(props: HomePageProps) {
     setPromptDragActive(false)
     const files = Array.from(event.dataTransfer.files).filter((item) => item.type.startsWith('image/'))
     if (!files.length) {
-      setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
+      props.setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
       return
     }
     for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
@@ -256,18 +257,8 @@ export function HomePage(props: HomePageProps) {
     }
 
 
-  const {
-    setMessage, setBusy, handleApiError,
-    activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
-    setEmailNotifyOnComplete, emailNotifyPointCost, busy, clampCount,
-hasRunningGeneration,
-    generationProgresses,
-    isAuthed, imageGenerationEnabled,
-
-  } = props;
-
-    const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
-  const imageGeneratePointCost = Math.max(0, Math.floor(Number(billingSettings?.imageGeneratePointCost ?? 20)))
+      const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
+  const imageGeneratePointCost = Math.max(0, Math.floor(Number(props.billingSettings?.imageGeneratePointCost ?? 20)))
 
   
   const [preview, setPreview] = useState<any>(props.emptyPreview)
@@ -281,9 +272,9 @@ hasRunningGeneration,
   const downloadFileCacheRef = useRef<Map<string, any>>(new Map())
   const downloadPendingRef = useRef<Map<string, Promise<any>>>(new Map())
 
-  const previewImageURLs = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
-  const previewThumbnailURLs = props.limitImageURLs(
-    props.normalizeImageURLs(preview.thumbnailUrls, preview.thumbnailUrl),
+  const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+  const previewThumbnailURLs = limitImageURLs(
+    normalizeImageURLs(preview.thumbnailUrls, preview.thumbnailUrl),
     preview.requestedCount,
   )
 
@@ -295,19 +286,9 @@ hasRunningGeneration,
       downloadFileCacheRef.current.clear()
     }
   }, [props.isAuthed])
-
-  useEffect(() => {
-    if (props.polledPreviewUpdate && props.polledPreviewUpdate.taskId === preview.taskId) {
-      setPreview((current: any) => ({ ...current, ...props.polledPreviewUpdate.preview }))
-      if (props.polledPreviewUpdate.isFinal) {
-        setPreviewImageIndex(0)
-      }
-    }
-  }, [props.polledPreviewUpdate])
-
 useEffect(() => {
-    const imageURLs = props.normalizeImageURLs(preview.imageUrls, preview.imageUrl)
-    if (!isAuthed || props.isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
+    const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
+    if (!props.isAuthed || props.isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
       return
     }
 
@@ -347,7 +328,7 @@ function handleSelectTask(item: ImageTaskItem) {
 
 function handlePreviousPreviewImage() {
     setPreviewImageIndex((current: any) => {
-      const total = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
+      const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
       }
@@ -357,7 +338,7 @@ function handlePreviousPreviewImage() {
 
 function handleNextPreviewImage() {
     setPreviewImageIndex((current: any) => {
-      const total = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
+      const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
       }
@@ -366,10 +347,10 @@ function handleNextPreviewImage() {
     }
 
 async function handleSaveCurrentImage() {
-    const imageURLs = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+    const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
     const imageUrl = imageURLs[previewImageIndex] ?? imageURLs[0]
     if (!imageUrl) {
-      setMessage('当前没有可保存的图片。')
+      props.setMessage('当前没有可保存的图片。')
       return
     }
     if (props.isWeChatBrowser()) {
@@ -378,11 +359,11 @@ async function handleSaveCurrentImage() {
         imageUrl,
         title: preview.prompt ? `第 ${previewImageIndex + 1} 张图片` : '当前图片',
       })
-      setMessage('微信内请长按图片保存。')
+      props.setMessage('微信内请长按图片保存。')
       return
     }
     if (!preview.taskId || preview.taskId === '-') {
-      setMessage('当前图片缺少任务编号，暂时无法直接下载。')
+      props.setMessage('当前图片缺少任务编号，暂时无法直接下载。')
       return
     }
 
@@ -394,11 +375,11 @@ async function handleSaveCurrentImage() {
         return
       }
 
-      setMessage('正在准备下载，请稍等。')
+      props.setMessage('正在准备下载，请稍等。')
       const downloaded = await loadImageDownload(preview.taskId, previewImageIndex)
       props.triggerImageDownload(downloaded.blob, downloaded.fileName)
     } catch (error) {
-      handleApiError(error, '保存当前图片失败')
+      props.handleApiError(error, '保存当前图片失败')
     }
     }
 
@@ -443,7 +424,7 @@ async function loadImageDownload(taskId: string, imageIndex: number): Promise<ap
 
 async function handleOpenPreviewDetail() {
     if (!preview.taskId || preview.taskId === '-') {
-      setMessage('当前展示区还没有提示词详情。')
+      props.setMessage('当前展示区还没有提示词详情。')
       return
     }
 
@@ -461,11 +442,11 @@ async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailRes
 
     try {
       const detail = await api.getImageTask(taskId)
-      const nextPreview = props.detailToPreview(detail)
+      const nextPreview = detailToPreview(detail)
       setPreview((current: any) => (current.taskId === taskId ? nextPreview : current))
       return nextPreview
     } catch (error) {
-      handleApiError(error, '任务详情加载失败')
+      props.handleApiError(error, '任务详情加载失败')
       return null
     }
     }
@@ -479,7 +460,7 @@ function handleApplyPreviewDetail() {
       setStyle(parsed.style)
     }
     if (typeof parsed?.count === 'number' || typeof parsed?.count === 'string') {
-      setCount(clampCount(Number(parsed.count)))
+      setCount(props.clampCount(Number(parsed.count)))
     }
     if (typeof parsed?.quality === 'string') {
       setQuality(parsed.quality)
@@ -557,18 +538,6 @@ function handleApplyPreviewDetail() {
   }
 
   useEffect(() => {
-    if (props.polledHistoryUpdate) {
-      setHistory((current) =>
-        current.map((item) =>
-          item.id === props.polledHistoryUpdate.taskId
-            ? { ...item, ...props.polledHistoryUpdate }
-            : item
-        )
-      )
-    }
-  }, [props.polledHistoryUpdate])
-
-  useEffect(() => {
     if (props.isAuthed) {
       if (props.historyRefreshTrigger?.resetPage) {
         setHistoryPage(1)
@@ -584,39 +553,39 @@ function handleApplyPreviewDetail() {
   }, [props.isAuthed, props.historyRefreshTrigger])
 
   const estimatedGenerationPointCost = useMemo(() => {
-    const taskCount = clampCount(Number(count) || 1)
-    const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
+    const taskCount = props.clampCount(Number(count) || 1)
+    const availableCredits = Math.max(0, Math.floor(Number(props.points?.totalCredits ?? 0)))
     const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
     const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
-    const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
+    const emailPointCost = props.emailNotifyAvailable && props.emailNotifyOnComplete ? props.emailNotifyPointCost : 0
     return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
   }, [
     count,
     referenceImages.length,
-    emailNotifyAvailable,
-    emailNotifyOnComplete,
-    emailNotifyPointCost,
+    props.emailNotifyAvailable,
+    props.emailNotifyOnComplete,
+    props.emailNotifyPointCost,
     imageGeneratePointCost,
-    points?.totalCredits,
+    props.points?.totalCredits,
   ])
 
   function handleOpenCreateTaskConfirm() {
-    if (busy === 'create-task') {
+    if (props.busy === 'create-task') {
       return
     }
-    if (!isAuthed) {
-      setMessage('请先登录，再提交生图任务。')
+    if (!props.isAuthed) {
+      props.setMessage('请先登录，再提交生图任务。')
       return
     }
-    if (!imageGenerationEnabled) {
+    if (!props.imageGenerationEnabled) {
       return
     }
     if (!(prompt || '').trim()) {
-      setMessage('提示词不能为空。')
+      props.setMessage('提示词不能为空。')
       return
     }
-    if (referenceImageUploading || busy === 'upload-reference') {
-      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
+    if (referenceImageUploading || props.busy === 'upload-reference') {
+      props.setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
       return
     }
     setGenerateConfirmOpen(true)
@@ -632,36 +601,36 @@ function handleApplyPreviewDetail() {
   }
 
   async function handleCreateTask() {
-    if (busy === 'create-task') {
+    if (props.busy === 'create-task') {
       return
     }
-    if (!isAuthed) {
-      setMessage('请先登录，再提交生图任务。')
+    if (!props.isAuthed) {
+      props.setMessage('请先登录，再提交生图任务。')
       return
     }
 
-    if (!imageGenerationEnabled) {
+    if (!props.imageGenerationEnabled) {
       return
     }
 
     if (!(prompt || '').trim()) {
-      setMessage('提示词不能为空。')
+      props.setMessage('提示词不能为空。')
       return
     }
-    if (referenceImageUploading || busy === 'upload-reference') {
-      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
+    if (referenceImageUploading || props.busy === 'upload-reference') {
+      props.setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
       return
     }
 
     const promptText = (prompt || '').trim()
     const sizeValidationMessage = validateSelectedSize(size, customWidth, customHeight)
     if (sizeValidationMessage) {
-      setMessage(sizeValidationMessage)
+      props.setMessage(sizeValidationMessage)
       return
     }
 
     const requestSize = resolveSelectedSize(size, customWidth, customHeight)
-    const taskCount = clampCount(count)
+    const taskCount = props.clampCount(count)
     const selectedReferenceImages = referenceImages || []
     const requestSnapshot = {
       prompt: promptText,
@@ -673,19 +642,33 @@ function handleApplyPreviewDetail() {
       referenceImageUrl: selectedReferenceImages[0]?.url || (referenceImageURL || '').trim() || undefined,
       referenceImageUrls: selectedReferenceImages.map((item: any) => item.url).filter(Boolean),
       referenceImages: selectedReferenceImages,
-      emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
+      emailNotifyOnComplete: props.emailNotifyAvailable && props.emailNotifyOnComplete,
     } satisfies TaskRequestSnapshot
     const startedAt = Date.now()
 
     try {
-      setBusy('create-task')
+      props.setBusy('create-task')
       const result = await api.createImageTask(requestSnapshot)
       props.onTaskCreated(result, requestSnapshot, startedAt)
-      const taskCount = requestSnapshot.count || 1
-      const requestedCount = Number(result.requestedCount ?? taskCount)
-      const resultImageURLs = props.limitImageURLs(props.normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
+
+      let taskCount = requestSnapshot.count || 1;
+      let requestedCount = Number(result.requestedCount ?? taskCount);
+
+            upsertGenerationProgress(progressFromImageTaskItem({
+              id: result.taskId,
+              prompt: promptText,
+              requestedCount,
+              status: 'generating',
+              createdAt: new Date().toISOString(),
+              imageUrls: [],
+              thumbnailUrls: [],
+              imageUrl: '',
+              thumbnailUrl: '',
+              imageElapsedSeconds: []
+            } as any))
+      const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
       const now = new Date().toISOString()
-      setPreview(props.detailToPreview({
+      setPreview(detailToPreview({
         taskId: result.taskId,
         requestedCount,
         prompt: promptText,
@@ -706,14 +689,182 @@ function handleApplyPreviewDetail() {
       }))
       setPreviewImageIndex(0)
     } catch (error) {
-      handleApiError(error, '提交失败')
+      props.handleApiError(error, '提交失败')
     } finally {
-      setBusy(null)
+      props.setBusy(null)
     }
   }
+      useEffect(() => {
+        if (!props.isAuthed) {
+          pollingTaskIdsRef.current.clear()
+          setGenerationProgresses([])
+        }
+      }, [props.isAuthed])
+
+      useEffect(() => {
+        if (props.dashboardRunningTasks && props.dashboardRunningTasks.length > 0) {
+          setGenerationProgresses((current) => {
+            const currentIds = new Set(current.map((item) => item.taskId))
+            const next = [...current]
+            for (const task of [...props.dashboardRunningTasks!].reverse()) {
+              if (currentIds.has(task.id)) continue
+              next.push(progressFromImageTaskItem(task))
+            }
+            return next
+          })
+        }
+      }, [props.dashboardRunningTasks])
+
+      useEffect(() => {
+        if (!hasRunningGeneration) return
+        const timer = window.setInterval(() => {
+          setGenerationProgresses((current) =>
+            current.map((item) => {
+              if (item.status !== 'running' || !item.startedAt) return item
+              const elapsedSeconds = Math.max(0, Math.floor((Date.now() - item.startedAt) / 1000))
+              return {
+                ...item,
+                elapsedSeconds,
+                imageElapsedSeconds: buildImageElapsedSeconds(item.total, elapsedSeconds, item.imageElapsedSeconds, item.completed, item.status),
+                running: Math.max(0, item.total - item.completed),
+              }
+            })
+          )
+        }, 1000)
+        return () => window.clearInterval(timer)
+      }, [hasRunningGeneration])
+
+      useEffect(() => {
+        for (const progress of generationProgresses) {
+          if (!progress.taskId || progress.status !== 'running' || pollingTaskIdsRef.current.has(progress.taskId)) continue
+          pollingTaskIdsRef.current.add(progress.taskId)
+          void pollGenerationTask(progress)
+        }
+      }, [generationProgresses])
+
+      useEffect(() => {
+        return () => {
+          pollingTaskIdsRef.current.clear()
+        }
+      }, [])
+
+      function upsertGenerationProgress(progress: GenerationProgress) {
+        if (!progress.taskId) return
+        setGenerationProgresses((current) => limitGenerationProgresses([progress, ...current.filter((item) => item.taskId !== progress.taskId)]))
+      }
+
+      function updateGenerationProgress(taskId: string, updater: (current: GenerationProgress) => GenerationProgress) {
+        setGenerationProgresses((current) => current.map((item) => (item.taskId === taskId ? updater(item) : item)))
+      }
+
+      async function pollGenerationTask(progress: GenerationProgress) {
+        const taskId = progress.taskId
+        if (!taskId) return
+
+        const startedAt = progress.startedAt ?? Date.now()
+        let attempt = Math.max(0, progress.attempt - 1)
+        const sleep = (delayMs: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, delayMs) })
+
+        try {
+          while (pollingTaskIdsRef.current.has(taskId)) {
+            attempt += 1
+            try {
+              const detail = await api.getImageTask(taskId)
+              if (!pollingTaskIdsRef.current.has(taskId)) return
+
+              const detailCount = getPreviewRequestedCount(detail as any, 1)
+              const imageURLs = limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount || detailCount)
+              const persistedElapsedSeconds = normalizeElapsedSeconds(detail.imageElapsedSeconds)
+              const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+              const isFinal = detail.status === 'success' || detail.status === 'failed'
+              const finalCount = Math.max(1, imageURLs.length || detailCount)
+              const nextMessage = detail.status === 'failed' ? detail.errorMessage ?? '生成失败' : imageURLs.length > 0 ? `已拿到 ${imageURLs.length} 张图片` : '任务已完成'
+
+              // LOCAL Update Preview
+              setPreview((current: any) => {
+                if (current.taskId !== taskId && current.taskId !== '-' && current.taskId) return current;
+                return detailToPreview(detail as any)
+              });
+              
+              // LOCAL Update History
+              setHistory(current => current.map(item => {
+                if (item.id === taskId) {
+                  return {
+                    ...item,
+                    status: detail.status as any,
+                    imageUrl: detail.imageUrl,
+                    imageUrls: imageURLs,
+                    imageElapsedSeconds: persistedElapsedSeconds,
+                    thumbnailUrl: detail.thumbnailUrl,
+                    thumbnailUrls: detail.thumbnailUrls,
+                    errorMessage: detail.errorMessage,
+                    updatedAt: detail.updatedAt,
+                  }
+                }
+                return item
+              }));
+
+              if (isFinal) {
+                updateGenerationProgress(taskId, (current) => ({
+                  ...current,
+                  prompt: detail.prompt,
+                  status: detail.status === 'failed' ? 'failed' : 'success',
+                  elapsedSeconds,
+                  imageElapsedSeconds: buildImageElapsedSeconds(finalCount, elapsedSeconds, persistedElapsedSeconds.length > 0 ? persistedElapsedSeconds : current.imageElapsedSeconds, finalCount, detail.status === 'failed' ? 'failed' : 'success'),
+                  total: finalCount,
+                  completed: finalCount,
+                  success: detail.status === 'failed' ? 0 : finalCount,
+                  running: 0,
+                  attempt,
+                  message: nextMessage,
+                }))
+                if (detail.status === 'failed') {
+                  props.setMessage(`生图失败：${detail.errorMessage ?? '未知错误'}`)
+                }
+                props.onDashboardRefresh()
+                return
+              }
+
+              updateGenerationProgress(taskId, (current) => ({
+                ...current,
+                prompt: detail.prompt,
+                elapsedSeconds,
+                imageElapsedSeconds: buildImageElapsedSeconds(Math.max(detailCount, current.total, imageURLs.length || 1), elapsedSeconds, persistedElapsedSeconds.length > 0 ? persistedElapsedSeconds : current.imageElapsedSeconds, imageURLs.length, 'running'),
+                total: Math.max(detailCount, current.total, imageURLs.length || 1),
+                completed: imageURLs.length,
+                success: 0,
+                running: Math.max(0, Math.max(detailCount, current.total, imageURLs.length || 1) - imageURLs.length),
+                attempt,
+                message: imageURLs.length > 0 ? nextMessage : '任务正在生成中',
+              }))
+            } catch (error: any) {
+              if (!pollingTaskIdsRef.current.has(taskId)) return
+              
+              if (error && error.status === 401) {
+                pollingTaskIdsRef.current.clear()
+                return
+              }
+              
+              const errorMessage = error instanceof Error ? error.message : '轮询任务状态失败'
+              updateGenerationProgress(taskId, (current) => ({
+                ...current,
+                elapsedSeconds: Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
+                imageElapsedSeconds: buildImageElapsedSeconds(current.total, Math.max(0, Math.floor((Date.now() - startedAt) / 1000)), current.imageElapsedSeconds, current.completed, current.status),
+                attempt,
+                message: `轮询状态失败：${errorMessage}`,
+              }))
+            }
+
+            await sleep(2000)
+          }
+        } finally {
+          pollingTaskIdsRef.current.delete(taskId)
+        }
+      }
+
 
   return (
-    <div className={activePage === 'home' ? 'block' : 'hidden'}>
+    <div className={props.activePage === 'home' ? 'block' : 'hidden'}>
               <div className="space-y-4">
                 <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)_360px]">
                   <section className="min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
@@ -736,31 +887,31 @@ function handleApplyPreviewDetail() {
                     <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
                       <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
                         <div className="text-xs text-slate-500">当前积分</div>
-                        <div className="mt-1 text-base font-semibold text-slate-100">{points ? points.balance : 0}</div>
+                        <div className="mt-1 text-base font-semibold text-slate-100">{props.points ? props.points.balance : 0}</div>
                       </div>
                       <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
                         <div className="text-xs text-slate-500">可用福利次数</div>
                         <div className="mt-1 text-base font-semibold text-slate-100">
-                          {points ? points.totalCredits : 0}
+                          {props.points ? props.points.totalCredits : 0}
                         </div>
                       </div>
                       <div className="col-span-2 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
                         <div className="text-sm font-medium text-slate-100">
-                          今日生图消耗 {billingSettings?.imageGeneratePointCost ?? 20} 积分
+                          今日生图消耗 {props.billingSettings?.imageGeneratePointCost ?? 20} 积分
                         </div>
                       </div>
                     </div>
 
-                    {emailNotifyAvailable ? (
+                    {props.emailNotifyAvailable ? (
                       <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
                         <input
                           type="checkbox"
-                          checked={emailNotifyOnComplete}
-                          onChange={(event) => setEmailNotifyOnComplete(event.target.checked as boolean)}
+                          checked={props.emailNotifyOnComplete}
+                          onChange={(event) => props.setEmailNotifyOnComplete(event.target.checked as boolean)}
                           className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-violet-500 focus:ring-violet-400"
                         />
                         <span className="min-w-0 leading-6">
-                          额外消耗 {emailNotifyPointCost} 积分，任务完成后发送邮件至账号邮箱，失败将退还积分。
+                          额外消耗 {props.emailNotifyPointCost} 积分，任务完成后发送邮件至账号邮箱，失败将退还积分。
                         </span>
                       </label>
                     ) : null}
@@ -785,10 +936,10 @@ function handleApplyPreviewDetail() {
                       <button
                         type="button"
                         onClick={() => referenceImageInputRef.current?.click()}
-                        disabled={referenceImageUploading || busy === 'upload-reference'}
+                        disabled={referenceImageUploading || props.busy === 'upload-reference'}
                         className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {referenceImageUploading || busy === 'upload-reference' ? (
+                        {referenceImageUploading || props.busy === 'upload-reference' ? (
                           <LoaderCircle className="h-4 w-4 animate-spin" />
                         ) : (
                           <ImagePlus className="h-4 w-4" />
@@ -974,18 +1125,18 @@ function handleApplyPreviewDetail() {
                       <button
                         type="button"
                         onClick={handleOpenCreateTaskConfirm}
-                        disabled={!isAuthed || busy === 'create-task' || busy === 'upload-reference' || referenceImageUploading || !prompt.trim() || !imageGenerationEnabled}
+                        disabled={!props.isAuthed || props.busy === 'create-task' || props.busy === 'upload-reference' || referenceImageUploading || !prompt.trim() || !props.imageGenerationEnabled}
                         className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {busy === 'create-task' ? (
+                        {props.busy === 'create-task' ? (
                           <LoaderCircle className="h-4 w-4 animate-spin" />
-                        ) : referenceImageUploading || busy === 'upload-reference' ? (
+                        ) : referenceImageUploading || props.busy === 'upload-reference' ? (
                           <LoaderCircle className="h-4 w-4 animate-spin" />
                         ) : (
                           <Sparkles className="h-4 w-4" />
                         )}
-                        {imageGenerationEnabled
-                          ? referenceImageUploading || busy === 'upload-reference'
+                        {props.imageGenerationEnabled
+                          ? referenceImageUploading || props.busy === 'upload-reference'
                             ? '参考图上传中...'
                             : `生成图片，本次预计消耗 ${estimatedGenerationPointCost} 积分`
                           : '暂时关闭，详情见公告'}
@@ -1070,11 +1221,11 @@ function handleApplyPreviewDetail() {
           lines={[
             '确认是否提交生图任务？',
             `上传参考图：${referenceImages.length} 张`,
-            `生成张数：${clampCount(Number(count) || 1)} 张`,
+            `生成张数：${props.clampCount(Number(count) || 1)} 张`,
             `本次预计消耗：${estimatedGenerationPointCost} 积分`,
           ]}
           confirmLabel="确定"
-          busy={busy === 'create-task'}
+          busy={props.busy === 'create-task'}
           onCancel={handleCancelCreateTaskConfirm}
           onConfirm={handleConfirmCreateTask}
         />

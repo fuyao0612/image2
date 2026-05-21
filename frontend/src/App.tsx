@@ -344,6 +344,7 @@ const emptyPreview: ImageTaskDetailResponse = {
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
 function App() {
+    let dashboardRunningTasks = useState<any[]>([]);
     const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
       ? 'reset'
@@ -433,7 +434,6 @@ function App() {
     previewUrl: '',
     tags: [''],
     })
-    const pollingTaskIdsRef = useRef<Set<string>>(new Set())
     const [polledPreviewUpdate, setPolledPreviewUpdate] = useState<any>(null)
     const [polledHistoryUpdate, setPolledHistoryUpdate] = useState<any>(null)
     const checkinInFlightRef = useRef(false)
@@ -441,7 +441,6 @@ function App() {
     const isAuthed = token.length > 0
     const isAdmin = currentUser?.role === 'admin'
     const canRegister = REGISTRATION_ENABLED
-    const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId)
     const checkedInToday = isSameShanghaiDay(points?.lastCheckinAt ?? null)
     const imageGenerationEnabled = billingSettings?.imageGenerationEnabled ?? true
     const emailNotifyPointCost = Math.max(0, Math.floor(Number(billingSettings?.emailNotifyPointCost ?? 0)))
@@ -529,8 +528,6 @@ function App() {
       setAnnouncementDialogOpen(false)
       setActiveAnnouncementId(null)
       setWechatSaveGuide({ open: false, imageUrl: '', title: '' })
-      pollingTaskIdsRef.current.clear()
-      setGenerationProgresses([])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isAuthed])
@@ -617,179 +614,6 @@ function App() {
     return () => window.clearInterval(timer)
     }, [emailCodeCountdown])
 
-    useEffect(() => {
-    if (!hasRunningGeneration) {
-      return
-    }
-
-    const timer = window.setInterval(() => {
-      setGenerationProgresses((current) =>
-        current.map((item) => {
-          if (item.status !== 'running' || !item.startedAt) {
-            return item
-          }
-
-          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - item.startedAt) / 1000))
-          return {
-            ...item,
-            elapsedSeconds,
-            imageElapsedSeconds: buildImageElapsedSeconds(item.total, elapsedSeconds, item.imageElapsedSeconds, item.completed, item.status),
-            running: Math.max(0, item.total - item.completed),
-          }
-        }),
-      )
-    }, 1000)
-
-    return () => window.clearInterval(timer)
-    }, [hasRunningGeneration])
-
-    useEffect(() => {
-    for (const progress of generationProgresses) {
-      if (!progress.taskId || progress.status !== 'running' || pollingTaskIdsRef.current.has(progress.taskId)) {
-        continue
-      }
-      pollingTaskIdsRef.current.add(progress.taskId)
-      void pollGenerationTask(progress)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [generationProgresses])
-
-    function upsertGenerationProgress(progress: GenerationProgress) {
-    if (!progress.taskId) {
-      return
-    }
-
-    setGenerationProgresses((current) =>
-      limitGenerationProgresses([
-        progress,
-        ...current.filter((item) => item.taskId !== progress.taskId),
-      ]),
-    )
-    }
-
-    function updateGenerationProgress(taskId: string, updater: (current: GenerationProgress) => GenerationProgress) {
-    setGenerationProgresses((current) =>
-      current.map((item) => (item.taskId === taskId ? updater(item) : item)),
-    )
-    }
-
-    async function pollGenerationTask(progress: GenerationProgress) {
-    const taskId = progress.taskId
-    if (!taskId) {
-      return
-    }
-
-    const startedAt = progress.startedAt ?? Date.now()
-    let attempt = Math.max(0, progress.attempt - 1)
-    const sleep = (delayMs: number) =>
-      new Promise<void>((resolve) => {
-        window.setTimeout(resolve, delayMs)
-      })
-
-    try {
-      while (pollingTaskIdsRef.current.has(taskId)) {
-        attempt += 1
-
-        try {
-          const detail = await api.getImageTask(taskId)
-          if (!pollingTaskIdsRef.current.has(taskId)) {
-            return
-          }
-
-          const detailCount = getPreviewRequestedCount(detail, 1)
-          const imageURLs = limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount || detailCount)
-          const persistedElapsedSeconds = normalizeElapsedSeconds(detail.imageElapsedSeconds)
-          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-          const isFinal = detail.status === 'success' || detail.status === 'failed'
-          const finalCount = Math.max(1, imageURLs.length || detailCount)
-          const nextMessage =
-            detail.status === 'failed'
-              ? detail.errorMessage ?? '生成失败'
-              : imageURLs.length > 0
-                ? `已拿到 ${imageURLs.length} 张图片`
-                : '任务已完成'
-
-          setPolledPreviewUpdate({ taskId, preview: { requestedCount: detail.requestedCount || detailCount, prompt: detail.prompt, imageUrl: detail.imageUrl, imageUrls: imageURLs, imageElapsedSeconds: persistedElapsedSeconds, thumbnailUrl: detail.thumbnailUrl, thumbnailUrls: detail.thumbnailUrls, provider: detail.provider, providerTaskId: detail.providerTaskId, providerResponse: detail.providerResponse, costPoints: detail.costPoints, costCredits: detail.costCredits, freeCreditsCost: detail.freeCreditsCost, paidCreditsCost: detail.paidCreditsCost, creditSource: detail.creditSource, status: detail.status, requestParams: detail.requestParams, errorMessage: detail.errorMessage, createdAt: detail.createdAt, updatedAt: detail.updatedAt }, isFinal: false })
-          setPolledHistoryUpdate({
-            taskId,
-            requestedCount: detail.requestedCount || detailCount,
-            prompt: detail.prompt,
-            imageUrl: detail.imageUrl,
-            imageUrls: imageURLs,
-            imageElapsedSeconds: persistedElapsedSeconds,
-            thumbnailUrl: detail.thumbnailUrl,
-            thumbnailUrls: detail.thumbnailUrls,
-            costPoints: detail.costPoints,
-            costCredits: detail.costCredits,
-            freeCreditsCost: detail.freeCreditsCost,
-            paidCreditsCost: detail.paidCreditsCost,
-            creditSource: detail.creditSource,
-            status: detail.status,
-            requestParams: detail.requestParams,
-            errorMessage: detail.errorMessage,
-            createdAt: detail.createdAt,
-            updatedAt: detail.updatedAt,
-          })
-
-          if (isFinal) {
-            setPolledPreviewUpdate({ taskId, preview: detailToPreview(detail), isFinal: true })
-            updateGenerationProgress(taskId, (current) => ({
-              ...current,
-              prompt: detail.prompt,
-              status: detail.status === 'failed' ? 'failed' : 'success',
-              elapsedSeconds,
-              imageElapsedSeconds: buildImageElapsedSeconds(finalCount, elapsedSeconds, persistedElapsedSeconds.length > 0 ? persistedElapsedSeconds : current.imageElapsedSeconds, finalCount, detail.status === 'failed' ? 'failed' : 'success'),
-              total: finalCount,
-              completed: finalCount,
-              success: detail.status === 'failed' ? 0 : finalCount,
-              running: 0,
-              attempt,
-              message: nextMessage,
-            }))
-            if (detail.status === 'failed') {
-              setMessage(`生图失败：${detail.errorMessage ?? '未知错误'}`)
-            }
-            void loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })
-            return
-          }
-
-          updateGenerationProgress(taskId, (current) => ({
-            ...current,
-            prompt: detail.prompt,
-            elapsedSeconds,
-            imageElapsedSeconds: buildImageElapsedSeconds(Math.max(detailCount, current.total, imageURLs.length || 1), elapsedSeconds, persistedElapsedSeconds.length > 0 ? persistedElapsedSeconds : current.imageElapsedSeconds, imageURLs.length, 'running'),
-            total: Math.max(detailCount, current.total, imageURLs.length || 1),
-            completed: imageURLs.length,
-            success: 0,
-            running: Math.max(0, Math.max(detailCount, current.total, imageURLs.length || 1) - imageURLs.length),
-            attempt,
-            message: imageURLs.length > 0 ? nextMessage : '任务正在生成中',
-          }))
-        } catch (error) {
-          if (!pollingTaskIdsRef.current.has(taskId)) {
-            return
-          }
-          if (shouldForceLogout(error)) {
-            handleLogout()
-            return
-          }
-          const errorMessage = error instanceof Error ? error.message : '轮询任务状态失败'
-          updateGenerationProgress(taskId, (current) => ({
-            ...current,
-            elapsedSeconds: Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
-            imageElapsedSeconds: buildImageElapsedSeconds(current.total, Math.max(0, Math.floor((Date.now() - startedAt) / 1000)), current.imageElapsedSeconds, current.completed, current.status),
-            attempt,
-            message: `轮询状态失败：${errorMessage}`,
-          }))
-        }
-
-        await sleep(2000)
-      }
-    } finally {
-      pollingTaskIdsRef.current.delete(taskId)
-    }
-    }
-
     async function loadPackages() {
     try {
       const [rechargeResult, settingsResult] = await Promise.all([
@@ -839,15 +663,6 @@ function App() {
                 
                 const runningTasks = latestResult.items.filter((item: any) => item.status === 'generating' || item.status === 'running');
                 if (runningTasks.length > 0) {
-                  setGenerationProgresses((current: any) => {
-                    const currentIds = new Set(current.map((item: any) => item.taskId));
-                    const next = [...current];
-                    for (const task of [...runningTasks].reverse()) {
-                      if (currentIds.has(task.id)) continue;
-                      next.push({ taskId: task.id, status: task.status as any } as unknown as any);
-                    }
-                    return next;
-                  });
                 }
                 
                 if (updateMessage) {
@@ -1200,26 +1015,6 @@ function App() {
       }
     })
     const generationStatus = normalizeGenerationStatus(result.status)
-    upsertGenerationProgress({
-      taskId: result.taskId,
-      prompt: requestSnapshot.prompt || '',
-      status: generationStatus,
-      startedAt,
-      elapsedSeconds: 0,
-      imageElapsedSeconds: [],
-      total: requestedCount,
-      completed: generationStatus === 'running' ? 0 : requestedCount,
-      success: generationStatus === 'success' ? requestedCount : 0,
-      running: generationStatus === 'running' ? requestedCount : 0,
-      attempt: 1,
-      backendUrl: api.API_BASE_URL,
-      message:
-        generationStatus === 'running'
-          ? `任务已提交，任务编号：${result.taskId}，消耗 ${formatTaskCost(result, taskCount)}`
-          : generationStatus === 'success'
-            ? `任务已提交，任务编号：${result.taskId}，已直接完成。`
-            : `任务已提交，任务编号：${result.taskId}，生成失败。`,
-    })
     if (generationStatus === 'failed') {
       setMessage(`任务已提交，任务编号：${result.taskId}，${result.errorMessage || '但生成失败。'}`)
     }
@@ -1337,8 +1132,6 @@ function App() {
               setAnnouncements([]);
               setActiveAnnouncementId(null);
               setAnnouncementDialogOpen(false);
-              setGenerationProgresses([]);
-            
     }
 
     function handleLogoutRequest() {
@@ -1898,8 +1691,6 @@ function App() {
                 emailNotifyPointCost={emailNotifyPointCost}
                 busy={busy}
                 clampCount={clampCount}
-                hasRunningGeneration={hasRunningGeneration}
-                polledPreviewUpdate={polledPreviewUpdate}
                 emptyPreview={emptyPreview}
                 toPreview={toPreview}
                 detailToPreview={detailToPreview}
@@ -1912,11 +1703,9 @@ function App() {
                 normalizeReferenceImagesFromSnapshot={normalizeReferenceImagesFromSnapshot}
                 limitImageURLs={limitImageURLs}
                 normalizeImageURLs={normalizeImageURLs}
-                generationProgresses={generationProgresses}
                 historyRefreshTrigger={historyRefreshTrigger}
-                polledHistoryUpdate={polledHistoryUpdate}
                 isAuthed={isAuthed}
-                imageGenerationEnabled={imageGenerationEnabled}
+                imageGenerationEnabled={imageGenerationEnabled} dashboardRunningTasks={dashboardRunningTasks} onDashboardRefresh={() => loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })}
               />
             </div>
 
