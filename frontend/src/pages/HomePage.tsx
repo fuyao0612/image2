@@ -7,16 +7,89 @@ import {
   Search, Sparkles, ShoppingBag, Sun, Timer, Upload, UserRound, UserRoundPlus,
   ShieldCheck, Wallet, XCircle
 } from 'lucide-react';
-import {
-  ReferenceImagesDialog, PreviewDetailDialog, WechatSaveGuide,
-  TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay,
-  GenerationProgressPanel, GenerationProgressCard, ProgressStat,
-  sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions,
-  outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES,
-  getImageTaskStatusLabel
-} from '../App';
+import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from '../constants/app';
+import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams } from '../utils/imageTasks';
+import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
 
-export function HomePage(props: any) {
+export interface HomePageProps {
+  activePage: string;
+  points: any;
+  billingSettings: any;
+  emailNotifyAvailable: boolean;
+  emailNotifyOnComplete: boolean;
+  setEmailNotifyOnComplete: (val: boolean) => void;
+  emailNotifyPointCost: number;
+  prompt: string;
+  setPrompt: (val: string) => void;
+  handlePromptDrag: (e: any) => void;
+  handlePromptDragLeave: (e: any) => void;
+  handlePromptDrop: (e: any) => void;
+  handlePromptPaste: (e: any) => void;
+  promptDragActive: boolean;
+  referenceImageInputRef: any;
+  referenceImageUploading: any;
+  busy: any;
+  setShowNetworkImageInput: (val: any) => void;
+  showNetworkImageInput: boolean;
+  handleNetworkReferenceImageInput: (e: any) => void;
+  referenceImages: any[];
+  handleDeleteReferenceImage: (index: number) => void;
+  setReferenceImagesDialogOpen: (val: boolean) => void;
+  referenceImagesDialogOpen: boolean;
+  getReferenceImageExtraPointCost: (count: number) => number;
+  size: string;
+  setSize: (val: string) => void;
+  customWidth: string;
+  setCustomWidth: (val: string) => void;
+  customHeight: string;
+  setCustomHeight: (val: string) => void;
+  style: string;
+  setStyle: (val: string) => void;
+  count: number;
+  setCount: (val: number) => void;
+  clampCount: (val: number) => number;
+  quality: string;
+  setQuality: (val: string) => void;
+  outputFormat: string;
+  setOutputFormat: (val: string) => void;
+  estimatedGenerationPointCost: number;
+  handleOpenCreateTaskConfirm: () => void;
+  hasRunningGeneration: boolean;
+  handleClearPromptOptions: (e?: any) => void;
+  preview: any;
+  setPreview: (val: any) => void;
+  previewImageIndex: number;
+  setPreviewImageIndex: (val: number) => void;
+  previewDetailOpen: boolean;
+  setPreviewDetailOpen: (val: boolean) => void;
+  handleSaveCurrentImage: () => void;
+  handlePreviousPreviewImage: () => void;
+  handleNextPreviewImage: () => void;
+  loadPreviewTaskDetail: (taskId: string) => Promise<any>;
+  generationProgresses: any[];
+  history: any[];
+  historyPage: number;
+  historyTotal: number;
+  loadHistoryPage: (page: number) => void;
+  handleSelectTask: (task: any) => void;
+  wechatSaveGuide: any;
+  setWechatSaveGuide: (val: any) => void;
+  generateConfirmOpen: boolean;
+  setGenerateConfirmOpen: (val: boolean) => void;
+  handleLocalReferenceImageChange: (e: any) => void;
+  referenceImageURL: string;
+  setReferenceImageURL: (val: string) => void;
+  handleAddNetworkReferenceImage: () => void;
+  isAuthed: boolean;
+  imageGenerationEnabled: boolean;
+  handleOpenPreviewDetail: (item: any) => void;
+  previewImageURLs: string[];
+  previewThumbnailURLs: string[];
+  handleCancelCreateTaskConfirm: () => void;
+  handleConfirmCreateTask: () => void;
+}
+
+export function HomePage(props: HomePageProps) {
   const {
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
     setEmailNotifyOnComplete, emailNotifyPointCost, prompt, setPrompt, handlePromptDrag,
@@ -196,7 +269,7 @@ export function HomePage(props: any) {
                           onChange={(event) => setSize(event.target.value)}
                           className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {sizeOptions.map((option) => (
+                          {sizeOptions.map((option: any) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -259,7 +332,7 @@ export function HomePage(props: any) {
                           onChange={(event) => setStyle(event.target.value)}
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {styleOptions.map((option) => (
+                          {styleOptions.map((option: any) => (
                             <option key={option.value || 'none'} value={option.value}>
                               {option.label}
                             </option>
@@ -274,7 +347,7 @@ export function HomePage(props: any) {
                           onChange={(event) => setQuality(event.target.value)}
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {qualityOptions.map((option) => (
+                          {qualityOptions.map((option: any) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -289,7 +362,7 @@ export function HomePage(props: any) {
                           onChange={(event) => setOutputFormat(event.target.value)}
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {outputFormatOptions.map((option) => (
+                          {outputFormatOptions.map((option: any) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -329,7 +402,7 @@ export function HomePage(props: any) {
                       </div>
                       <button
                         type="button"
-                        onClick={() => void handleOpenPreviewDetail()}
+                        onClick={() => void handleOpenPreviewDetail(preview)}
                         className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
                       >
                         <Eye className="h-4 w-4" />
@@ -362,7 +435,7 @@ export function HomePage(props: any) {
                       pageSize={HISTORY_PAGE_SIZE}
                       total={historyTotal}
                       onSelect={handleSelectTask}
-                      onPageChange={(page) => void loadHistoryPage(page)}
+                      onPageChange={(page: any) => void loadHistoryPage(page)}
                     />
                   </aside>
                 </div>

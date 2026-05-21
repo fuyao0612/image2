@@ -92,6 +92,11 @@ import { HomePage } from './pages/HomePage';
 import { RechargeConfirmDialog } from "./pages/RechargePage";
 import { AppProvider } from './contexts/AppContext';
 import type { AppContextType } from './contexts/AppContext';
+import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from './constants/app';
+import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, clampCount } from './utils/imageTasks';
+import { MiniStat, PanelPagination } from './components/shared';
+import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from './components/home';
+
 
 type AuthMode = 'login' | 'register' | 'reset'
 type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
@@ -185,8 +190,6 @@ interface PromptGalleryItem {
 
 export type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
 
-export const MAX_REFERENCE_IMAGES = 12
-export const FREE_REFERENCE_IMAGE_COUNT = 3
 
 interface PasswordChangeForm {
   currentPassword: string
@@ -307,43 +310,9 @@ const appNavItems: Array<{
 
 const featuredPromptItems: PromptGalleryItem[] = []
 
-export const sizeOptions = [
-  { value: '1024x1024', label: '1024x1024 方图' },
-  { value: '1024x1536', label: '1024x1536 竖图' },
-  { value: '1536x1024', label: '1536x1024 横图' },
-  { value: '2048x2048', label: '2048x2048 2K 方图' },
-  { value: '2048x1152', label: '2048x1152 2K 横图' },
-  { value: '1152x2048', label: '1152x2048 2K 竖图' },
-  { value: '3840x2160', label: '3840x2160 4K 横图' },
-  { value: '2160x3840', label: '2160x3840 4K 竖图' },
-  { value: 'custom', label: '自定义尺寸' },
-  { value: 'auto', label: '自动' },
-]
 
-export const styleOptions = [
-  { value: '', label: '无' },
-  { value: 'realistic', label: '写实' },
-  { value: 'anime', label: '动漫' },
-  { value: 'oil painting', label: '油画' },
-  { value: 'watercolor', label: '水彩' },
-  { value: 'pixel art', label: '像素' },
-  { value: '3d', label: '3D' },
-  { value: 'cinematic', label: '电影感' },
-]
 
-export const qualityOptions = [
-  { value: 'auto', label: '自动' },
-  { value: 'low', label: '低质量，通常更快' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高质量，通常更慢' },
-]
 
-export const outputFormatOptions = [
-  { value: 'default', label: '默认' },
-  { value: 'jpeg', label: 'JPEG' },
-  { value: 'webp', label: 'WebP' },
-  { value: 'png', label: 'PNG' },
-]
 
 const emptyGenerationProgress: GenerationProgress = {
   taskId: null,
@@ -361,8 +330,6 @@ const emptyGenerationProgress: GenerationProgress = {
   message: '等待提交',
 }
 
-const GENERATION_WAITING_NOTICE =
-  '请耐心等待，图片生成时间会随着尺寸、张数和质量档位提高而增长。高质量或 4K 图片通常会更慢，也更容易偶发失败；如生成失败，本次消耗会自动退回。'
 
 const emptyPreview: ImageTaskDetailResponse = {
   taskId: '-',
@@ -380,10 +347,8 @@ const emptyPreview: ImageTaskDetailResponse = {
   updatedAt: '',
 }
 
-export const HISTORY_PAGE_SIZE = 5
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
-export const CUSTOM_SIZE_MAX_SIDE = 3840
 const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
@@ -2931,193 +2896,8 @@ function AnnouncementListGroup({
   )
 }
 
-export function WechatSaveGuide({
-  imageUrl,
-  title,
-  onClose,
-}: {
-  imageUrl: string
-  title: string
-  onClose: () => void
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭保存提示" onClick={onClose} />
-      <div className="relative flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <div>
-            <h2 className="text-base font-medium text-slate-50">保存图片</h2>
-            <p className="mt-1 text-xs text-slate-400">微信内请长按图片保存到相册，也可以点击右上角菜单在浏览器中打开后下载。</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-300 transition hover:border-violet-400 hover:text-white"
-            aria-label="关闭"
-          >
-            <XCircle className="h-5 w-5" />
-          </button>
-        </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
-          <div className="flex min-h-[300px] items-center justify-center rounded-md border border-slate-800 bg-slate-900/70 p-3">
-            <img src={imageUrl} alt={title || '当前图片'} className="max-h-[70vh] w-full select-auto rounded-md object-contain" />
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-slate-400">如果长按没有出现保存选项，请点击下面的“打开原图”后再长按保存。</p>
-            <a
-              href={imageUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-4 text-sm text-slate-100 transition hover:border-violet-400 hover:text-white"
-            >
-              <Link2 className="h-4 w-4" />
-              打开原图
-            </a>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
 
-export function ReferenceImagesDialog({
-  images,
-  onDelete,
-  onClose,
-}: {
-  images: ReferenceImageItem[]
-  onDelete: (index: number) => void
-  onClose: () => void
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭参考图列表" onClick={onClose} />
-      <div className="relative flex max-h-[82vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">已添加的参考图片</h2>
-            <p className="mt-1 text-xs text-slate-500">共 {images.length} 张，超过 {FREE_REFERENCE_IMAGE_COUNT} 张后每张额外 1 积分。</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-violet-300 hover:text-violet-600"
-            aria-label="关闭"
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="space-y-3 overflow-y-auto p-3">
-          {images.map((image, index) => (
-            <div key={`${image.url}-${index}`} className="flex items-center gap-3 rounded-2xl bg-white p-3 shadow-sm">
-              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
-                <img src={image.url} alt={image.name || `参考图 ${index + 1}`} className="h-full w-full object-cover" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-slate-900" title={image.name}>
-                  {image.name || `参考图 ${index + 1}`}
-                </div>
-                <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-slate-500" title={image.url}>
-                  {image.url}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => onDelete(index)}
-                className="shrink-0 rounded-xl px-2 py-1 text-sm text-slate-700 transition hover:bg-rose-50 hover:text-rose-600"
-              >
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export function PreviewDetailDialog({
-  preview,
-  onApply,
-  onClose,
-}: {
-  preview: ImageTaskDetailResponse
-  onApply: () => void
-  onClose: () => void
-}) {
-  const requestOptions = buildPreviewRequestOptions(preview)
-  const parsed = parseTaskRequestParams(preview.requestParams)
-  const promptText = parsed?.prompt?.trim() || preview.prompt || '未填写'
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭图片详情" onClick={onClose} />
-      <div className="relative flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-medium text-slate-50">提示词详情</h2>
-            <p className="mt-1 text-xs text-slate-400">只展示提示词和生成选项，方便直接复用。</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-300 transition hover:border-violet-400 hover:text-white"
-            aria-label="关闭"
-          >
-            <XCircle className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-auto p-4">
-          <div className="space-y-4">
-            <div className="rounded-md border border-slate-800 bg-slate-900/70 px-3 py-3">
-              <div className="text-xs text-slate-500">提示词</div>
-              <div className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">
-                {promptText}
-              </div>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              {requestOptions
-                .filter((option) => option.label !== '提示词')
-                .map((option) => (
-                  <div
-                    key={option.label}
-                    className={`min-w-0 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 ${
-                      option.wide ? 'sm:col-span-2' : ''
-                    }`}
-                  >
-                    <div className="text-xs text-slate-500">{option.label}</div>
-                    <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">
-                      {option.value}
-                    </div>
-                  </div>
-                ))}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={onClose}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 px-4 text-sm text-slate-100 transition hover:border-slate-500 hover:text-white"
-              >
-                关闭
-              </button>
-              <button
-                type="button"
-                onClick={onApply}
-                className="inline-flex h-10 items-center justify-center rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
-              >
-                一键应用
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 export function Field({
   label,
@@ -3463,122 +3243,7 @@ export function PageHeader({
   )
 }
 
-export function PanelPagination({
-  page,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  page: number
-  pageSize: number
-  total: number
-  onPageChange: (page: number) => void
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const hasPrev = page > 1
-  const hasNext = page < totalPages
 
-  return (
-    <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-800 pt-3 text-xs text-slate-500">
-      <span>
-        第 {page} / {totalPages} 页 · 共 {total} 条
-      </span>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onPageChange(Math.max(1, page - 1))}
-          disabled={!hasPrev}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-slate-300 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          上一页
-        </button>
-        <button
-          type="button"
-          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-          disabled={!hasNext}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-slate-300 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          下一页
-        </button>
-      </div>
-    </div>
-  )
-}
-
-export function TaskHistoryPanel({
-  items,
-  page,
-  pageSize,
-  total,
-  onSelect,
-  onPageChange,
-}: {
-  items: ImageTaskItem[]
-  page: number
-  pageSize: number
-  total: number
-  onSelect: (item: ImageTaskItem) => void
-  onPageChange: (page: number) => void
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-medium text-slate-50">历史记录</h2>
-          <p className="mt-1 text-sm text-slate-400">最近提交的生图任务，每页 {pageSize} 条</p>
-        </div>
-        <History className="h-5 w-5 text-violet-300" />
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {items.length ? (
-          items.map((item) => {
-            const imageURLs = limitImageURLs(normalizeImageURLs(item.imageUrls, item.imageUrl), item.requestedCount)
-            const cover = item.thumbnailUrl || item.thumbnailUrls?.[0] || imageURLs[0] || ''
-            const requestedCount = getPreviewRequestedCount(item, imageURLs.length || 1)
-            const isPartialSuccess = isPartialImageTaskStatus(item.status, imageURLs.length, requestedCount)
-            const displayStatus = isPartialSuccess ? 'partial_success' : item.status
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onSelect(item)}
-                className="flex w-full items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-900"
-              >
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-xs font-medium text-slate-300">
-                  {cover ? (
-                    <img src={cover} alt={item.prompt} className="h-full w-full object-cover" />
-                  ) : (
-                    <span>{getImageTaskStatusLabel(displayStatus)}</span>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-slate-200">{item.prompt}</span>
-                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs ${getTaskStatusBadgeClass(displayStatus)}`}>
-                      {getImageTaskStatusLabel(displayStatus)}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span>{formatDateTime(item.createdAt)}</span>
-                    <span>消耗 {formatTaskCost(item, getTaskCreditCost(item))}</span>
-                    {isPartialSuccess ? <span>{imageURLs.length}/{requestedCount} 张图</span> : imageURLs.length > 1 ? <span>{imageURLs.length} 张图</span> : null}
-                  </div>
-                </div>
-              </button>
-            )
-          })
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
-            暂无生图历史。
-          </div>
-        )}
-      </div>
-
-      <PanelPagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
-    </section>
-  )
-}
 
 export function FlowLogTabButton({
   active,
@@ -3605,204 +3270,7 @@ export function FlowLogTabButton({
   )
 }
 
-export function TaskDetailPanel({
-  preview,
-  progress,
-}: {
-  preview: ImageTaskDetailResponse
-  progress: GenerationProgress | null
-}) {
-  const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
-  const imageCount = imageURLs.length
-  const rawStatus = progress?.status ?? preview.status
-  const totalCount = Math.max(1, progress?.total ?? getPreviewRequestedCount(preview, imageCount || 1))
-  const isPartialSuccess = isPartialImageTaskStatus(rawStatus, imageCount, totalCount)
-  const displayStatus = isPartialSuccess ? 'partial_success' : rawStatus
-  const completedFallback = rawStatus === 'success' ? (isPartialSuccess ? imageCount : totalCount) : imageCount
-  const completedCount = Math.min(totalCount, Math.max(0, progress?.completed ?? completedFallback))
-  const elapsedSeconds = progress?.elapsedSeconds ?? getPreviewElapsedSeconds(preview)
-  const elapsedText = formatElapsedTriplet(totalCount, elapsedSeconds, progress?.imageElapsedSeconds ?? preview.imageElapsedSeconds)
-  const visibleErrorMessage = rawStatus === 'failed' || isPartialSuccess ? preview.errorMessage : ''
 
-  return (
-    <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
-          <Copy className="h-4 w-4 text-slate-400" />
-          任务状态
-        </div>
-        <span className={`rounded-md px-2 py-1 text-xs ${getTaskStatusBadgeClass(displayStatus)}`}>
-          {getImageTaskStatusLabel(displayStatus)}
-        </span>
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <MiniStat label="完成" value={`${completedCount}/${totalCount}`} />
-        <MiniStat label="耗时·s" value={elapsedText} />
-        <MiniStat label="消耗" value={formatTaskCost(preview, totalCount)} />
-      </div>
-
-      {visibleErrorMessage ? (
-        <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${isPartialSuccess ? 'border-amber-500/20 bg-amber-500/10 text-amber-100' : 'border-rose-500/20 bg-rose-500/10 text-rose-200'}`}>
-          {visibleErrorMessage}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-export function PreviewImageStage({
-  preview,
-  imageURLs,
-  thumbnailURLs,
-  activeIndex,
-  onPrevious,
-  onNext,
-  onSaveCurrent,
-  onSelectThumbnail,
-  onImageLoadError,
-}: {
-  preview: ImageTaskDetailResponse
-  imageURLs: string[]
-  thumbnailURLs: string[]
-  activeIndex: number
-  onPrevious: () => void
-  onNext: () => void
-  onSaveCurrent: () => void
-  onSelectThumbnail: (index: number) => void
-  onImageLoadError: (taskId: string) => Promise<ImageTaskDetailResponse | null>
-}) {
-  const hasImages = imageURLs.length > 0
-  const currentIndex = hasImages ? Math.min(Math.max(activeIndex, 0), imageURLs.length - 1) : -1
-  const currentImageUrl = currentIndex >= 0 ? imageURLs[currentIndex] : ''
-  const currentThumbnailUrl = currentIndex >= 0 ? thumbnailURLs[currentIndex] ?? thumbnailURLs[0] ?? '' : ''
-  const displayCandidates = buildPreviewImageCandidates(currentImageUrl, currentThumbnailUrl)
-  const [failedDisplayURLs, setFailedDisplayURLs] = useState<Set<string>>(() => new Set())
-  const imageReloadedRef = useRef<string>('')
-  const canNavigate = imageURLs.length > 1
-  const thumbnailSlots = createCenteredThumbnailSlots(thumbnailURLs.length > 0 ? thumbnailURLs : imageURLs, currentIndex, 5)
-  const currentDisplayUrl = displayCandidates.find((candidate) => !failedDisplayURLs.has(candidate)) ?? ''
-  const emptyMessage = getPreviewEmptyMessage(preview.status)
-
-  useEffect(() => {
-    setFailedDisplayURLs(new Set())
-    imageReloadedRef.current = ''
-  }, [currentIndex, currentImageUrl, currentThumbnailUrl, preview.taskId])
-
-  function handleImageError() {
-    if (currentDisplayUrl) {
-      setFailedDisplayURLs((current) => {
-        const next = new Set(current)
-        next.add(currentDisplayUrl)
-        return next
-      })
-    }
-    if (displayCandidates.some((candidate) => candidate !== currentDisplayUrl && !failedDisplayURLs.has(candidate))) {
-      return
-    }
-    if (!preview.taskId || preview.taskId === '-') {
-      return
-    }
-    const reloadKey = `${preview.taskId}:${currentIndex}:${currentImageUrl}:${currentThumbnailUrl}`
-    if (imageReloadedRef.current === reloadKey) {
-      return
-    }
-    imageReloadedRef.current = reloadKey
-    void onImageLoadError(preview.taskId)
-  }
-
-  return (
-    <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex min-h-[460px] items-center justify-center rounded-md border border-dashed border-slate-700 bg-slate-900/40 p-4">
-        {currentDisplayUrl ? (
-          <img
-            key={`${preview.taskId}:${currentIndex}:${currentDisplayUrl}`}
-            src={currentDisplayUrl}
-            alt={preview.prompt ? `${preview.prompt} 第${currentIndex + 1}张` : `第 ${currentIndex + 1} 张图片`}
-            className="max-h-[420px] w-full rounded-md object-contain"
-            loading="eager"
-            decoding="async"
-            onError={handleImageError}
-          />
-        ) : (
-          <div className="max-w-2xl text-center">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-violet-300">
-              {preview.status === 'generating' || preview.status === 'running' ? (
-                <LoaderCircle className="h-8 w-8 animate-spin" />
-              ) : (
-                <Image className="h-8 w-8" />
-              )}
-            </div>
-            <h3 className="mt-4 text-xl font-medium text-slate-50">{getImageTaskStatusLabel(preview.status)}</h3>
-            <p className="mt-2 text-sm leading-6 text-slate-400">{emptyMessage}</p>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onPrevious}
-            disabled={!canNavigate}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="上一张"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={onNext}
-            disabled={!canNavigate}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="下一张"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-          <span className="text-sm text-slate-500">
-            {hasImages ? `${currentIndex + 1} / ${imageURLs.length}` : '0 / 0'}
-          </span>
-        </div>
-
-        <button
-          type="button"
-          onClick={onSaveCurrent}
-          disabled={!currentImageUrl}
-          className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Download className="h-4 w-4" />
-          保存当前图片
-        </button>
-      </div>
-
-      {hasImages ? (
-        <div className="mt-4 grid grid-cols-5 gap-2">
-          {thumbnailSlots.map((slot, slotIndex) =>
-            slot ? (
-              <button
-                key={slot.index}
-                type="button"
-                onClick={() => onSelectThumbnail(slot.index)}
-                className={`aspect-square overflow-hidden rounded-md border transition ${
-                  slot.index === currentIndex ? 'border-violet-400' : 'border-slate-800 hover:border-slate-600'
-                }`}
-              >
-                <img
-                  key={`${preview.taskId}:thumb:${slot.index}:${slot.imageUrl}`}
-                  src={slot.imageUrl}
-                  alt={`缩略图 ${slot.index + 1}`}
-                  className="h-full w-full object-cover"
-                />
-              </button>
-            ) : (
-              <div key={`empty-${slotIndex}`} className="aspect-square rounded-md border border-dashed border-slate-800 bg-slate-900/40" />
-            ),
-          )}
-        </div>
-      ) : null}
-    </div>
-  )
-}
 
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   const value = String(text ?? '')
@@ -3857,103 +3325,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
   return copied
 }
 
-export function PromptSearchOverlay({
-  value,
-  suggestions,
-  onChange,
-  onClose,
-  onClear,
-  onSearch,
-}: {
-  value: string
-  suggestions: Array<PromptGalleryItem & { serialNo?: string }>
-  onChange: (value: string) => void
-  onClose: () => void
-  onClear: () => void
-  onSearch: (value?: string) => void
-}) {
-  const keyword = value.trim()
-  return (
-    <div className="prompt-search-overlay fixed inset-0 z-50 bg-slate-950 text-slate-100">
-      <div className="flex h-full flex-col">
-        <div className="flex items-center gap-2 px-3 pb-3 pt-10">
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-slate-200 transition hover:bg-slate-800"
-            aria-label="返回"
-          >
-            <ChevronLeft className="h-7 w-7" />
-          </button>
-          <div className="flex h-11 min-w-0 flex-1 items-center overflow-hidden rounded-xl bg-slate-800">
-            <input
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') onSearch()
-              }}
-              autoFocus
-              placeholder="搜索编号、标签或上传人"
-              className="h-full min-w-0 flex-1 bg-transparent px-4 text-base text-slate-50 outline-none placeholder:text-slate-500"
-            />
-            {value ? (
-              <button
-                type="button"
-                onClick={onClear}
-                className="mr-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-slate-300 text-slate-700"
-                aria-label="清空搜索"
-              >
-                <XCircle className="h-4 w-4" />
-              </button>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            onClick={() => onSearch()}
-            className="h-11 shrink-0 rounded-xl bg-red-600 px-5 text-base font-semibold text-white transition hover:bg-red-500"
-          >
-            搜索
-          </button>
-        </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {suggestions.length ? (
-            suggestions.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onSearch(item.serialNo ?? item.title)}
-                className="flex h-14 w-full items-center gap-3 border-b border-slate-700 px-4 text-left text-lg text-slate-100"
-              >
-                <Search className="h-6 w-6 shrink-0 text-slate-400" />
-                <span className="min-w-0 truncate">
-                  {highlightSearchText(item.title, keyword)}
-                  {item.serialNo ? <span className="ml-2 text-sm text-slate-500">#{item.serialNo}</span> : null}
-                </span>
-              </button>
-            ))
-          ) : (
-            <div className="px-4 py-8 text-center text-sm text-slate-500">没有找到相关提示词</div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function highlightSearchText(text: string, keyword: string): ReactNode {
-  const trimmed = keyword.trim()
-  if (!trimmed) return text
-  const index = text.toLowerCase().indexOf(trimmed.toLowerCase())
-  if (index < 0) return text
-  return (
-    <>
-      {text.slice(0, index)}
-      <span className="text-orange-500">{text.slice(index, index + trimmed.length)}</span>
-      {text.slice(index + trimmed.length)}
-    </>
-  )
-}
 
 function normalizePromptGalleryItem(item: PromptGalleryItem): PromptGalleryItem {
   return {
@@ -4149,105 +3521,8 @@ function StatCard({ label, value }: { label: string; value: string }) {
   )
 }
 
-export function GenerationProgressPanel({ progresses }: { progresses: GenerationProgress[] }) {
-  const runningCount = progresses.filter((item) => item.status === 'running').length
-  const successCount = progresses.filter((item) => item.status === 'success').length
-  const failedCount = progresses.filter((item) => item.status === 'failed').length
 
-  return (
-    <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900 p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-100">
-          {runningCount > 0 ? (
-            <LoaderCircle className="h-4 w-4 animate-spin text-amber-300" />
-          ) : failedCount > 0 && successCount === 0 ? (
-            <XCircle className="h-4 w-4 text-rose-300" />
-          ) : (
-            <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-          )}
-          生成进度
-          <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-0.5 text-xs text-slate-300">
-            {progresses.length} 个任务
-          </span>
-        </div>
-        <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-300">
-          运行中 {runningCount} · 成功 {successCount} · 失败 {failedCount}
-        </span>
-      </div>
 
-      <div className="mt-4 space-y-3">
-        {progresses.map((progress) => (
-          <GenerationProgressCard key={progress.taskId ?? `${progress.backendUrl}-${progress.startedAt}`} progress={progress} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-export function GenerationProgressCard({ progress }: { progress: GenerationProgress }) {
-  const isRunning = progress.status === 'running'
-  const isSuccess = progress.status === 'success'
-  const statusClass = isSuccess
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-    : progress.status === 'failed'
-      ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-      : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-100">
-          {isRunning ? (
-            <LoaderCircle className="h-4 w-4 animate-spin text-amber-300" />
-          ) : isSuccess ? (
-            <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-          ) : (
-            <XCircle className="h-4 w-4 text-rose-300" />
-          )}
-          {progress.taskId || '未知任务'}
-        </div>
-        <span className={`rounded-md border px-2 py-1 text-xs ${statusClass}`}>
-          {getGenerationStatusLabel(progress.status)}
-        </span>
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <ProgressStat label="服务地址" value={progress.backendUrl} />
-        <ProgressStat label="温馨提示" value={isRunning ? GENERATION_WAITING_NOTICE : progress.prompt || '未填写'} />
-        <ProgressStat label="完成数量" value={`${progress.completed}/${progress.total}`} />
-        <ProgressStat
-          label="耗时·s"
-          value={formatElapsedTriplet(progress.total, Math.max(0, Math.floor(progress.elapsedSeconds)), progress.imageElapsedSeconds)}
-        />
-        <ProgressStat label="运行中" value={String(progress.running)} />
-        <ProgressStat label="轮询次数" value={isRunning ? `${Math.max(1, progress.attempt)} 次` : '-'} />
-      </div>
-
-      <div className="mt-3 flex items-start gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">
-        <Timer className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-        <span>{progress.message}</span>
-      </div>
-    </div>
-  )
-}
-
-export function ProgressStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 break-all text-sm text-slate-100">{value}</div>
-    </div>
-  )
-}
-
-export function MiniStat({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-2 text-lg font-semibold text-slate-100">{value}</div>
-    </div>
-  )
-}
 
 export function RewardLines({ points, credits }: { points: number; credits: number }) {
   return (
@@ -4301,31 +3576,8 @@ export function CreditLogRow({ item }: { item: CreditLogItem }) {
   )
 }
 
-function getGenerationStatusLabel(status: GenerationStatus): string {
-  return getTaskStatusLabel(status)
-}
 
-export function getImageTaskStatusLabel(status: string): string {
-  return getTaskStatusLabel(status)
-}
 
-function getPreviewEmptyMessage(status: string): string {
-  switch (status) {
-    case 'running':
-    case 'generating':
-      return '请稍等，任务耗时会随着图片质量增加，感谢理解。'
-    case 'failed':
-      return '本次生成未成功，可查看失败原因后调整参数再试。'
-    case 'partial_success':
-      return '部分图片生成成功，其余图片暂未返回，可稍后刷新或查看历史任务。'
-    case 'success':
-      return '任务已完成，但暂未读取到可展示图片，请稍后刷新或查看历史任务。'
-    case 'idle':
-      return '填写提示词并提交后，生成结果会显示在这里。'
-    default:
-      return '当前暂无可展示图片，请稍后刷新或重新选择任务。'
-  }
-}
 
 function getTaskStatusLabel(status: string): string {
   switch (status) {
@@ -4345,29 +3597,7 @@ function getTaskStatusLabel(status: string): string {
   }
 }
 
-function getTaskStatusBadgeClass(status: string): string {
-  switch (status) {
-    case 'success':
-      return 'bg-emerald-500/15 text-emerald-200'
-    case 'partial_success':
-      return 'bg-amber-500/15 text-amber-100'
-    case 'failed':
-      return 'bg-rose-500/15 text-rose-200'
-    case 'running':
-    case 'generating':
-      return 'bg-amber-500/15 text-amber-200'
-    default:
-      return 'bg-slate-800 text-slate-300'
-  }
-}
 
-function isPartialImageTaskStatus(status: string, imageCount: number, requestedCount?: number): boolean {
-  const requested = Math.max(1, Math.floor(Number(requestedCount || 0)))
-  if (!Number.isFinite(requested) || requested <= 1) {
-    return false
-  }
-  return status === 'success' && imageCount > 0 && imageCount < requested
-}
 
 export function getActivityRecordLabel(recordType: UserActivityItem['recordType']): string {
   switch (recordType) {
@@ -4441,18 +3671,6 @@ function stringifyTaskRequestSnapshot(snapshot: TaskRequestSnapshot): string {
   return JSON.stringify(snapshot)
 }
 
-function parseTaskRequestParams(raw?: string): TaskRequestSnapshot | null {
-  if (!raw?.trim()) {
-    return null
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as TaskRequestSnapshot
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
 
 function syncPrimaryReferenceImage(images: ReferenceImageItem[]): ReferenceImageItem[] {
   return images
@@ -4531,55 +3749,7 @@ function parsePreviewSizeState(size?: string): { size: string; customWidth?: num
   }
 }
 
-function buildPreviewRequestOptions(preview: ImageTaskDetailResponse): Array<{ label: string; value: string; wide?: boolean }> {
-  const parsed = parseTaskRequestParams(preview.requestParams)
-  const count = Number(parsed?.count ?? preview.requestedCount ?? preview.costCredits ?? preview.costPoints ?? 0)
-  const referenceImages = normalizeReferenceImagesFromSnapshot(parsed)
 
-  return [
-    {
-      label: '提示词',
-      value: parsed?.prompt || preview.prompt || '-',
-      wide: true,
-    },
-    {
-      label: '图片尺寸',
-      value: formatPreviewOptionValue(parsed?.size, sizeOptions),
-    },
-    {
-      label: '生成张数',
-      value: Number.isFinite(count) && count > 0 ? `${count} 张` : '-',
-    },
-    {
-      label: '风格',
-      value: formatPreviewOptionValue(parsed?.style, styleOptions),
-    },
-    {
-      label: '质量',
-      value: formatPreviewOptionValue(parsed?.quality, qualityOptions),
-    },
-    {
-      label: '输出格式',
-      value: formatPreviewOptionValue(parsed?.outputFormat, outputFormatOptions),
-    },
-    {
-      label: '参考图片',
-      value: referenceImages.length ? `${referenceImages.length} 张` : '未使用',
-      wide: true,
-    },
-  ]
-}
-
-function getPreviewRequestedCount(preview: Pick<ImageTaskDetailResponse, 'requestedCount' | 'requestParams' | 'costCredits' | 'costPoints'>, fallback = 0): number {
-  const parsed = parseTaskRequestParams(preview.requestParams)
-  const value = Number(parsed?.count ?? preview.requestedCount ?? fallback)
-  if (Number.isFinite(value) && value > 0) {
-    return clampCount(value)
-  }
-
-  const legacyValue = Number(preview.costCredits || preview.costPoints || fallback)
-  return Number.isFinite(legacyValue) && legacyValue > 0 ? clampCount(legacyValue) : Math.max(0, fallback)
-}
 
 function formatPreviewOptionValue(
   value: string | undefined,
@@ -4594,28 +3764,6 @@ function formatPreviewOptionValue(
   return matched?.label ?? (trimmed || '-')
 }
 
-function formatTaskCost(
-  task: Pick<ImageTaskDetailResponse, 'costPoints' | 'costCredits' | 'emailNotifyCostPoints'>,
-  fallbackCredits = 0,
-): string {
-  const points =
-    Math.max(0, Math.floor(Number(task.costPoints || 0))) +
-    Math.max(0, Math.floor(Number(task.emailNotifyCostPoints || 0)))
-  const credits = Math.max(0, Math.floor(Number(task.costCredits || 0)))
-
-  if (points > 0 && credits > 0) {
-    return `${points}积分+${credits}福利次数`
-  }
-  if (points > 0) {
-    return `${points}积分`
-  }
-  if (credits > 0) {
-    return `${credits}福利次数`
-  }
-
-  const fallback = Math.max(0, Math.floor(Number(fallbackCredits || 0)))
-  return fallback > 0 ? `${fallback}福利次数` : '-'
-}
 
 function normalizeElapsedSeconds(values: number[] | undefined): number[] {
   if (!Array.isArray(values)) {
@@ -4647,20 +3795,7 @@ function buildImageElapsedSeconds(
   return result
 }
 
-function formatElapsedTriplet(total: number, elapsedSeconds: number, existing: number[] | undefined): string {
-  const count = Math.max(1, Math.floor(Number(total || 0)))
-  const values = buildImageElapsedSeconds(count, elapsedSeconds, existing ?? [])
-  return values.join('/')
-}
 
-function getPreviewElapsedSeconds(preview: Pick<ImageTaskDetailResponse, 'createdAt' | 'updatedAt'>): number {
-  const created = Date.parse(preview.createdAt || '')
-  const updated = Date.parse(preview.updatedAt || '')
-  if (!Number.isFinite(created) || !Number.isFinite(updated) || updated < created) {
-    return 0
-  }
-  return Math.max(0, Math.floor((updated - created) / 1000))
-}
 
 function getPointsChangeTypeLabel(changeType: string): string {
   switch (changeType) {
@@ -4768,12 +3903,6 @@ function getPackageTypeLabel(packageType: string): string {
   }
 }
 
-function clampCount(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return 1
-  }
-  return Math.min(6, Math.max(1, Math.floor(value)))
-}
 
 function clampDimension(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -4881,54 +4010,8 @@ function parseImageSize(size: string): { width: number; height: number } | null 
   return { width, height }
 }
 
-function normalizeImageURLs(imageUrls?: string[], imageUrl?: string): string[] {
-  const seen = new Map<string, string>()
-  const result: string[] = []
-  for (const value of [...(imageUrls ?? []), imageUrl ?? '']) {
-    const trimmed = value.trim()
-    const dedupeKey = normalizeImageUrlForDedupe(trimmed)
-    if (!trimmed) {
-      continue
-    }
-    const existing = seen.get(dedupeKey)
-    if (existing) {
-      if (isLikelyThumbnailUrl(existing) && !isLikelyThumbnailUrl(trimmed)) {
-        const index = result.indexOf(existing)
-        if (index >= 0) {
-          result[index] = trimmed
-        }
-        seen.set(dedupeKey, trimmed)
-      }
-      continue
-    }
-    seen.set(dedupeKey, trimmed)
-    result.push(trimmed)
-  }
-  return result
-}
 
-function buildPreviewImageCandidates(thumbnailUrl?: string, imageUrl?: string): string[] {
-  const candidates: string[] = []
-  for (const value of [thumbnailUrl ?? '', imageUrl ?? '']) {
-    const trimmed = value.trim()
-    if (!trimmed) {
-      continue
-    }
-    if (candidates.includes(trimmed)) {
-      continue
-    }
-    candidates.push(trimmed)
-  }
-  return candidates
-}
 
-function limitImageURLs(imageURLs: string[], requestedCount?: number): string[] {
-  const limit = Math.max(1, Math.floor(Number(requestedCount || 0)))
-  if (!Number.isFinite(limit) || limit <= 0 || imageURLs.length <= limit) {
-    return imageURLs
-  }
-  return imageURLs.slice(0, limit)
-}
 
 function normalizeImageUrlForDedupe(rawUrl: string): string {
   const trimmed = rawUrl.trim()
@@ -5104,9 +4187,6 @@ function getAdminStatsCreditsTotal(stats: AdminStatsResponse | null): number {
   )
 }
 
-function getTaskCreditCost(task: { costCredits?: number; freeCreditsCost?: number; paidCreditsCost?: number }): number {
-  return Number(task.costCredits ?? (task.freeCreditsCost ?? 0) + (task.paidCreditsCost ?? 0))
-}
 
 function getCreditLogTotals(item: CreditLogItem): { beforeTotal: number; afterTotal: number; deltaTotal: number } {
   const beforeTotal = Number(item.beforeCredits ?? item.beforeFree + item.beforePaid)
@@ -5178,23 +4258,6 @@ function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailRespon
   }
 }
 
-function createCenteredThumbnailSlots(
-  imageURLs: string[],
-  activeIndex: number,
-  maxSlots = 5,
-): Array<{ imageUrl: string; index: number } | null> {
-  const center = Math.floor(maxSlots / 2)
-  return Array.from({ length: maxSlots }, (_, slotIndex) => {
-    const imageIndex = activeIndex + slotIndex - center
-    if (imageIndex < 0 || imageIndex >= imageURLs.length) {
-      return null
-    }
-    return {
-      imageUrl: imageURLs[imageIndex],
-      index: imageIndex,
-    }
-  })
-}
 
 function triggerImageDownload(blob: Blob, fileName: string): void {
   const downloadBlob = blob.type === 'application/octet-stream' ? blob : new Blob([blob], { type: 'application/octet-stream' })
