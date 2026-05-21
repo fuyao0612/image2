@@ -185,38 +185,48 @@ input[type="number"] {
 
 /* User workspace light glass theme, scoped to the signed-in app only. */
 .user-glass-shell {
-  --user-primary: #6366f1;
-  --user-primary-hover: #4f46e5;
-  --user-success: #10b981;
-  --user-danger: #ef4444;
-  --user-warning: #f59e0b;
-  --user-text: #1e293b;
-  --user-muted: #64748b;
-  --user-soft: #f8fafc;
-  --user-glass: rgba(255, 255, 255, 0.66);
-  --user-glass-strong: rgba(255, 255, 255, 0.86);
-  --user-glass-border: rgba(255, 255, 255, 0.82);
-  --user-line: rgba(148, 163, 184, 0.22);
-  --user-shadow: 0 8px 32px rgba(31, 38, 135, 0.06);
-  --user-shadow-hover: 0 16px 44px rgba(31, 38, 135, 0.1);
-  background:
-    linear-gradient(135deg, rgba(248, 250, 252, 1) 0%, rgba(239, 246, 255, 0.92) 54%, rgba(240, 253, 250, 0.9) 100%);
+  --user-primary: #8b5cf6;
+  --user-primary-hover: #7c3aed;
+  --user-success: #0d9488;
+  --user-danger: #e11d48;
+  --user-warning: #ea580c;
+  --user-text: #0f172a;
+  --user-muted: #475569;
+  --user-soft: #f1f5f9;
+  --user-glass: rgba(255, 255, 255, 0.45);
+  --user-glass-strong: rgba(255, 255, 255, 0.7);
+  --user-glass-border: rgba(255, 255, 255, 0.75);
+  --user-line: rgba(148, 163, 184, 0.15);
+  --user-shadow: 0 12px 36px rgba(99, 102, 241, 0.08);
+  --user-shadow-hover: 0 20px 48px rgba(99, 102, 241, 0.14);
+  background: linear-gradient(-45deg, #fce7f3, #ffedd5, #fef9c3, #dcfce3, #dbeafe, #f3e8ff, #fce7f3);
+  background-size: 600% 600%;
+  animation: dynamicLightGradient 17s ease infinite;
   color: var(--user-text);
   color-scheme: light;
   isolation: isolate;
   min-height: 100vh;
 }
 
+@keyframes dynamicLightGradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
 .user-glass-shell .app-shell {
   color: var(--user-text);
+  overflow: hidden;
+  background: transparent;
 }
 
 .user-glass-shell .app-shell__sidebar {
-  background: rgba(255, 255, 255, 0.5) !important;
-  backdrop-filter: blur(22px);
-  border-color: var(--user-glass-border) !important;
-  box-shadow: 12px 0 36px rgba(31, 38, 135, 0.035);
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-right: 1px solid rgba(255,255,255,0.3) !important;
+  backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: 12px 0 36px rgba(31, 38, 135, 0.02);
   color: var(--user-text) !important;
+  height: 100% !important;
 }
 
 .user-glass-shell .app-shell__scrim {
@@ -225,9 +235,10 @@ input[type="number"] {
 }
 
 .user-glass-shell .app-shell__topbar {
-  background: rgba(248, 250, 252, 0.58) !important;
-  backdrop-filter: blur(14px);
-  border-color: var(--user-line) !important;
+  background: transparent !important;
+  backdrop-filter: blur(16px) saturate(150%);
+  border-bottom: 1px solid rgba(255,255,255,0.3) !important;
+
   min-height: 80px;
   padding-left: clamp(12px, 3vw, 40px) !important;
   padding-right: clamp(12px, 3vw, 40px) !important;
@@ -421,18 +432,18 @@ input[type="number"] {
 .user-glass-shell div.rounded-md.border,
 .user-glass-shell button.rounded-lg.border,
 .user-glass-shell details.rounded-lg {
-  box-shadow: var(--user-shadow);
+  background: linear-gradient(135deg, rgba(255,255,255,0.25), rgba(255,255,255,0.05)) !important;
+  border-color: rgba(255,255,255,0.5) !important;
+  backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.6), var(--user-shadow) !important;
+  border-radius: 20px !important;
 }
 
-.user-glass-shell section.rounded-lg,
-.user-glass-shell div.rounded-lg.border,
-.user-glass-shell div.rounded-md.border,
-.user-glass-shell button.rounded-lg.border,
-.user-glass-shell details.rounded-lg {
-  background: var(--user-glass) !important;
-  backdrop-filter: blur(18px);
-  border-color: var(--user-glass-border) !important;
-  border-radius: 20px !important;
+.user-glass-shell .shadow-panel:hover,
+.user-glass-shell section.rounded-lg:hover {
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.9), var(--user-shadow-hover) !important;
+  transform: translateY(-1px);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .user-glass-shell .bg-slate-950,
@@ -493,19 +504,23 @@ input[type="number"] {
 .user-glass-shell input,
 .user-glass-shell textarea,
 .user-glass-shell select {
-  background: rgba(255, 255, 255, 0.58) !important;
-  border-color: var(--user-glass-border) !important;
-  border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.4) !important;
+  border-color: rgba(255, 255, 255, 0.8) !important;
+  border-radius: 16px !important;
   color: var(--user-text) !important;
+  box-shadow: inset 0 2px 6px rgba(148, 163, 184, 0.08), 0 2px 8px rgba(139, 92, 246, 0.03) !important;
+  backdrop-filter: blur(12px) !important;
   outline: none;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 
 .user-glass-shell input:focus,
 .user-glass-shell textarea:focus,
 .user-glass-shell select:focus {
-  background: #ffffff !important;
+  background: rgba(255, 255, 255, 0.8) !important;
   border-color: var(--user-primary) !important;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12) !important;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15), inset 0 2px 6px rgba(148, 163, 184, 0.05) !important;
+  transform: translateY(-1px) !important;
 }
 
 .user-glass-shell input::placeholder,
@@ -514,32 +529,39 @@ input[type="number"] {
 }
 
 .user-glass-shell button {
-  border-radius: 12px !important;
+  border-radius: 16px !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 
 .user-glass-shell button.border {
-  background: rgba(255, 255, 255, 0.58) !important;
-  border-color: var(--user-glass-border) !important;
+  background: rgba(255, 255, 255, 0.4) !important;
+  border-color: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(12px) !important;
   color: var(--user-text) !important;
+  box-shadow: inset 0 1px 1px rgba(255,255,255,1), 0 2px 8px rgba(148, 163, 184, 0.05) !important;
 }
 
 .user-glass-shell button.border:hover {
-  background: #ffffff !important;
-  border-color: rgba(99, 102, 241, 0.35) !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+  border-color: rgba(139, 92, 246, 0.3) !important;
   color: var(--user-primary) !important;
-  box-shadow: var(--user-shadow);
+  box-shadow: var(--user-shadow-hover), inset 0 1px 1px rgba(255,255,255,1) !important;
+  transform: translateY(-1px) !important;
 }
 
 .user-glass-shell .bg-violet-500,
 .user-glass-shell .bg-emerald-400 {
-  background: var(--user-primary) !important;
+  background: linear-gradient(135deg, var(--user-primary) 0%, #a855f7 100%) !important;
   color: #ffffff !important;
-  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.18);
+  box-shadow: 0 8px 24px rgba(139, 92, 246, 0.25), inset 0 1px 1px rgba(255,255,255,0.3) !important;
+  border: none !important;
 }
 
 .user-glass-shell .bg-violet-500:hover,
 .user-glass-shell .hover\:bg-violet-400:hover {
-  background: var(--user-primary-hover) !important;
+  background: linear-gradient(135deg, var(--user-primary-hover) 0%, #9333ea 100%) !important;
+  box-shadow: 0 12px 32px rgba(139, 92, 246, 0.35), inset 0 1px 1px rgba(255,255,255,0.3) !important;
+  transform: translateY(-2px) !important;
 }
 
 .user-glass-shell .bg-amber-500,
@@ -781,34 +803,39 @@ input[type="number"] {
 }
 
 .user-glass-shell[data-user-theme='dark'] {
-  --user-primary: #8b8df8;
-  --user-primary-hover: #a5b4fc;
-  --user-success: #34d399;
+  --user-primary: #a78bfa;
+  --user-primary-hover: #c4b5fd;
+  --user-success: #2dd4bf;
   --user-danger: #fb7185;
   --user-warning: #fbbf24;
-  --user-text: #e2e8f0;
+  --user-text: #f8fafc;
   --user-muted: #94a3b8;
   --user-soft: #020617;
-  --user-glass: rgba(15, 23, 42, 0.74);
-  --user-glass-strong: rgba(15, 23, 42, 0.92);
-  --user-glass-border: rgba(148, 163, 184, 0.18);
-  --user-line: rgba(148, 163, 184, 0.16);
-  --user-shadow: 0 20px 52px rgba(0, 0, 0, 0.26);
-  --user-shadow-hover: 0 24px 60px rgba(0, 0, 0, 0.34);
-  background: linear-gradient(135deg, #020617 0%, #0f172a 54%, #111827 100%);
+  --user-glass: rgba(15, 23, 42, 0.45);
+  --user-glass-strong: rgba(15, 23, 42, 0.75);
+  --user-glass-border: rgba(255, 255, 255, 0.1);
+  --user-line: rgba(255, 255, 255, 0.08);
+  --user-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  --user-shadow-hover: 0 24px 60px rgba(0, 0, 0, 0.5);
+  background: linear-gradient(-45deg, #020617, #0f172a, #1e1b4b, #0f172a, #020617);
+  background-size: 400% 400%;
+  animation: dynamicLightGradient 30s ease infinite;
   color: var(--user-text);
   color-scheme: dark;
 }
 
 .user-glass-shell[data-user-theme='dark'] .app-shell {
   color: var(--user-text);
+  overflow: hidden;
+  background: transparent;
 }
 
 .user-glass-shell[data-user-theme='dark'] .app-shell__sidebar {
-  background: rgba(2, 6, 23, 0.86) !important;
-  border-color: var(--user-line) !important;
-  box-shadow: 18px 0 56px rgba(0, 0, 0, 0.3);
+  background: rgba(15, 23, 42, 0.4) !important;
+  border-right: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow: 12px 0 36px rgba(0, 0, 0, 0.2);
   color: var(--user-text) !important;
+  height: 100% !important;
 }
 
 .user-glass-shell[data-user-theme='dark'] .app-shell__scrim {
@@ -817,8 +844,8 @@ input[type="number"] {
 }
 
 .user-glass-shell[data-user-theme='dark'] .app-shell__topbar {
-  background: rgba(2, 6, 23, 0.78) !important;
-  border-color: var(--user-line) !important;
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
   color: var(--user-text) !important;
 }
 
@@ -894,14 +921,16 @@ input[type="number"] {
   color: #ffffff !important;
 }
 
+.user-glass-shell[data-user-theme='dark'] .shadow-panel,
 .user-glass-shell[data-user-theme='dark'] section.rounded-lg,
 .user-glass-shell[data-user-theme='dark'] div.rounded-lg.border,
 .user-glass-shell[data-user-theme='dark'] div.rounded-md.border,
 .user-glass-shell[data-user-theme='dark'] button.rounded-lg.border,
 .user-glass-shell[data-user-theme='dark'] details.rounded-lg {
-  background: var(--user-glass) !important;
-  border-color: var(--user-glass-border) !important;
-  box-shadow: var(--user-shadow);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.6), rgba(15, 23, 42, 0.4)) !important;
+  border-color: rgba(255,255,255,0.08) !important;
+  backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.05), var(--user-shadow) !important;
 }
 
 .user-glass-shell[data-user-theme='dark'] .bg-slate-950,
@@ -948,17 +977,18 @@ input[type="number"] {
 .user-glass-shell[data-user-theme='dark'] input,
 .user-glass-shell[data-user-theme='dark'] textarea,
 .user-glass-shell[data-user-theme='dark'] select {
-  background: rgba(15, 23, 42, 0.72) !important;
-  border-color: var(--user-glass-border) !important;
+  background: rgba(15, 23, 42, 0.6) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.1) !important;
   color: var(--user-text) !important;
 }
 
 .user-glass-shell[data-user-theme='dark'] input:focus,
 .user-glass-shell[data-user-theme='dark'] textarea:focus,
 .user-glass-shell[data-user-theme='dark'] select:focus {
-  background: rgba(15, 23, 42, 0.92) !important;
+  background: rgba(30, 41, 59, 0.8) !important;
   border-color: var(--user-primary) !important;
-  box-shadow: 0 0 0 3px rgba(139, 141, 248, 0.16) !important;
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.15), inset 0 2px 6px rgba(0, 0, 0, 0.2) !important;
 }
 
 .user-glass-shell[data-user-theme='dark'] input::placeholder,
@@ -967,18 +997,19 @@ input[type="number"] {
 }
 
 .user-glass-shell[data-user-theme='dark'] button.border {
-  background: rgba(15, 23, 42, 0.72) !important;
-  border-color: var(--user-glass-border) !important;
+  background: rgba(30, 41, 59, 0.4) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.05), 0 2px 8px rgba(0, 0, 0, 0.2) !important;
   color: var(--user-text) !important;
+  border-radius: 0.5rem;
 }
 
 .user-glass-shell[data-user-theme='dark'] button.border:hover,
-.user-glass-shell[data-user-theme='dark'] .hover\:bg-slate-900:hover,
-.user-glass-shell[data-user-theme='dark'] .hover\:bg-slate-800:hover {
-  background: rgba(30, 41, 59, 0.88) !important;
-  border-color: rgba(139, 141, 248, 0.42) !important;
-  color: #f8fafc !important;
-  box-shadow: var(--user-shadow);
+.user-glass-shell[data-user-theme='dark'] button.bg-slate-950:hover {
+  background: rgba(30, 41, 59, 0.8) !important;
+  border-color: rgba(167, 139, 250, 0.4) !important;
+  box-shadow: var(--user-shadow-hover), inset 0 1px 1px rgba(255,255,255,0.1) !important;
+  color: var(--user-primary) !important;
 }
 
 .user-glass-shell[data-user-theme='dark'] .hover\:text-white:hover,
