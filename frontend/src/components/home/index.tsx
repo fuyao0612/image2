@@ -236,12 +236,15 @@ export function TaskHistoryPanel({
                 type="button"
                 aria-pressed={selectedTaskId === item.id}
                 onClick={() => onSelect(item)}
-                className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/30 ${
+                className={`relative flex w-full items-start gap-3 overflow-hidden rounded-lg border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/30 ${
                   selectedTaskId === item.id
-                    ? 'border-violet-400/80 bg-slate-900 ring-1 ring-violet-400/20'
-                    : 'border-slate-800 bg-slate-950 hover:border-violet-400/50 hover:bg-slate-900'
+                    ? 'border-violet-300 bg-violet-50 shadow-md ring-2 ring-violet-300/40'
+                    : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/50'
                 }`}
               >
+                {selectedTaskId === item.id ? (
+                  <span className="absolute inset-y-0 left-0 w-1.5 bg-violet-500" aria-hidden="true" />
+                ) : null}
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-xs font-medium text-slate-300">
                   {cover ? (
                     <img src={cover} alt={item.prompt} className="h-full w-full object-cover" />
