@@ -361,6 +361,7 @@ function App() {
         ? 'register'
         : 'login',
     )
+    const [homeFormSnapshot, setHomeFormSnapshot] = useState({ count: 1 })
     const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
     const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -485,14 +486,14 @@ function App() {
       emailNotifyPointCost > 0,
     )
     const estimatedGenerationPointCost = useMemo(() => {
-    const taskCount = clampCount(Number(homeStateRef.current.count) || 1)
+    const taskCount = clampCount(Number(homeFormSnapshot.count) || 1)
     const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
     const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
     const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
     const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
     return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
     }, [
-    homeStateRef.current.count,
+    homeFormSnapshot.count,
     emailNotifyAvailable,
     emailNotifyOnComplete,
     emailNotifyPointCost,
@@ -2554,7 +2555,8 @@ function App() {
 
         <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
             <div className={activePage === 'home' ? 'block' : 'hidden'}>
-              <HomePage homeStateRef={homeStateRef}
+              <HomePage
+                onFormSnapshotChange={setHomeFormSnapshot} homeStateRef={homeStateRef}
                 activePage={activePage}
                 points={points}
                 billingSettings={billingSettings}
@@ -2633,7 +2635,7 @@ function App() {
           lines={[
             '确认是否提交生图任务？',
             `上传参考图：${referenceImages.length} 张`,
-            `生成张数：${clampCount(Number(homeStateRef.current.count) || 1)} 张`,
+            `生成张数：${clampCount(Number(homeFormSnapshot.count) || 1)} 张`,
             `本次预计消耗：${estimatedGenerationPointCost} 积分`,
           ]}
           confirmLabel="确定"
@@ -2657,13 +2659,7 @@ function App() {
         />
       ) : null}
 
-      {homeStateRef.current.referenceImagesDialogOpen ? (
-        <ReferenceImagesDialog
-          images={referenceImages}
-          onDelete={handleDeleteReferenceImage}
-          onClose={() => homeStateRef.current.setReferenceImagesDialogOpen(false)}
-        />
-      ) : null}
+
 
       {announcementDialogOpen ? (
         <AnnouncementDialog

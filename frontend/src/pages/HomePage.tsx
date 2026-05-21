@@ -65,6 +65,7 @@ export interface HomePageProps {
   previewThumbnailURLs: string[];
   handleCancelCreateTaskConfirm: () => void;
   handleConfirmCreateTask: () => void;
+  onFormSnapshotChange?: (snapshot: { count: number }) => void;
 }
 
 export function HomePage(props: HomePageProps) {
@@ -90,7 +91,8 @@ export function HomePage(props: HomePageProps) {
         promptDragActive, setPromptDragActive, referenceImagesDialogOpen, setReferenceImagesDialogOpen
       }
     }
-  })
+    props.onFormSnapshotChange?.({ count })
+  }, [props.homeStateRef, props.onFormSnapshotChange, count])
 
   const {
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
@@ -437,6 +439,15 @@ export function HomePage(props: HomePageProps) {
                   </aside>
                 </div>
               </div>
+
+      {referenceImagesDialogOpen ? (
+        <ReferenceImagesDialog
+          images={referenceImages}
+          onDelete={handleDeleteReferenceImage}
+          onClose={() => setReferenceImagesDialogOpen(false)}
+        />
+      ) : null}
+
     </div>
   );
 }
