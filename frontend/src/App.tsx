@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, ClipboardEvent, DragEvent, ReactNode } from 'react'
 import {
   ArrowUpDown,
@@ -81,16 +81,24 @@ import type {
   UserActivityItem,
   UserInfo,
 } from '@/types/api'
+import { normalizePromptTags } from "./pages/PromptsPage";
+import { OrdersPage } from "./pages/OrdersPage";
+import { FlowsPage } from "./pages/FlowsPage";
+import { ProfilePage } from "./pages/ProfilePage";
+import { RechargePage } from "./pages/RechargePage";
+import { ProductsPage } from "./pages/ProductsPage";
+import { PromptsPage } from "./pages/PromptsPage";
+import { RechargeConfirmDialog } from "./pages/RechargePage";
 
 type AuthMode = 'login' | 'register' | 'reset'
 type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
 type UserTheme = 'light' | 'dark'
-type FlowLogType = 'points' | 'credits'
+export type FlowLogType = 'points' | 'credits'
 type FlowLogDetail =
   | { type: 'points'; item: PointsLogItem }
   | { type: 'credits'; item: CreditLogItem }
   | null
-type BusyAction =
+export type BusyAction =
   | 'send-code'
   | 'check-register-availability'
   | 'check-reset-email'
@@ -172,7 +180,7 @@ interface PromptGalleryItem {
   isFavorited?: boolean
 }
 
-type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
+export type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
 
 const MAX_REFERENCE_IMAGES = 12
 const FREE_REFERENCE_IMAGE_COUNT = 3
@@ -377,21 +385,21 @@ const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
 function App() {
-  const [mode, setMode] = useState<AuthMode>(() =>
+    const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
       ? 'reset'
       : REGISTRATION_ENABLED && window.location.pathname === '/register'
         ? 'register'
         : 'login',
-  )
-  const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
-  const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [busy, setBusy] = useState<BusyAction>(null)
-  const [message, setMessage] = useState('')
-  const [token, setToken] = useState(() => getStoredToken())
-  const [authForm, setAuthForm] = useState({
+    )
+    const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
+    const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+    const [sidebarOpen, setSidebarOpen] = useState(false)
+    const [busy, setBusy] = useState<BusyAction>(null)
+    const [message, setMessage] = useState('')
+    const [token, setToken] = useState(() => getStoredToken())
+    const [authForm, setAuthForm] = useState({
     email: '',
     code: '',
     captchaCode: '',
@@ -401,139 +409,120 @@ function App() {
     password: '',
     confirmPassword: '',
     rememberMe: false,
-  })
-  const [authFormSeed, setAuthFormSeed] = useState(0)
-  const [captcha, setCaptcha] = useState<CaptchaResponse | null>(null)
-  const [emailCodeCountdown, setEmailCodeCountdown] = useState(0)
-  const [emailCaptchaPassUntil, setEmailCaptchaPassUntil] = useState(0)
-  const [registrationDailyLimitReached, setRegistrationDailyLimitReached] = useState(false)
-  const [registerAvailabilityCheck, setRegisterAvailabilityCheck] = useState<{
+    })
+    const [authFormSeed, setAuthFormSeed] = useState(0)
+    const [captcha, setCaptcha] = useState<CaptchaResponse | null>(null)
+    const [emailCodeCountdown, setEmailCodeCountdown] = useState(0)
+    const [emailCaptchaPassUntil, setEmailCaptchaPassUntil] = useState(0)
+    const [registrationDailyLimitReached, setRegistrationDailyLimitReached] = useState(false)
+    const [registerAvailabilityCheck, setRegisterAvailabilityCheck] = useState<{
     email: string
     username: string
     emailAvailable: boolean
     usernameAvailable: boolean
     available: boolean
     message: string
-  } | null>(null)
-  const [registerUsernameCheck, setRegisterUsernameCheck] = useState<{
+    } | null>(null)
+    const [registerUsernameCheck, setRegisterUsernameCheck] = useState<{
     username: string
     available: boolean
     message: string
-  } | null>(null)
-  const [registerEmailCheck, setRegisterEmailCheck] = useState<{
+    } | null>(null)
+    const [registerEmailCheck, setRegisterEmailCheck] = useState<{
     email: string
     available: boolean
     message: string
-  } | null>(null)
-  const [resetEmailCheck, setResetEmailCheck] = useState<{ email: string; available: boolean; message: string } | null>(null)
-  const [changePasswordForm, setChangePasswordForm] = useState<PasswordChangeForm>({
+    } | null>(null)
+    const [resetEmailCheck, setResetEmailCheck] = useState<{ email: string; available: boolean; message: string } | null>(null)
+    const [changePasswordForm, setChangePasswordForm] = useState<PasswordChangeForm>({
     currentPassword: '',
     newPassword: '',
     confirmNewPassword: '',
-  })
-  const [prompt, setPrompt] = useState('')
-  const [size, setSize] = useState('1024x1024')
-  const [style, setStyle] = useState('')
-  const [count, setCount] = useState(1)
-  const [quality, setQuality] = useState('auto')
-  const [outputFormat, setOutputFormat] = useState('default')
-  const [customWidth, setCustomWidth] = useState('1024')
-  const [customHeight, setCustomHeight] = useState('1024')
-  const [referenceImageURL, setReferenceImageURL] = useState('')
-  const [referenceImageName, setReferenceImageName] = useState('')
-  const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
-  const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
-  const [referenceImagesDialogOpen, setReferenceImagesDialogOpen] = useState(false)
-  const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
-  const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
-  const [showRegisterPassword, setShowRegisterPassword] = useState(false)
-  const [showChangePassword, setShowChangePassword] = useState(false)
-  const [referenceImageUploading, setReferenceImageUploading] = useState(false)
-  const [promptDragActive, setPromptDragActive] = useState(false)
-  const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
-  const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
-  const [adminOpen, setAdminOpen] = useState(() => window.location.pathname.startsWith('/admin'))
-  const [adminStats, setAdminStats] = useState<AdminStatsResponse | null>(null)
-  const [adminUsers, setAdminUsers] = useState<AdminUserItem[]>([])
-  const [adminTasks, setAdminTasks] = useState<AdminImageTaskItem[]>([])
-  const [adminAudits, setAdminAudits] = useState<AdminContentAuditItem[]>([])
-  const [adminActionLogs, setAdminActionLogs] = useState<AdminActionLogItem[]>([])
-  const [adminPackages, setAdminPackages] = useState<AdminPackageItem[]>([])
-  const [generationProgresses, setGenerationProgresses] = useState<GenerationProgress[]>([])
-  const [points, setPoints] = useState<PointsResponse | null>(null)
-  const [history, setHistory] = useState<ImageTaskItem[]>([])
-  const [historyPage, setHistoryPage] = useState(1)
-  const [historyTotal, setHistoryTotal] = useState(0)
-  const [activityLogs, setActivityLogs] = useState<UserActivityItem[]>([])
-  const [activityPage, setActivityPage] = useState(1)
-  const [activityTotal, setActivityTotal] = useState(0)
-  const [pointsLogItems, setPointsLogItems] = useState<ListPointsLogsResponse['items']>([])
-  const [pointsLogPage, setPointsLogPage] = useState(1)
-  const [pointsLogTotal, setPointsLogTotal] = useState(0)
-  const [creditLogItems, setCreditLogItems] = useState<ListCreditLogsResponse['items']>([])
-  const [creditLogPage, setCreditLogPage] = useState(1)
-  const [creditLogTotal, setCreditLogTotal] = useState(0)
-  const [packages, setPackages] = useState<PackageItem[]>([])
-  const [billingSettings, setBillingSettings] = useState<BillingSettingsResponse | null>(null)
-  const [inviteInfo, setInviteInfo] = useState<InviteInfoResponse | null>(null)
-  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
-  const [announcementDialogOpen, setAnnouncementDialogOpen] = useState(false)
-  const [activeAnnouncementId, setActiveAnnouncementId] = useState<string | null>(null)
-  const [redeemCodeInput, setRedeemCodeInput] = useState('')
-  const [activeRechargePackageCode, setActiveRechargePackageCode] = useState('')
-  const [preview, setPreview] = useState<ImageTaskDetailResponse>(emptyPreview)
-  const [previewImageIndex, setPreviewImageIndex] = useState(0)
-  const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
-  const [wechatSaveGuide, setWechatSaveGuide] = useState<WechatSaveGuideState>({
+    })
+    const [prompt, setPrompt] = useState('')
+    const [size, setSize] = useState('1024x1024')
+    const [style, setStyle] = useState('')
+    const [count, setCount] = useState(1)
+    const [quality, setQuality] = useState('auto')
+    const [outputFormat, setOutputFormat] = useState('default')
+    const [customWidth, setCustomWidth] = useState('1024')
+    const [customHeight, setCustomHeight] = useState('1024')
+    const [referenceImageURL, setReferenceImageURL] = useState('')
+    const [referenceImageName, setReferenceImageName] = useState('')
+    const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
+    const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
+    const [referenceImagesDialogOpen, setReferenceImagesDialogOpen] = useState(false)
+    const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
+    const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
+    const [showRegisterPassword, setShowRegisterPassword] = useState(false)
+    const [referenceImageUploading, setReferenceImageUploading] = useState(false)
+    const [promptDragActive, setPromptDragActive] = useState(false)
+    const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
+    const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
+    const [adminOpen, setAdminOpen] = useState(() => window.location.pathname.startsWith('/admin'))
+    const [adminStats, setAdminStats] = useState<AdminStatsResponse | null>(null)
+    const [adminUsers, setAdminUsers] = useState<AdminUserItem[]>([])
+    const [adminTasks, setAdminTasks] = useState<AdminImageTaskItem[]>([])
+    const [adminAudits, setAdminAudits] = useState<AdminContentAuditItem[]>([])
+    const [adminActionLogs, setAdminActionLogs] = useState<AdminActionLogItem[]>([])
+    const [adminPackages, setAdminPackages] = useState<AdminPackageItem[]>([])
+    const [generationProgresses, setGenerationProgresses] = useState<GenerationProgress[]>([])
+    const [points, setPoints] = useState<PointsResponse | null>(null)
+    const [history, setHistory] = useState<ImageTaskItem[]>([])
+    const [historyPage, setHistoryPage] = useState(1)
+    const [historyTotal, setHistoryTotal] = useState(0)
+    const [packages, setPackages] = useState<PackageItem[]>([])
+    const [billingSettings, setBillingSettings] = useState<BillingSettingsResponse | null>(null)
+    const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
+    const [announcementDialogOpen, setAnnouncementDialogOpen] = useState(false)
+    const [activeAnnouncementId, setActiveAnnouncementId] = useState<string | null>(null)
+    const [preview, setPreview] = useState<ImageTaskDetailResponse>(emptyPreview)
+    const [previewImageIndex, setPreviewImageIndex] = useState(0)
+    const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
+    const [wechatSaveGuide, setWechatSaveGuide] = useState<WechatSaveGuideState>({
     open: false,
     imageUrl: '',
     title: '',
-  })
-  const [rechargeConfirmDialog, setRechargeConfirmDialog] = useState<RechargeConfirmDialogState>({
+    })
+    const [rechargeConfirmDialog, setRechargeConfirmDialog] = useState<RechargeConfirmDialogState>({
     open: false,
-  })
-  const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
-  const [serverPromptItems, setServerPromptItems] = useState<PromptGalleryItem[]>([])
-  const [myPromptItems, setMyPromptItems] = useState<PromptGalleryItem[]>([])
-  const [products, setProducts] = useState<ProductItem[]>([])
-  const [productCategories, setProductCategories] = useState<ProductCategoryItem[]>([])
-  const [productKeyword, setProductKeyword] = useState('')
-  const [activeProductCategoryId, setActiveProductCategoryId] = useState('')
-  const [activeProduct, setActiveProduct] = useState<ProductItem | null>(null)
-  const [promptSubmission, setPromptSubmission] = useState({
+    })
+    const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
+    const [serverPromptItems, setServerPromptItems] = useState<PromptGalleryItem[]>([])
+    const [promptSubmission, setPromptSubmission] = useState({
     title: '',
     prompt: '',
     previewUrl: '',
     tags: [''],
-  })
-  const previewTaskIdRef = useRef(emptyPreview.taskId)
-  const pollingTaskIdsRef = useRef<Set<string>>(new Set())
-  const checkinInFlightRef = useRef(false)
-  const downloadFileCacheRef = useRef<Map<string, DownloadedFile>>(new Map())
-  const downloadPendingRef = useRef<Map<string, Promise<DownloadedFile>>>(new Map())
+    })
+    const previewTaskIdRef = useRef(emptyPreview.taskId)
+    const pollingTaskIdsRef = useRef<Set<string>>(new Set())
+    const checkinInFlightRef = useRef(false)
+    const downloadFileCacheRef = useRef<Map<string, DownloadedFile>>(new Map())
+    const downloadPendingRef = useRef<Map<string, Promise<DownloadedFile>>>(new Map())
 
-  const isAuthed = token.length > 0
-  const isAdmin = currentUser?.role === 'admin'
-  const canRegister = REGISTRATION_ENABLED
-  const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId)
-  const checkedInToday = isSameShanghaiDay(points?.lastCheckinAt ?? null)
-  const imageGenerationEnabled = billingSettings?.imageGenerationEnabled ?? true
-  const emailNotifyPointCost = Math.max(0, Math.floor(Number(billingSettings?.emailNotifyPointCost ?? 0)))
-  const imageGeneratePointCost = Math.max(0, Math.floor(Number(billingSettings?.imageGeneratePointCost ?? 20)))
-  const emailNotifyAvailable = Boolean(
+    const isAuthed = token.length > 0
+    const isAdmin = currentUser?.role === 'admin'
+    const canRegister = REGISTRATION_ENABLED
+    const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId)
+    const checkedInToday = isSameShanghaiDay(points?.lastCheckinAt ?? null)
+    const imageGenerationEnabled = billingSettings?.imageGenerationEnabled ?? true
+    const emailNotifyPointCost = Math.max(0, Math.floor(Number(billingSettings?.emailNotifyPointCost ?? 0)))
+    const imageGeneratePointCost = Math.max(0, Math.floor(Number(billingSettings?.imageGeneratePointCost ?? 20)))
+    const emailNotifyAvailable = Boolean(
     isAuthed &&
       currentUser?.email &&
       (billingSettings?.emailNotifyEnabled ?? false) &&
       emailNotifyPointCost > 0,
-  )
-  const estimatedGenerationPointCost = useMemo(() => {
+    )
+    const estimatedGenerationPointCost = useMemo(() => {
     const taskCount = clampCount(Number(count) || 1)
     const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
     const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
     const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
     const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
     return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
-  }, [
+    }, [
     count,
     emailNotifyAvailable,
     emailNotifyOnComplete,
@@ -541,8 +530,8 @@ function App() {
     imageGeneratePointCost,
     points?.totalCredits,
     referenceImages.length,
-  ])
-  const promptGalleryItems = useMemo(
+    ])
+    const promptGalleryItems = useMemo(
     () =>
       [...serverPromptItems, ...featuredPromptItems].map((item) => ({
         ...item,
@@ -550,72 +539,67 @@ function App() {
         approvedAt: item.approvedAt ?? (item.status === 'approved' ? item.createdAt : undefined),
       })),
     [serverPromptItems],
-  )
-  const favoritePromptIds = useMemo(() => promptGalleryItems.filter((item) => item.isFavorited).map((item) => item.id), [promptGalleryItems])
-  const unreadAnnouncementCount = announcements.filter((item) => !item.isRead).length
-  const forcedAnnouncement = announcements.find((item) => item.kind === 'pinned' && !item.isRead) ?? null
-  const activeAnnouncement = announcements.find((item) => item.id === activeAnnouncementId) ?? forcedAnnouncement ?? announcements[0] ?? null
+    )
+    const favoritePromptIds = useMemo(() => promptGalleryItems.filter((item) => item.isFavorited).map((item) => item.id), [promptGalleryItems])
+    const unreadAnnouncementCount = announcements.filter((item) => !item.isRead).length
+    const forcedAnnouncement = announcements.find((item) => item.kind === 'pinned' && !item.isRead) ?? null
+    const activeAnnouncement = announcements.find((item) => item.id === activeAnnouncementId) ?? forcedAnnouncement ?? announcements[0] ?? null
 
-  useEffect(() => {
+    useEffect(() => {
     try {
       window.localStorage.setItem(USER_THEME_STORAGE_KEY, userTheme)
     } catch {
       // Ignore storage errors; the visual state still works for the current session.
     }
-  }, [userTheme])
+    }, [userTheme])
 
-  useEffect(() => {
+    useEffect(() => {
     try {
       window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage)
     } catch {
       // Ignore storage errors; page state still works for the current session.
     }
-  }, [activePage])
+    }, [activePage])
 
-  useEffect(() => {
+    useEffect(() => {
     if (!emailNotifyAvailable && emailNotifyOnComplete) {
       setEmailNotifyOnComplete(false)
     }
-  }, [emailNotifyAvailable, emailNotifyOnComplete])
+    }, [emailNotifyAvailable, emailNotifyOnComplete])
 
-  useEffect(() => {
+    useEffect(() => {
     if (!isAuthed || !forcedAnnouncement) {
       return
     }
     setActiveAnnouncementId(forcedAnnouncement.id)
     setAnnouncementDialogOpen(true)
-  }, [forcedAnnouncement, isAuthed])
+    }, [forcedAnnouncement, isAuthed])
 
-  useEffect(() => {
+    useEffect(() => {
     if (!announcementDialogOpen || !activeAnnouncementId) {
       return
     }
     void markNormalAnnouncementRead(activeAnnouncementId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAnnouncementId, announcementDialogOpen])
+    }, [activeAnnouncementId, announcementDialogOpen])
 
-  useEffect(() => {
+    useEffect(() => {
     if (isAuthed && adminOpen && currentUser && currentUser.role !== 'admin') {
       setAdminOpen(false)
       setMessage('当前账号没有管理员权限，已返回用户端。')
     }
-  }, [isAuthed, adminOpen, currentUser])
+    }, [isAuthed, adminOpen, currentUser])
 
-  useEffect(() => {
+    useEffect(() => {
     void loadPackages()
-  }, [])
+    }, [])
 
-  useEffect(() => {
-    if (!isAuthed) return
-    void loadProductsPage()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthed, productKeyword, activeProductCategoryId])
 
-  useEffect(() => {
+    useEffect(() => {
     previewTaskIdRef.current = preview.taskId
-  }, [preview.taskId])
+    }, [preview.taskId])
 
-  useEffect(() => {
+    useEffect(() => {
     const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
     if (!isAuthed || isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
       return
@@ -625,9 +609,9 @@ function App() {
       void prefetchImageDownload(preview.taskId, index)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthed, preview.taskId, preview.status, preview.imageUrl, preview.imageUrls])
+    }, [isAuthed, preview.taskId, preview.status, preview.imageUrl, preview.imageUrls])
 
-  useEffect(() => {
+    useEffect(() => {
     if (isAuthed) {
       void loadDashboard()
     } else {
@@ -635,25 +619,6 @@ function App() {
       setAdminOpen(false)
       setAdminActionLogs([])
       setPoints(null)
-      setChangePasswordForm({
-        currentPassword: '',
-        newPassword: '',
-        confirmNewPassword: '',
-      })
-      setShowChangePassword(false)
-      setHistory([])
-      setHistoryPage(1)
-      setHistoryTotal(0)
-      setActivityLogs([])
-      setActivityPage(1)
-      setActivityTotal(0)
-      setPointsLogItems([])
-      setPointsLogPage(1)
-      setPointsLogTotal(0)
-      setCreditLogItems([])
-      setCreditLogPage(1)
-      setCreditLogTotal(0)
-      setInviteInfo(null)
       setAnnouncements([])
       setAnnouncementDialogOpen(false)
       setActiveAnnouncementId(null)
@@ -667,9 +632,9 @@ function App() {
       setGenerationProgresses([])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthed])
+    }, [isAuthed])
 
-  useEffect(() => {
+    useEffect(() => {
     const nextPath = isAuthed
       ? (adminOpen ? '/admin' : '/app')
       : mode === 'register' && canRegister
@@ -680,9 +645,9 @@ function App() {
     if (window.location.pathname !== nextPath) {
       window.history.replaceState(null, '', nextPath)
     }
-  }, [canRegister, isAuthed, mode, adminOpen])
+    }, [canRegister, isAuthed, mode, adminOpen])
 
-  useEffect(() => {
+    useEffect(() => {
     if (isAuthed || mode !== 'login') {
       return
     }
@@ -705,9 +670,9 @@ function App() {
     return () => {
       timers.forEach((timer) => window.clearTimeout(timer))
     }
-  }, [authFormSeed, isAuthed, mode])
+    }, [authFormSeed, isAuthed, mode])
 
-  useEffect(() => {
+    useEffect(() => {
     const syncFromPath = () => {
       const path = window.location.pathname
       if (path === '/register' && canRegister) {
@@ -729,9 +694,9 @@ function App() {
 
     window.addEventListener('popstate', syncFromPath)
     return () => window.removeEventListener('popstate', syncFromPath)
-  }, [canRegister])
+    }, [canRegister])
 
-  useEffect(() => {
+    useEffect(() => {
     if ((mode === 'register' && REGISTRATION_ENABLED) || mode === 'reset') {
       void refreshCaptcha(false)
       return
@@ -739,9 +704,9 @@ function App() {
     setCaptcha(null)
     setRegistrationDailyLimitReached(false)
     setRegisterAvailabilityCheck(null)
-  }, [mode])
+    }, [mode])
 
-  useEffect(() => {
+    useEffect(() => {
     if (emailCodeCountdown <= 0) {
       return
     }
@@ -749,9 +714,9 @@ function App() {
       setEmailCodeCountdown((current) => Math.max(0, current - 1))
     }, 1000)
     return () => window.clearInterval(timer)
-  }, [emailCodeCountdown])
+    }, [emailCodeCountdown])
 
-  useEffect(() => {
+    useEffect(() => {
     if (!hasRunningGeneration) {
       return
     }
@@ -775,9 +740,9 @@ function App() {
     }, 1000)
 
     return () => window.clearInterval(timer)
-  }, [hasRunningGeneration])
+    }, [hasRunningGeneration])
 
-  useEffect(() => {
+    useEffect(() => {
     for (const progress of generationProgresses) {
       if (!progress.taskId || progress.status !== 'running' || pollingTaskIdsRef.current.has(progress.taskId)) {
         continue
@@ -786,9 +751,9 @@ function App() {
       void pollGenerationTask(progress)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generationProgresses])
+    }, [generationProgresses])
 
-  function upsertGenerationProgress(progress: GenerationProgress) {
+    function upsertGenerationProgress(progress: GenerationProgress) {
     if (!progress.taskId) {
       return
     }
@@ -799,15 +764,15 @@ function App() {
         ...current.filter((item) => item.taskId !== progress.taskId),
       ]),
     )
-  }
+    }
 
-  function updateGenerationProgress(taskId: string, updater: (current: GenerationProgress) => GenerationProgress) {
+    function updateGenerationProgress(taskId: string, updater: (current: GenerationProgress) => GenerationProgress) {
     setGenerationProgresses((current) =>
       current.map((item) => (item.taskId === taskId ? updater(item) : item)),
     )
-  }
+    }
 
-  async function pollGenerationTask(progress: GenerationProgress) {
+    async function pollGenerationTask(progress: GenerationProgress) {
     const taskId = progress.taskId
     if (!taskId) {
       return
@@ -958,9 +923,9 @@ function App() {
     } finally {
       pollingTaskIdsRef.current.delete(taskId)
     }
-  }
+    }
 
-  async function loadPackages() {
+    async function loadPackages() {
     try {
       const [rechargeResult, settingsResult] = await Promise.all([
         api.listPackages('recharge'),
@@ -971,147 +936,73 @@ function App() {
     } catch (error) {
       console.error(error)
     }
-  }
-
-  async function loadProductsPage() {
-    try {
-      const [productResult, categoryResult] = await Promise.all([
-        api.listProducts(productKeyword, activeProductCategoryId),
-        api.listProductCategories(),
-      ])
-      setProducts(productResult.items ?? [])
-      setProductCategories(categoryResult.items ?? [])
-    } catch (error) {
-      console.error(error)
     }
-  }
 
-  async function loadDashboard(options: { showBusy?: boolean; updatePreview?: boolean; updateMessage?: boolean } = {}) {
-    const { showBusy = true, updateMessage = true } = options
-    try {
-      if (showBusy) {
-        setBusy('refresh')
-      }
-      const meResult = await api.getMe()
-      setCurrentUser(meResult)
-      const [
-        pointsResult,
-        historyResult,
-        activityResult,
-        pointsLogResult,
-        creditLogResult,
-        inviteResult,
-        latestResult,
-        announcementsResult,
-        promptPlazaResult,
-        myPromptPlazaResult,
-        productsResult,
-        productCategoriesResult,
-        settingsResult,
-      ] = await Promise.all([
-        api.getPoints(),
-        api.listImageTasks(historyPage, HISTORY_PAGE_SIZE),
-        api.listUserActivity(activityPage, ACTIVITY_PAGE_SIZE),
-        api.listPointsLogs(pointsLogPage, FLOW_LOG_PAGE_SIZE),
-        api.listCreditLogs(creditLogPage, FLOW_LOG_PAGE_SIZE),
-        api.getInviteInfo(),
-        api.listImageTasks(1, HISTORY_PAGE_SIZE),
-        api.listAnnouncements().catch(() => null),
-        api.listPromptPlazaForUser().catch(() => null),
-        api.listMyPromptPlaza().catch(() => null),
-        api.listProducts().catch(() => null),
-        api.listProductCategories().catch(() => null),
-        api.getBillingSettings().catch(() => null),
-      ])
-      setPoints(pointsResult)
-      setHistory(historyResult.items)
-      setHistoryPage(historyResult.page)
-      setHistoryTotal(historyResult.total)
-      setActivityLogs(activityResult.items)
-      setActivityPage(activityResult.page)
-      setActivityTotal(activityResult.total)
-      setPointsLogItems(pointsLogResult.items)
-      setPointsLogPage(pointsLogResult.page)
-      setPointsLogTotal(pointsLogResult.total)
-      setCreditLogItems(creditLogResult.items)
-      setCreditLogPage(creditLogResult.page)
-      setCreditLogTotal(creditLogResult.total)
-      setInviteInfo(inviteResult)
-      if (settingsResult) {
-        setBillingSettings(settingsResult)
-      }
-      if (announcementsResult) {
-        setAnnouncements(announcementsResult.items)
-        const unreadPinned = announcementsResult.items.find((item) => item.kind === 'pinned' && !item.isRead)
-        if (unreadPinned) {
-          setActiveAnnouncementId(unreadPinned.id)
-          setAnnouncementDialogOpen(true)
-        }
-      }
-      if (promptPlazaResult) {
-        setServerPromptItems(promptPlazaResult.items.map(normalizePromptGalleryItem))
-      }
-      if (myPromptPlazaResult) {
-        setMyPromptItems(myPromptPlazaResult.items.map(normalizePromptGalleryItem))
-      }
-      if (productsResult) {
-        setProducts(productsResult.items ?? [])
-      }
-      if (productCategoriesResult) {
-        setProductCategories(productCategoriesResult.items ?? [])
-      }
-      const runningTasks = latestResult.items.filter((item) => item.status === 'generating' || item.status === 'running')
-      if (runningTasks.length > 0) {
-        setGenerationProgresses((current) => {
-          const currentIds = new Set(current.map((item) => item.taskId))
-          const next = [...current]
-          for (const task of [...runningTasks].reverse()) {
-            if (currentIds.has(task.id)) {
-              continue
-            }
-            next.unshift(progressFromImageTaskItem(task))
-          }
-          return limitGenerationProgresses(next)
-        })
-      }
-    } catch (error) {
-      if (shouldForceLogout(error)) {
-        handleLogout()
-        if (updateMessage) {
-          setMessage(error instanceof APIError && error.status === 403 ? '账号已被禁用，请联系管理员。' : '登录已过期，请重新登录。')
-        }
-      } else {
-        if (updateMessage) {
-          setMessage(error instanceof Error ? error.message : '同步失败')
-        }
-      }
-    } finally {
-      if (showBusy) {
-        setBusy(null)
-      }
+
+    async function loadDashboard(options: { showBusy?: boolean; updatePreview?: boolean; updateMessage?: boolean } = {}) {
+
+              const { showBusy = true, updateMessage = true } = options;
+              try {
+                if (showBusy) setBusy('refresh');
+                const meResult = await api.getMe();
+                setCurrentUser(meResult);
+                const [
+                  pointsResult,
+                  historyResult,
+                  latestResult,
+                  announcementsResult,
+                  settingsResult
+                ] = await Promise.all([
+                  api.getPoints(),
+                  api.listImageTasks(historyPage, HISTORY_PAGE_SIZE),
+                  api.listImageTasks(1, HISTORY_PAGE_SIZE),
+                  api.listAnnouncements().catch(() => null),
+                  api.getBillingSettings().catch(() => null)
+                ]);
+                
+                setPoints(pointsResult);
+                setHistory(historyResult.items);
+                setHistoryPage(historyResult.page);
+                setHistoryTotal(historyResult.total);
+                
+                if (settingsResult) {
+                  setBillingSettings(settingsResult);
+                }
+                if (announcementsResult) {
+                  setAnnouncements(announcementsResult.items);
+                  const unreadPinned = announcementsResult.items.find((item: any) => item.kind === 'pinned' && !item.isRead);
+                  if (unreadPinned) {
+                    setActiveAnnouncementId(unreadPinned.id);
+                    setAnnouncementDialogOpen(true);
+                  }
+                }
+                
+                const runningTasks = latestResult.items.filter((item: any) => item.status === 'generating' || item.status === 'running');
+                if (runningTasks.length > 0) {
+                  setGenerationProgresses((current) => {
+                    const currentIds = new Set(current.map((item) => item.taskId));
+                    const next = [...current];
+                    for (const task of [...runningTasks].reverse()) {
+                      if (currentIds.has(task.id)) continue;
+                      next.push({ taskId: task.id, status: task.status as any } as unknown as any);
+                    }
+                    return next;
+                  });
+                }
+                
+                if (updateMessage) {
+                  setMessage('');
+                }
+              } catch (error) {
+                handleApiError(error, '加载失败');
+              } finally {
+                if (showBusy) setBusy(null);
+              }
+            
     }
-  }
 
-  async function loadActivityPage(page: number, options: { showBusy?: boolean } = {}) {
-    const { showBusy = false } = options
-    try {
-      if (showBusy) {
-        setBusy('refresh')
-      }
-      const pageResult = await api.listUserActivity(page, ACTIVITY_PAGE_SIZE)
-      setActivityLogs(pageResult.items)
-      setActivityPage(pageResult.page)
-      setActivityTotal(pageResult.total)
-    } catch (error) {
-      handleApiError(error, '日志加载失败')
-    } finally {
-      if (showBusy) {
-        setBusy(null)
-      }
-    }
-  }
 
-  async function loadHistoryPage(page: number, options: { showBusy?: boolean } = {}) {
+    async function loadHistoryPage(page: number, options: { showBusy?: boolean } = {}) {
     const { showBusy = false } = options
     try {
       if (showBusy) {
@@ -1128,47 +1019,11 @@ function App() {
         setBusy(null)
       }
     }
-  }
-
-  async function loadPointsLogPage(page: number, options: { showBusy?: boolean } = {}) {
-    const { showBusy = false } = options
-    try {
-      if (showBusy) {
-        setBusy('refresh')
-      }
-      const pageResult = await api.listPointsLogs(page, FLOW_LOG_PAGE_SIZE)
-      setPointsLogItems(pageResult.items)
-      setPointsLogPage(pageResult.page)
-      setPointsLogTotal(pageResult.total)
-    } catch (error) {
-      handleApiError(error, '积分流水加载失败')
-    } finally {
-      if (showBusy) {
-        setBusy(null)
-      }
     }
-  }
 
-  async function loadCreditLogPage(page: number, options: { showBusy?: boolean } = {}) {
-    const { showBusy = false } = options
-    try {
-      if (showBusy) {
-        setBusy('refresh')
-      }
-      const pageResult = await api.listCreditLogs(page, FLOW_LOG_PAGE_SIZE)
-      setCreditLogItems(pageResult.items)
-      setCreditLogPage(pageResult.page)
-      setCreditLogTotal(pageResult.total)
-    } catch (error) {
-      handleApiError(error, '福利次数流水加载失败')
-    } finally {
-      if (showBusy) {
-        setBusy(null)
-      }
-    }
-  }
 
-  async function refreshCaptcha(showMessage = false) {
+
+    async function refreshCaptcha(showMessage = false) {
     if (mode !== 'register' && mode !== 'reset') {
       return
     }
@@ -1194,9 +1049,9 @@ function App() {
       }
       setMessage(error instanceof Error ? error.message : '图形验证码加载失败')
     }
-  }
+    }
 
-  async function handleSendCode() {
+    async function handleSendCode() {
     if (mode === 'register' && registrationDailyLimitReached) {
       setMessage(REGISTRATION_DAILY_LIMIT_MESSAGE)
       return
@@ -1254,9 +1109,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleCheckResetEmail(): Promise<boolean> {
+    async function handleCheckResetEmail(): Promise<boolean> {
     const email = authForm.email.trim()
     if (mode !== 'reset' || !email) {
       return false
@@ -1278,9 +1133,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleCheckRegisterAvailability(): Promise<boolean> {
+    async function handleCheckRegisterAvailability(): Promise<boolean> {
     const email = authForm.email.trim()
     const username = authForm.username.trim()
     if (mode !== 'register' || !email || !username) {
@@ -1317,9 +1172,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleCheckRegisterUsername(): Promise<boolean> {
+    async function handleCheckRegisterUsername(): Promise<boolean> {
     const username = authForm.username.trim()
     const email = authForm.email.trim() || '__placeholder__@example.com'
     if (mode !== 'register' || !username) {
@@ -1346,9 +1201,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleCheckRegisterEmail(): Promise<boolean> {
+    async function handleCheckRegisterEmail(): Promise<boolean> {
     const email = authForm.email.trim()
     const username = authForm.username.trim() || 'placeholder123'
     if (mode !== 'register' || !email) {
@@ -1375,9 +1230,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleAuthSubmit() {
+    async function handleAuthSubmit() {
     try {
       setBusy('auth')
 
@@ -1471,124 +1326,12 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
-
-  async function handleCheckin() {
-    if (!isAuthed) {
-      setMessage('请先登录，再执行签到。')
-      return
-    }
-    if (checkinInFlightRef.current || checkedInToday) {
-      setMessage('今天已经签到过了。')
-      return
     }
 
-    try {
-      checkinInFlightRef.current = true
-      setBusy('checkin')
-      const result = await api.checkin()
-      const gainedPoints = Number(result.gainedPoints ?? 0)
-      const gainedCredits = Number(result.gainedCredits ?? 0)
-      setPoints((current) => ({
-        balance: Number(result.pointsBalance ?? current?.balance ?? 0),
-        creditsBalance: getTotalCredits(result, current?.totalCredits ?? 0),
-        freeCredits: Number(result.freeCredits ?? current?.freeCredits ?? 0),
-        paidCredits: Number(result.paidCredits ?? current?.paidCredits ?? 0),
-        totalCredits: getTotalCredits(result, current?.totalCredits ?? 0),
-        streak: Number(result.streak ?? current?.streak ?? 0),
-        lastCheckinAt: result.lastCheckinAt ?? current?.lastCheckinAt ?? null,
-        checkinPointsTotal: Number(current?.checkinPointsTotal ?? 0) + (result.checkedIn ? gainedPoints : 0),
-        checkinCreditsTotal: Number(current?.checkinCreditsTotal ?? 0) + (result.checkedIn ? gainedCredits : 0),
-        recentLogs: current?.recentLogs ?? [],
-        recentCreditLogs: current?.recentCreditLogs ?? [],
-      }))
-      setMessage(
-        result.checkedIn
-          ? `签到成功，获得 ${gainedPoints} 积分和 ${gainedCredits} 福利次数。`
-          : '今天已经签到过了。',
-      )
-      await loadDashboard()
-    } catch (error) {
-      handleApiError(error, '签到失败')
-    } finally {
-      checkinInFlightRef.current = false
-      setBusy(null)
-    }
-  }
 
-  async function handleChangePassword() {
-    if (!isAuthed) {
-      setMessage('请先登录后再修改密码。')
-      return
-    }
 
-    if (
-      !changePasswordForm.currentPassword.trim() ||
-      !changePasswordForm.newPassword.trim() ||
-      !changePasswordForm.confirmNewPassword.trim()
-    ) {
-      setMessage('请把修改密码所需字段补齐。')
-      return
-    }
-    if (changePasswordForm.newPassword !== changePasswordForm.confirmNewPassword) {
-      setMessage('两次输入的新密码不一致。')
-      return
-    }
 
-    try {
-      setBusy('change-password')
-      await api.changePassword({
-        currentPassword: changePasswordForm.currentPassword,
-        newPassword: changePasswordForm.newPassword,
-        confirmNewPassword: changePasswordForm.confirmNewPassword,
-      })
-      setChangePasswordForm({
-        currentPassword: '',
-        newPassword: '',
-        confirmNewPassword: '',
-      })
-      setShowChangePassword(false)
-      setMessage('密码修改成功。')
-    } catch (error) {
-      handleApiError(error, '修改密码失败')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function handlePurchase(packageCode: string) {
-    if (!isAuthed) {
-      setMessage('请先登录后再购买兑换码商品。')
-      return
-    }
-
-    const selectedPackage = packages.find((item) => item.code === packageCode)
-    if (!selectedPackage) {
-      setMessage('兑换码商品不存在或已停用。')
-      return
-    }
-    if (!selectedPackage.productUrl) {
-      setMessage('该兑换码商品暂未配置购买链接，请联系管理员处理。')
-      return
-    }
-    setActiveRechargePackageCode(packageCode)
-
-    setRechargeConfirmDialog({
-      open: true,
-      kind: 'package',
-      title: `确认购买 ${selectedPackage.name}`,
-      lines: [
-        `到账积分：${selectedPackage.bonusPoints} 积分`,
-        `赠送福利次数：${selectedPackage.creditsAmount} 福利次数`,
-        `商品价格：${(selectedPackage.amountCents / 100).toFixed(2)} 元`,
-        '确认后将跳转至兑换码购买平台。购买完成后，请按平台提示获取兑换码，并返回本站完成兑换。',
-      ],
-      confirmLabel: '确定',
-      href: selectedPackage.productUrl,
-    })
-  }
-
-  async function confirmPackageRecharge(packageCode: string) {
+    async function confirmPackageRecharge(packageCode: string) {
     const selectedPackage = packages.find((item) => item.code === packageCode)
     if (!selectedPackage?.productUrl) {
       setRechargeConfirmDialog({ open: false })
@@ -1599,75 +1342,11 @@ function App() {
     window.open(selectedPackage.productUrl, '_blank', 'noopener,noreferrer')
     setRechargeConfirmDialog({ open: false })
     setMessage('已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
-  }
-
-  function handleProductPurchase(item: ProductItem) {
-    if (!item.productUrl) {
-      setMessage('该商品暂未配置购买链接，请稍后再试。')
-      return
-    }
-    setActiveProduct(null)
-    setRechargeConfirmDialog({
-      open: true,
-      kind: 'package',
-      title: '确认前往购买',
-      lines: [
-        item.name,
-        `商品价格：${money(item.amountCents)}`,
-        item.categories.length ? `分类：${item.categories.map((entry) => entry.name).join(' / ')}` : '分类：未分类',
-        '确认后将跳转到外部购买平台。',
-        '如需继续购买，请点击确定。',
-      ],
-      confirmLabel: '确定',
-      href: item.productUrl,
-    })
-  }
-  async function handleCopyInviteLink(link: string) {
-    if (!link) {
-      setMessage('暂无可复制的邀请码链接。')
-      return
-    }
-    try {
-      setBusy('copy-invite-link')
-      const copied = await copyTextToClipboard(link)
-      setMessage(copied ? '邀请链接已复制。' : '复制失败，请手动选中邀请链接复制。')
-    } catch {
-      setMessage('复制失败，请手动选中邀请链接复制。')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function handleRedeemCode() {
-    if (!isAuthed) {
-      setMessage('请先登录后再兑换兑换码。')
-      return
     }
 
-    const code = redeemCodeInput.trim()
-    if (!code) {
-      setMessage('请输入有效兑换码。')
-      return
-    }
 
-    try {
-      setBusy('redeem-code')
-      const result = await api.redeemCode({ code })
-      setRedeemCodeInput('')
-      setMessage(
-        `兑换成功，已到账${result.creditsAmount > 0 ? ` ${result.creditsAmount} 福利次数` : ''}${
-          result.pointsAmount > 0 ? ` ${result.pointsAmount} 积分` : ''
-        }。`,
-      )
-      await loadDashboard({ showBusy: false, updatePreview: false, updateMessage: false })
-    } catch (error) {
-      handleApiError(error, '兑换码使用失败')
-    } finally {
-      setBusy(null)
-    }
-  }
 
-  function handleOpenCreateTaskConfirm() {
+    function handleOpenCreateTaskConfirm() {
     if (busy === 'create-task') {
       return
     }
@@ -1687,18 +1366,18 @@ function App() {
       return
     }
     setGenerateConfirmOpen(true)
-  }
+    }
 
-  function handleCancelCreateTaskConfirm() {
+    function handleCancelCreateTaskConfirm() {
     setGenerateConfirmOpen(false)
-  }
+    }
 
-  function handleConfirmCreateTask() {
+    function handleConfirmCreateTask() {
     setGenerateConfirmOpen(false)
     void handleCreateTask()
-  }
+    }
 
-  async function handleCreateTask() {
+    async function handleCreateTask() {
     if (busy === 'create-task') {
       return
     }
@@ -1816,9 +1495,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleRetryTask(taskId: string) {
+    async function handleRetryTask(taskId: string) {
     if (!isAuthed) {
       setMessage('请先登录，再重试任务。')
       return
@@ -1902,9 +1581,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  function handleSelectTask(item: ImageTaskItem) {
+    function handleSelectTask(item: ImageTaskItem) {
     if (preview.taskId === item.id) {
       setPreview(emptyPreview)
       setPreviewImageIndex(0)
@@ -1917,9 +1596,9 @@ function App() {
     if (item.id && item.id !== '-') {
       void loadPreviewTaskDetail(item.id)
     }
-  }
+    }
 
-  function handlePreviousPreviewImage() {
+    function handlePreviousPreviewImage() {
     setPreviewImageIndex((current) => {
       const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
@@ -1927,9 +1606,9 @@ function App() {
       }
       return (current - 1 + total) % total
     })
-  }
+    }
 
-  function handleNextPreviewImage() {
+    function handleNextPreviewImage() {
     setPreviewImageIndex((current) => {
       const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
@@ -1937,9 +1616,9 @@ function App() {
       }
       return (current + 1) % total
     })
-  }
+    }
 
-  async function handleSaveCurrentImage() {
+    async function handleSaveCurrentImage() {
     const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
     const imageUrl = imageURLs[previewImageIndex] ?? imageURLs[0]
     if (!imageUrl) {
@@ -1974,9 +1653,9 @@ function App() {
     } catch (error) {
       handleApiError(error, '保存当前图片失败')
     }
-  }
+    }
 
-  async function prefetchImageDownload(taskId: string, imageIndex: number) {
+    async function prefetchImageDownload(taskId: string, imageIndex: number) {
     const cacheKey = getDownloadCacheKey(taskId, imageIndex)
     if (downloadFileCacheRef.current.has(cacheKey) || downloadPendingRef.current.has(cacheKey)) {
       return
@@ -1987,9 +1666,9 @@ function App() {
     } catch (error) {
       console.warn('prefetch image download failed', error)
     }
-  }
+    }
 
-  async function loadImageDownload(taskId: string, imageIndex: number): Promise<DownloadedFile> {
+    async function loadImageDownload(taskId: string, imageIndex: number): Promise<DownloadedFile> {
     const cacheKey = getDownloadCacheKey(taskId, imageIndex)
     const cached = downloadFileCacheRef.current.get(cacheKey)
     if (cached) {
@@ -2013,9 +1692,9 @@ function App() {
 
     downloadPendingRef.current.set(cacheKey, pendingDownload)
     return pendingDownload
-  }
+    }
 
-  async function handleOpenPreviewDetail() {
+    async function handleOpenPreviewDetail() {
     if (!preview.taskId || preview.taskId === '-') {
       setMessage('当前展示区还没有提示词详情。')
       return
@@ -2026,9 +1705,9 @@ function App() {
       return
     }
     setPreviewDetailOpen(true)
-  }
+    }
 
-  async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
+    async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
     if (!taskId || taskId === '-') {
       return null
     }
@@ -2042,9 +1721,9 @@ function App() {
       handleApiError(error, '任务详情加载失败')
       return null
     }
-  }
+    }
 
-  function handleApplyPreviewDetail() {
+    function handleApplyPreviewDetail() {
     const parsed = parseTaskRequestParams(preview.requestParams)
     const promptText = parsed?.prompt?.trim() || preview.prompt.trim()
 
@@ -2081,9 +1760,9 @@ function App() {
     setActivePage('home')
     setSidebarOpen(false)
     setPreviewDetailOpen(false)
-  }
+    }
 
-  async function loadAdminData() {
+    async function loadAdminData() {
     if (!isAdmin) {
       return
     }
@@ -2108,19 +1787,19 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  function handleToggleAdmin() {
+    function handleToggleAdmin() {
     setAdminOpen((current) => !current)
-  }
+    }
 
-  function handleExitAdmin() {
+    function handleExitAdmin() {
     setAdminOpen(false)
     setSidebarOpen(false)
     setSidebarCollapsed(false)
-  }
+    }
 
-  async function handleAdminToggleUserStatus(user: AdminUserItem) {
+    async function handleAdminToggleUserStatus(user: AdminUserItem) {
     try {
       setBusy('refresh')
       const nextStatus = user.status === 1 ? 2 : 1
@@ -2132,9 +1811,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleAdminAdjustUserPoints(user: AdminUserItem, delta: number) {
+    async function handleAdminAdjustUserPoints(user: AdminUserItem, delta: number) {
     try {
       setBusy('refresh')
       await api.adminAdjustPoints(user.id, delta, '后台快速调整')
@@ -2145,9 +1824,9 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
+    }
 
-  async function handleAdminSavePackage(packageId: string | null, payload: AdminPackagePayload) {
+    async function handleAdminSavePackage(packageId: string | null, payload: AdminPackagePayload) {
     try {
       setBusy('refresh')
       if (packageId) {
@@ -2163,132 +1842,52 @@ function App() {
     } finally {
       setBusy(null)
     }
-  }
-
-  function handleLogout() {
-    clearStoredToken()
-    setToken('')
-    setCurrentUser(null)
-    setMode('login')
-    setAuthForm({
-      email: '',
-      code: '',
-      captchaCode: '',
-      username: '',
-      inviteCode: readInviteCodeFromLocation(),
-      account: '',
-      password: '',
-      confirmPassword: '',
-      rememberMe: false,
-    })
-    setAuthFormSeed((current) => current + 1)
-    setShowRegisterPassword(false)
-    setEmailCodeCountdown(0)
-    setEmailCaptchaPassUntil(0)
-    setActivePage('home')
-    setSidebarCollapsed(false)
-    setSidebarOpen(false)
-    setAdminOpen(false)
-    setAdminStats(null)
-    setAdminUsers([])
-    setAdminTasks([])
-    setAdminAudits([])
-    setAdminActionLogs([])
-    setAdminPackages([])
-    setPoints(null)
-    setHistory([])
-    setHistoryPage(1)
-    setHistoryTotal(0)
-    setActivityLogs([])
-    setActivityPage(1)
-    setActivityTotal(0)
-    setPointsLogItems([])
-    setPointsLogPage(1)
-      setPointsLogTotal(0)
-      setCreditLogItems([])
-      setProducts([])
-      setProductCategories([])
-      setActiveProduct(null)
-    setCreditLogPage(1)
-    setCreditLogTotal(0)
-    setInviteInfo(null)
-    setAnnouncements([])
-    setAnnouncementDialogOpen(false)
-    setActiveAnnouncementId(null)
-    setPreview(emptyPreview)
-    setPreviewImageIndex(0)
-    setWechatSaveGuide({ open: false, imageUrl: '', title: '' })
-    pollingTaskIdsRef.current.clear()
-    setGenerationProgresses([])
-    setPrompt('')
-    setSize('1024x1024')
-    setStyle('')
-    setCount(1)
-    setQuality('auto')
-    setOutputFormat('default')
-    setCustomWidth('1024')
-    setCustomHeight('1024')
-    setEmailNotifyOnComplete(false)
-    setReferenceImageURL('')
-    setReferenceImageName('')
-    setReferenceImageSource('none')
-    setReferenceImages([])
-    setReferenceImagesDialogOpen(false)
-    setShowNetworkImageInput(false)
-    setPreviewDetailOpen(false)
-    setChangePasswordForm({
-      currentPassword: '',
-      newPassword: '',
-      confirmNewPassword: '',
-    })
-    setShowChangePassword(false)
-    if (referenceImageInputRef.current) {
-      referenceImageInputRef.current.value = ''
     }
-  }
 
-  function handleLogoutRequest() {
+    function handleLogout() {
+
+              // api.logout()
+              setToken('');
+              setCurrentUser(null);
+              setPoints(null);
+              setHistory([]);
+              setHistoryPage(1);
+              setHistoryTotal(0);
+              setBillingSettings(null);
+              setAnnouncements([]);
+              setActiveAnnouncementId(null);
+              setAnnouncementDialogOpen(false);
+              setGenerationProgresses([]);
+            
+    }
+
+    function handleLogoutRequest() {
     if (window.confirm('确定要退出登录吗？')) {
       handleLogout()
     }
-  }
-
-  function handleCancelRechargeConfirm() {
-    setRechargeConfirmDialog({ open: false })
-  }
-
-  function handleConfirmRechargeDialog() {
-    if (!rechargeConfirmDialog.open) {
-      return
     }
-    if (rechargeConfirmDialog.href) {
-      window.open(rechargeConfirmDialog.href, '_blank', 'noopener,noreferrer')
-      setRechargeConfirmDialog({ open: false })
-      setMessage(rechargeConfirmDialog.title === '确认前往购买' ? '已打开商品购买页面。' : '已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
-      return
-    }
-    void confirmPackageRecharge(activeRechargePackageCode)
-  }
 
-  function handleApiError(error: unknown, fallback: string) {
+
+
+    function handleApiError(error: unknown, fallback: string) {
     if (shouldForceLogout(error)) {
       handleLogout()
       setMessage(error instanceof APIError && error.status === 403 ? '账号已被禁用，请联系管理员。' : '登录已过期，请重新登录。')
       return
     }
     setMessage(error instanceof Error ? error.message : fallback)
-  }
+    }
 
-  function openAnnouncements() {
+    function openAnnouncements() {
     const firstUnread = announcements.find((item) => !item.isRead)
     setActiveAnnouncementId(firstUnread?.id ?? announcements[0]?.id ?? null)
     setAnnouncementDialogOpen(true)
     if (announcements.length === 0) {
       void refreshAnnouncements()
     }
-  }
+    }
 
-  async function refreshAnnouncements() {
+    async function refreshAnnouncements() {
     try {
       const resp = await api.listAnnouncements()
       setAnnouncements(resp.items)
@@ -2298,9 +1897,9 @@ function App() {
     } catch (error) {
       handleApiError(error, '公告加载失败')
     }
-  }
+    }
 
-  async function markActiveAnnouncementRead() {
+    async function markActiveAnnouncementRead() {
     const targetAnnouncement = activeAnnouncement
     if (!targetAnnouncement) {
       return
@@ -2324,9 +1923,9 @@ function App() {
     } catch (error) {
       handleApiError(error, '标记公告已读失败')
     }
-  }
+    }
 
-  async function markNormalAnnouncementRead(id: string) {
+    async function markNormalAnnouncementRead(id: string) {
     const targetAnnouncement = announcements.find((item) => item.id === id)
     if (!targetAnnouncement || targetAnnouncement.kind === 'pinned' || targetAnnouncement.isRead) {
       return
@@ -2343,45 +1942,15 @@ function App() {
     } catch (error) {
       handleApiError(error, '标记公告已读失败')
     }
-  }
+    }
 
-  function navigateToPage(page: AppPage) {
+    function navigateToPage(page: AppPage) {
     setActivePage(page)
     setSidebarOpen(false)
-  }
-
-  async function handleTogglePromptFavorite(promptId: string) {
-    const currentItem = serverPromptItems.find((item) => item.id === promptId)
-    if (currentItem) {
-      const nextFavorited = !currentItem.isFavorited
-      const nextFavorites = Math.max(0, Number(currentItem.favorites || 0) + (nextFavorited ? 1 : -1))
-      setServerPromptItems((current) =>
-        current.map((item) =>
-          item.id === promptId ? { ...item, isFavorited: nextFavorited, favorites: nextFavorites } : item,
-        ),
-      )
     }
-    try {
-      const updated = await api.togglePromptPlazaFavorite(promptId)
-        setServerPromptItems((current) =>
-          current.map((item) =>
-          item.id === updated.id ? { ...item, favorites: updated.favorites, isFavorited: updated.isFavorited } : item,
-        ),
-      )
-      setMyPromptItems((current) =>
-        current.map((item) =>
-          item.id === updated.id ? { ...item, favorites: updated.favorites, isFavorited: updated.isFavorited } : item,
-        ),
-      )
-    } catch (error) {
-      if (currentItem) {
-        setServerPromptItems((current) => current.map((item) => (item.id === currentItem.id ? currentItem : item)))
-      }
-      handleApiError(error, '收藏操作失败')
-    }
-  }
 
-  async function uploadLocalReferenceImage(file?: File) {
+
+    async function uploadLocalReferenceImage(file?: File) {
     if (!file) {
       return
     }
@@ -2414,9 +1983,9 @@ function App() {
       setReferenceImageUploading(false)
       setBusy(null)
     }
-  }
+    }
 
-  async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    async function handleLocalReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? [])
     event.target.value = ''
     for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
@@ -2425,25 +1994,25 @@ function App() {
     if (files.length > MAX_REFERENCE_IMAGES - referenceImages.length) {
       setMessage(`最多只能添加 ${MAX_REFERENCE_IMAGES} 张参考图片。`)
     }
-  }
+    }
 
-  function handlePromptDrag(event: DragEvent<HTMLTextAreaElement>) {
+    function handlePromptDrag(event: DragEvent<HTMLTextAreaElement>) {
     if (!Array.from(event.dataTransfer.types).includes('Files')) {
       return
     }
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
     setPromptDragActive(true)
-  }
+    }
 
-  function handlePromptDragLeave(event: DragEvent<HTMLTextAreaElement>) {
+    function handlePromptDragLeave(event: DragEvent<HTMLTextAreaElement>) {
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
       return
     }
     setPromptDragActive(false)
-  }
+    }
 
-  async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
+    async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
     event.preventDefault()
     setPromptDragActive(false)
     const files = Array.from(event.dataTransfer.files).filter((item) => item.type.startsWith('image/'))
@@ -2454,9 +2023,9 @@ function App() {
     for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
       await uploadLocalReferenceImage(file)
     }
-  }
+    }
 
-  async function handlePromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    async function handlePromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files).filter((item) => item.type.startsWith('image/'))
     if (!files.length) {
       return
@@ -2465,14 +2034,14 @@ function App() {
     for (const file of files.slice(0, MAX_REFERENCE_IMAGES - referenceImages.length)) {
       await uploadLocalReferenceImage(file)
     }
-  }
+    }
 
-  function handleNetworkReferenceImageInput(value: string) {
+    function handleNetworkReferenceImageInput(value: string) {
     setReferenceImageURL(value)
     setReferenceImageSource(value.trim() ? 'network' : 'none')
-  }
+    }
 
-  function handleAddNetworkReferenceImage() {
+    function handleAddNetworkReferenceImage() {
     const trimmed = referenceImageURL.trim()
     if (!trimmed) {
       setMessage('请输入网络图片链接。')
@@ -2492,9 +2061,9 @@ function App() {
     setReferenceImageSource('network')
     setReferenceImageURL('')
     setShowNetworkImageInput(false)
-  }
+    }
 
-  function handleClearReferenceImage() {
+    function handleClearReferenceImage() {
     setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
@@ -2504,9 +2073,9 @@ function App() {
     if (referenceImageInputRef.current) {
       referenceImageInputRef.current.value = ''
     }
-  }
+    }
 
-  function handleDeleteReferenceImage(index: number) {
+    function handleDeleteReferenceImage(index: number) {
     setReferenceImages((current) => {
       const next = syncPrimaryReferenceImage(current.filter((_, itemIndex) => itemIndex !== index))
       const first = next[0]
@@ -2518,9 +2087,9 @@ function App() {
       }
       return next
     })
-  }
+    }
 
-  function handleClearPromptOptions() {
+    function handleClearPromptOptions() {
     const confirmed = window.confirm('是否清除当前提示词以及选项信息？')
     if (!confirmed) {
       return
@@ -2541,37 +2110,16 @@ function App() {
     if (referenceImageInputRef.current) {
       referenceImageInputRef.current.value = ''
     }
-  }
-
-  async function handleSubmitPromptDraft() {
-    const title = promptSubmission.title.trim()
-    const promptText = promptSubmission.prompt.trim()
-    if (!title || !promptText) {
-      setMessage('请先填写提示词标题和正文。')
-      return
     }
 
-    try {
-      await api.submitPromptPlaza({
-        title,
-        prompt: promptText,
-        previewUrl: promptSubmission.previewUrl.trim(),
-        tags: normalizePromptTags(promptSubmission.tags),
-      })
-      setPromptSubmission({ title: '', prompt: '', previewUrl: '', tags: [''] })
-      setMessage('提示词已提交，等待审核。')
-    } catch (error) {
-      handleApiError(error, '提示词提交失败')
-    }
-  }
 
-  const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
-  const previewThumbnailURLs = limitImageURLs(
+    const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+    const previewThumbnailURLs = limitImageURLs(
     normalizeImageURLs(preview.thumbnailUrls, preview.thumbnailUrl),
     preview.requestedCount,
-  )
+    )
 
-  useEffect(() => {
+    useEffect(() => {
     if (previewImageURLs.length === 0) {
       if (previewImageIndex !== 0) {
         setPreviewImageIndex(0)
@@ -2582,9 +2130,9 @@ function App() {
     if (previewImageIndex >= previewImageURLs.length) {
       setPreviewImageIndex(previewImageURLs.length - 1)
     }
-  }, [previewImageIndex, previewImageURLs.length])
+    }, [previewImageIndex, previewImageURLs.length])
 
-  if (!isAuthed) {
+    if (!isAuthed) {
     return (
       <div className="auth-light-shell min-h-screen bg-slate-950 text-slate-100">
         <TopNotice message={message} onDismiss={() => setMessage('')} />
@@ -2953,9 +2501,9 @@ function App() {
         </main>
       </div>
     )
-  }
+    }
 
-  if (isAuthed && adminOpen) {
+    if (isAuthed && adminOpen) {
     return (
       <AdminConsole
         currentUser={currentUser}
@@ -2963,9 +2511,9 @@ function App() {
         onLogout={handleLogoutRequest}
       />
     )
-  }
+    }
 
-  return (
+    return (
     <div
       className="user-glass-shell min-h-screen w-full max-w-[100dvw] overflow-x-hidden bg-slate-950 text-slate-100"
       data-user-theme={userTheme}
@@ -3345,133 +2893,20 @@ function App() {
               </div>
             ) : null}
 
-            {activePage === 'orders' ? (
-              <div className="space-y-4">
-                <ActivityLogPanel
-                  items={activityLogs}
-                  page={activityPage}
-                  pageSize={ACTIVITY_PAGE_SIZE}
-                  total={activityTotal}
-                  onPageChange={(page) => void loadActivityPage(page)}
-                />
-              </div>
-            ) : null}
+            {activePage === 'orders' ? <OrdersPage /> : null}
 
-            {activePage === 'profile' ? (
-              <div className="space-y-4">
-                <div className="grid gap-4 xl:grid-cols-2">
-                  <UserSummaryPanel
-                    currentUser={currentUser}
-                    points={points}
-                    billingSettings={billingSettings}
-                    busy={busy}
-                    checkedInToday={checkedInToday}
-                    onCheckin={handleCheckin}
-                  />
-                  <InvitePanel
-                    info={inviteInfo}
-                    busy={busy}
-                    onCopyLink={handleCopyInviteLink}
-                  />
-                  <ChangePasswordPanel
-                    form={changePasswordForm}
-                    showPassword={showChangePassword}
-                    busy={busy}
-                    onToggleShowPassword={() => setShowChangePassword((current) => !current)}
-                    onChangeForm={setChangePasswordForm}
-                    onSubmit={handleChangePassword}
-                  />
-                </div>
-              </div>
-            ) : null}
+            {activePage === 'profile' ? <ProfilePage /> : null}
 
-            {activePage === 'flows' ? (
-              <div className="space-y-4">
-                <FlowLogsPanel
-                  pointsLogs={pointsLogItems}
-                  creditLogs={creditLogItems}
-                  pointsPage={pointsLogPage}
-                  creditPage={creditLogPage}
-                  pageSize={FLOW_LOG_PAGE_SIZE}
-                  pointsTotal={pointsLogTotal}
-                  creditTotal={creditLogTotal}
-                  onPointsPageChange={(page) => void loadPointsLogPage(page)}
-                  onCreditPageChange={(page) => void loadCreditLogPage(page)}
-                />
-              </div>
-            ) : null}
+            {activePage === 'flows' ? <FlowsPage /> : null}
 
-            {activePage === 'recharge' ? (
-              <div className="space-y-4">
-        <div className="grid gap-4">
-                  <section className="space-y-4 rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-                    <PackageSection
-                      title="兑换码商品"
-                      description="购买兑换码商品后，返回本页输入兑换码即可兑换积分或福利次数。"
-                      icon={<KeyRound className="h-4 w-4 text-violet-300" />}
-                      items={packages}
-                      busy={busy}
-                      emptyText="暂无可用兑换码商品。"
-                      actionLabel={(item) => (item.productUrl ? '前往购买' : '待配置')}
-                      busyPrefix="purchase:"
-                      onAction={handlePurchase}
-                      renderMeta={(item) => (
-                        <>
-                          <span>{item.creditsAmount} 福利次数</span>
-                          <span>{item.bonusPoints} 积分</span>
-                          <span>{(item.amountCents / 100).toFixed(2)} 元</span>
-                          {item.creditsAmount > 0 ? <span>赠送 {item.creditsAmount} 福利次数</span> : null}
-                          {item.productUrl ? <span>兑换码商品</span> : null}
-                        </>
-                      )}
-                    />
-                    <RedeemCodePanel
-                      code={redeemCodeInput}
-                      busy={busy === 'redeem-code'}
-                      onCodeChange={setRedeemCodeInput}
-                      onSubmit={handleRedeemCode}
-                    />
-                  </section>
-                </div>
-              </div>
-            ) : null}
+            {activePage === 'recharge' ? <RechargePage /> : null}
 
-            {activePage === 'prompts' ? (
-              <PromptPlaza
-                items={promptGalleryItems}
-                myItems={myPromptItems}
-                favoriteIds={favoritePromptIds}
-                submission={promptSubmission}
-                onSubmissionChange={setPromptSubmission}
-                onSubmit={handleSubmitPromptDraft}
-                onFavorite={handleTogglePromptFavorite}
-                onNotify={setMessage}
-              />
-            ) : null}
-            {activePage === 'products' ? (
-              <ProductPage
-                items={products}
-                categories={productCategories}
-                keyword={productKeyword}
-                activeCategoryId={activeProductCategoryId}
-                onKeywordChange={setProductKeyword}
-                onCategoryChange={setActiveProductCategoryId}
-                onOpenDetail={setActiveProduct}
-              />
-            ) : null}
+            {activePage === 'prompts' ? <PromptsPage /> : null}
+            {activePage === 'products' ? <ProductsPage /> : null}
             <IcpFooter className="mt-8" />
         </main>
       </div>
-      {rechargeConfirmDialog.open ? (
-        <RechargeConfirmDialog
-          title={rechargeConfirmDialog.title}
-          lines={rechargeConfirmDialog.lines}
-          confirmLabel={rechargeConfirmDialog.confirmLabel}
-          busy={busy === 'purchase:custom' || busy === `purchase:${activeRechargePackageCode}`}
-          onCancel={handleCancelRechargeConfirm}
-          onConfirm={handleConfirmRechargeDialog}
-        />
-      ) : null}
+
       {generateConfirmOpen ? (
         <RechargeConfirmDialog
           title="确认提交生图任务"
@@ -3523,15 +2958,9 @@ function App() {
           onMarkRead={() => void markActiveAnnouncementRead()}
         />
       ) : null}
-      {activeProduct ? (
-        <ProductDetailDialog
-          item={activeProduct}
-          onClose={() => setActiveProduct(null)}
-          onConfirm={() => handleProductPurchase(activeProduct)}
-        />
-      ) : null}
+
     </div>
-  )
+    )
 }
 
 function IcpFooter({ className = '' }: { className?: string }) {
@@ -3777,56 +3206,6 @@ function WechatSaveGuide({
   )
 }
 
-function RechargeConfirmDialog({
-  title,
-  lines,
-  confirmLabel,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  title: string
-  lines: string[]
-  confirmLabel: string
-  busy: boolean
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭兑换码购买确认" onClick={onCancel} />
-      <div className="relative w-full max-w-sm rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
-        <div className="px-4 py-4 text-center">
-          <h2 className="text-base font-medium text-slate-50">{title}</h2>
-          <div className="mt-3 space-y-1 text-sm leading-6 text-slate-300">
-            {lines.map((line) => (
-              <div key={line}>{line}</div>
-            ))}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 border-t border-slate-800">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="h-12 border-r border-slate-800 text-sm font-medium text-slate-300 transition hover:bg-slate-900 hover:text-white"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
-            className="inline-flex h-12 items-center justify-center gap-2 text-sm font-medium text-violet-300 transition hover:bg-slate-900 hover:text-violet-200 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function ReferenceImagesDialog({
   images,
   onDelete,
@@ -3965,7 +3344,7 @@ function PreviewDetailDialog({
   )
 }
 
-function Field({
+export function Field({
   label,
   icon,
   children,
@@ -4289,7 +3668,7 @@ function AppTopBar({
     </header>
   )
 }
-function PageHeader({
+export function PageHeader({
   title,
   description,
   action,
@@ -4309,239 +3688,7 @@ function PageHeader({
   )
 }
 
-function UserSummaryPanel({
-  currentUser,
-  points,
-  billingSettings,
-  busy,
-  checkedInToday,
-  onCheckin,
-}: {
-  currentUser: UserInfo | null
-  points: PointsResponse | null
-  billingSettings: BillingSettingsResponse | null
-  busy: BusyAction
-  checkedInToday: boolean
-  onCheckin: () => void
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-center justify-end">
-        <UserRound className="h-5 w-5 text-violet-300" />
-      </div>
-
-      <div className="mt-4 space-y-4">
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-slate-100">{currentUser?.username ?? '已登录用户'}</div>
-              <div className="mt-1 truncate text-xs text-slate-500">{currentUser?.email ?? '-'}</div>
-            </div>
-            <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-              {currentUser?.id ? (
-                <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-xs text-violet-200">
-                  #{currentUser.id}
-                </span>
-              ) : null}
-              <span className="rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-xs text-violet-200">
-                {getUserRoleLabel(currentUser?.role ?? 'user')}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <MiniStat label="当前积分" value={points ? String(points.balance) : '0'} />
-          <MiniStat label="可用福利次数" value={points ? String(points.totalCredits) : '0'} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <MiniStat
-            label="今日签到奖励"
-            value={<RewardLines points={billingSettings?.checkinPoints ?? 0} credits={billingSettings?.checkinCredits ?? 0} />}
-          />
-          <MiniStat
-            label="累计签到奖励"
-            value={<RewardLines points={points?.checkinPointsTotal ?? 0} credits={points?.checkinCreditsTotal ?? 0} />}
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={onCheckin}
-          disabled={busy === 'checkin' || checkedInToday}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-4 py-3 font-medium text-slate-100 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy === 'checkin' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <BadgeCheck className="h-4 w-4" />}
-          {busy === 'checkin' ? '签到中' : checkedInToday ? '今日已签到' : '每日签到'}
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function InvitePanel({
-  info,
-  busy,
-  onCopyLink,
-}: {
-  info: InviteInfoResponse | null
-  busy: BusyAction
-  onCopyLink: (link: string) => void
-}) {
-  const inviteCode = info?.inviteCode ?? ''
-  const inviteLink = buildInviteLink(inviteCode)
-  const rewardText = formatInviteReward(info?.inviteRewardCredits ?? 0, info?.inviteRewardPoints ?? 0)
-
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-medium text-slate-50">好友邀请</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            邀请好友注册后，对方首次使用 ID+用户ID 开头的兑换码可为你带来 {rewardText}，新用户注册赠送 {info?.registrationGiftCredits ?? 0} 福利次数。
-          </p>
-        </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-md border border-violet-500/20 bg-violet-500/10 text-violet-300">
-          <Gift className="h-5 w-5" />
-        </div>
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        <MiniStat label="已邀请人数" value={String(info?.invitedCount ?? 0)} />
-        <MiniStat label="累计奖励福利次数" value={String(info?.rewardCreditsTotal ?? 0)} />
-        <MiniStat label="累计奖励积分" value={String(info?.rewardPointsTotal ?? 0)} />
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)_auto]">
-        <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
-          <div className="text-xs text-slate-500">我的邀请码</div>
-          <div className="mt-1 font-mono text-lg font-semibold tracking-[0.2em] text-violet-200">{inviteCode || '-'}</div>
-        </div>
-        <div className="min-w-0 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
-          <div className="text-xs text-slate-500">邀请链接</div>
-          <div className="mt-1 truncate text-sm text-slate-200">{inviteLink || '-'}</div>
-        </div>
-        <button
-          type="button"
-          onClick={() => onCopyLink(inviteLink)}
-          disabled={!inviteLink || busy === 'copy-invite-link'}
-          className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-100 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy === 'copy-invite-link' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-          复制链接
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function ChangePasswordPanel({
-  form,
-  showPassword,
-  busy,
-  onToggleShowPassword,
-  onChangeForm,
-  onSubmit,
-}: {
-  form: PasswordChangeForm
-  showPassword: boolean
-  busy: BusyAction
-  onToggleShowPassword: () => void
-  onChangeForm: (next: PasswordChangeForm) => void
-  onSubmit: () => void | Promise<void>
-}) {
-  const inputType = showPassword ? 'text' : 'password'
-  const isBusy = busy === 'change-password'
-
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-medium text-slate-50">修改密码</h2>
-          <p className="mt-1 text-sm text-slate-400">先验证当前密码，再设置新的登录密码。</p>
-        </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-md border border-violet-500/20 bg-violet-500/10 text-violet-300">
-          <ShieldCheck className="h-5 w-5" />
-        </div>
-      </div>
-
-      <form
-        className="mt-4 space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          onSubmit()
-        }}
-      >
-        <Field label="当前密码" icon={<KeyRound className="h-4 w-4" />}>
-          <div className="relative">
-            <input
-              type={inputType}
-              value={form.currentPassword}
-              onChange={(event) => onChangeForm({ ...form, currentPassword: event.target.value })}
-              className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-              placeholder="请输入当前密码"
-              autoComplete="current-password"
-            />
-          </div>
-        </Field>
-
-        <Field label="新密码" icon={<KeyRound className="h-4 w-4" />}>
-          <div className="relative">
-            <input
-              type={inputType}
-              value={form.newPassword}
-              onChange={(event) => onChangeForm({ ...form, newPassword: event.target.value })}
-              className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-              placeholder="请输入新密码"
-              autoComplete="new-password"
-            />
-            <button
-              type="button"
-              onClick={onToggleShowPassword}
-              aria-label={showPassword ? '隐藏密码' : '显示密码'}
-              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 transition hover:text-slate-200"
-            >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-        </Field>
-
-        <Field label="确认新密码" icon={<KeyRound className="h-4 w-4" />}>
-          <div className="relative">
-            <input
-              type={inputType}
-              value={form.confirmNewPassword}
-              onChange={(event) => onChangeForm({ ...form, confirmNewPassword: event.target.value })}
-              className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
-              placeholder="请再次输入新密码"
-              autoComplete="new-password"
-            />
-            <button
-              type="button"
-              onClick={onToggleShowPassword}
-              aria-label={showPassword ? '隐藏密码' : '显示密码'}
-              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 transition hover:text-slate-200"
-            >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-        </Field>
-
-        <button
-          type="submit"
-          disabled={isBusy}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 py-3 font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-70"
-        >
-          {isBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-          确认修改
-        </button>
-      </form>
-    </section>
-  )
-}
-
-function PanelPagination({
+export function PanelPagination({
   page,
   pageSize,
   total,
@@ -4658,140 +3805,7 @@ function TaskHistoryPanel({
   )
 }
 
-function ActivityLogPanel({
-  items,
-  page,
-  pageSize,
-  total,
-  onPageChange,
-}: {
-  items: UserActivityItem[]
-  page: number
-  pageSize: number
-  total: number
-  onPageChange: (page: number) => void
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <PageHeader
-        title="活动记录"
-        description="查看生图、兑换码、积分和福利次数流水合并记录。"
-        action={<ReceiptText className="h-5 w-5 text-violet-300" />}
-      />
-
-      <div className="mt-4 space-y-3">
-        {items.length ? (
-          items.map((item) => (
-            <div key={item.id} className="flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-xs font-medium text-slate-300">
-                {item.imageUrl ? (
-                  <img src={item.imageUrl} alt={item.title} className="h-full w-full object-cover" />
-                ) : (
-                  <span className="text-[11px]">{getActivityShortLabel(item.recordType)}</span>
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-slate-200">{item.title}</div>
-                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{item.description}</p>
-                  </div>
-                  <span className="shrink-0 rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs text-slate-300">
-                    {getActivityRecordLabel(item.recordType)}
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                  <span>{formatDateTime(item.createdAt)}</span>
-                  <span>{getActivityRecordValue(item)}</span>
-                </div>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
-            暂无活动记录。
-          </div>
-        )}
-      </div>
-
-      <PanelPagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
-    </section>
-  )
-}
-
-function FlowLogsPanel({
-  pointsLogs,
-  creditLogs,
-  pointsPage,
-  creditPage,
-  pageSize,
-  pointsTotal,
-  creditTotal,
-  onPointsPageChange,
-  onCreditPageChange,
-}: {
-  pointsLogs: PointsLogItem[]
-  creditLogs: CreditLogItem[]
-  pointsPage: number
-  creditPage: number
-  pageSize: number
-  pointsTotal: number
-  creditTotal: number
-  onPointsPageChange: (page: number) => void
-  onCreditPageChange: (page: number) => void
-}) {
-  const [activeType, setActiveType] = useState<FlowLogType>('points')
-  const showingPoints = activeType === 'points'
-  const currentPage = showingPoints ? pointsPage : creditPage
-  const currentTotal = showingPoints ? pointsTotal : creditTotal
-  const onCurrentPageChange = showingPoints ? onPointsPageChange : onCreditPageChange
-
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-panel">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-md border border-slate-800 bg-slate-950 p-1">
-          <FlowLogTabButton
-            active={showingPoints}
-            icon={<Wallet className="h-4 w-4" />}
-            label="积分流水"
-            onClick={() => setActiveType('points')}
-          />
-          <FlowLogTabButton
-            active={!showingPoints}
-            icon={<Sparkles className="h-4 w-4" />}
-            label="福利次数流水"
-            onClick={() => setActiveType('credits')}
-          />
-        </div>
-        <div className="text-xs text-slate-500">
-          共 {currentTotal} 条，当前第 {currentPage} 页
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {showingPoints ? (
-          pointsLogs.length ? (
-            pointsLogs.map((item) => <PointsLogRow key={item.id} item={item} />)
-          ) : (
-            <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
-              暂无积分流水。
-            </div>
-          )
-        ) : creditLogs.length ? (
-          creditLogs.map((item) => <CreditLogRow key={item.id} item={item} />)
-        ) : (
-          <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
-            暂无福利次数流水。
-          </div>
-        )}
-      </div>
-
-      <PanelPagination page={currentPage} pageSize={pageSize} total={currentTotal} onPageChange={onCurrentPageChange} />
-    </section>
-  )
-}
-
-function FlowLogTabButton({
+export function FlowLogTabButton({
   active,
   icon,
   label,
@@ -5015,484 +4029,7 @@ function PreviewImageStage({
   )
 }
 
-function PromptPlaza({
-  items,
-  myItems,
-  favoriteIds,
-  submission,
-  onSubmissionChange,
-  onSubmit,
-  onFavorite,
-  onNotify,
-}: {
-  items: PromptGalleryItem[]
-  myItems: PromptGalleryItem[]
-  favoriteIds: string[]
-  submission: { title: string; prompt: string; previewUrl: string; tags: string[] }
-  onSubmissionChange: (value: { title: string; prompt: string; previewUrl: string; tags: string[] }) => void
-  onSubmit: () => void
-  onFavorite: (id: string) => void
-  onNotify: (value: string) => void
-}) {
-  const [favoritesOnly, setFavoritesOnly] = useState(false)
-  const [myUploadsOnly, setMyUploadsOnly] = useState(false)
-  const [showSubmissionModal, setShowSubmissionModal] = useState(false)
-  const [sortMode, setSortMode] = useState<PromptSortMode>('recommended')
-  const [sortOpen, setSortOpen] = useState(false)
-  const [searchKeyword, setSearchKeyword] = useState('')
-  const [activeDetailId, setActiveDetailId] = useState<string | null>(null)
-  const [submissionImageUploading, setSubmissionImageUploading] = useState(false)
-  const [submissionDragActive, setSubmissionDragActive] = useState(false)
-  const [submissionImageName, setSubmissionImageName] = useState('')
-  const submissionImageInputRef = useRef<HTMLInputElement | null>(null)
-  const approvedItems = useMemo(() => items.filter((item) => item.status === 'approved'), [items])
-
-  const serialMap = useMemo(() => {
-    const ordered = [...approvedItems].sort((a, b) => {
-      const aTime = new Date(a.approvedAt ?? a.createdAt).getTime()
-      const bTime = new Date(b.approvedAt ?? b.createdAt).getTime()
-      if (aTime !== bTime) return aTime - bTime
-      return a.id.localeCompare(b.id)
-    })
-    const map = new Map<string, string>()
-    ordered.forEach((item, index) => {
-      map.set(item.id, String(index + 1))
-    })
-    return map
-  }, [approvedItems])
-
-  const enrichedItems = useMemo(
-    () =>
-      approvedItems.map((item, index) => {
-        const serialNo = serialMap.get(item.id) ?? ''
-        const favorite = Boolean(item.isFavorited)
-        return {
-          ...item,
-          serialNo,
-          favorite,
-          displayFavorites: item.favorites,
-          recommendedOrder: index,
-        }
-      }),
-    [approvedItems, serialMap],
-  )
-
-  const visibleItems = useMemo(() => {
-    const keyword = searchKeyword.trim().toLowerCase()
-    const keywordSerial = keyword.replace('#', '')
-
-    let next = myUploadsOnly
-      ? myItems.map((item, index) => ({ ...item, serialNo: item.status === 'approved' ? serialMap.get(item.id) ?? '' : '', favorite: Boolean(item.isFavorited), displayFavorites: item.favorites, recommendedOrder: index }))
-      : enrichedItems
-    if (favoritesOnly) {
-      next = next.filter((item) => item.favorite)
-    }
-    if (keyword) {
-      next = next.filter((item) => {
-        const serialText = (item.serialNo ?? '').toLowerCase()
-        const serialMatch = serialText.includes(keyword) || serialText.replace('#', '').includes(keywordSerial)
-        const tagMatch = (item.tags ?? []).some((tag) => {
-          const normalizedTag = tag.toLowerCase()
-          return normalizedTag.includes(keyword.replace('#', '')) || `#${normalizedTag}`.includes(keyword)
-        })
-        const authorMatch = String(item.author ?? '').toLowerCase().includes(keyword)
-        return serialMatch || tagMatch || authorMatch
-      })
-    }
-
-    const sorted = [...next]
-    switch (sortMode) {
-      case 'favorites':
-        sorted.sort((a, b) => {
-          if (b.displayFavorites !== a.displayFavorites) return b.displayFavorites - a.displayFavorites
-          return a.recommendedOrder - b.recommendedOrder
-        })
-        break
-      case 'latest-approved':
-        sorted.sort((a, b) => {
-          const aTime = new Date(a.approvedAt ?? a.createdAt).getTime()
-          const bTime = new Date(b.approvedAt ?? b.createdAt).getTime()
-          if (bTime !== aTime) return bTime - aTime
-          return a.recommendedOrder - b.recommendedOrder
-        })
-        break
-      case 'serial':
-        sorted.sort((a, b) => {
-          const aSerial = Number((a.serialNo ?? '#0').replace('#', ''))
-          const bSerial = Number((b.serialNo ?? '#0').replace('#', ''))
-          return aSerial - bSerial
-        })
-        break
-      default:
-        sorted.sort((a, b) => a.recommendedOrder - b.recommendedOrder)
-        break
-    }
-    return sorted
-  }, [enrichedItems, favoritesOnly, myItems, myUploadsOnly, searchKeyword, serialMap, sortMode])
-
-  const activeDetail = useMemo(
-    () => enrichedItems.find((item) => item.id === activeDetailId) ?? null,
-    [activeDetailId, enrichedItems],
-  )
-
-  const sortOptions: Array<{ value: PromptSortMode; label: string }> = [
-    { value: 'recommended', label: '默认推荐' },
-    { value: 'favorites', label: '收藏最多' },
-    { value: 'latest-approved', label: '最新通过' },
-    { value: 'serial', label: '编号顺序' },
-  ]
-
-  const sortLabel = sortOptions.find((item) => item.value === sortMode)?.label ?? '默认推荐'
-  async function handleCopyPromptText(value: string) {
-    const copied = await copyTextToClipboard(value)
-    if (copied) {
-      onNotify('提示词已复制。')
-    } else {
-      onNotify('复制失败，请长按提示词手动复制。')
-    }
-  }
-
-  function handleSubmitShare() {
-    if (!submission.title.trim() || !submission.prompt.trim()) {
-      onNotify('请先填写提示词标题和正文。')
-      return
-    }
-    void onSubmit()
-    setSubmissionImageName('')
-    setShowSubmissionModal(false)
-  }
-
-  async function uploadSubmissionPreviewImage(file?: File) {
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      onNotify('请上传图片文件。')
-      return
-    }
-
-    try {
-      setSubmissionImageUploading(true)
-      const result = await api.uploadReferenceImage(file, 'prompt-plaza-preview')
-      onSubmissionChange({ ...submission, previewUrl: result.imageUrl })
-      setSubmissionImageName(file.name)
-      onNotify('缩略图已上传。')
-    } catch (error) {
-      onNotify(error instanceof Error ? error.message : '图片上传失败。')
-    } finally {
-      setSubmissionImageUploading(false)
-    }
-  }
-
-  async function handleSubmissionImageChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    await uploadSubmissionPreviewImage(file)
-  }
-
-  function handleSubmissionPromptDrag(event: DragEvent<HTMLTextAreaElement>) {
-    if (!Array.from(event.dataTransfer.types).includes('Files')) {
-      return
-    }
-    event.preventDefault()
-    setSubmissionDragActive(event.type === 'dragenter' || event.type === 'dragover')
-  }
-
-  async function handleSubmissionPromptDrop(event: DragEvent<HTMLTextAreaElement>) {
-    if (!Array.from(event.dataTransfer.types).includes('Files')) {
-      return
-    }
-    event.preventDefault()
-    setSubmissionDragActive(false)
-    const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith('image/'))
-    await uploadSubmissionPreviewImage(file)
-  }
-
-  async function handleSubmissionPromptPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith('image/'))
-    if (!file) {
-      return
-    }
-    event.preventDefault()
-    await uploadSubmissionPreviewImage(file)
-  }
-
-  return (
-    <div className="prompt-plaza space-y-2.5">
-      <div className="space-y-3">
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={() => setFavoritesOnly((current) => !current)}
-            className={`prompt-plaza-action inline-flex h-10 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition ${
-              favoritesOnly ? 'is-active' : ''
-            }`}
-          >
-            <Heart className="h-4 w-4" />
-            我的收藏
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMyUploadsOnly((current) => !current)
-              setFavoritesOnly(false)
-            }}
-            className={`prompt-plaza-action inline-flex h-10 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition ${
-              myUploadsOnly ? 'is-active' : ''
-            }`}
-          >
-            <Upload className="h-4 w-4" />
-            我的上传
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSubmissionModal(true)}
-            className="prompt-plaza-action inline-flex h-10 items-center justify-center gap-2 rounded-xl border text-sm font-medium transition"
-          >
-            <Upload className="h-4 w-4" />
-            上传分享
-          </button>
-        </div>
-
-        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setSortOpen((current) => !current)}
-              className="prompt-plaza-sort inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm transition"
-            >
-              <ArrowUpDown className="h-4 w-4" />
-              {sortLabel}
-              <ChevronDown className={`h-4 w-4 transition ${sortOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {sortOpen ? (
-              <div className="prompt-plaza-sort-menu absolute left-0 top-11 z-20 min-w-[144px] overflow-hidden rounded-lg border shadow-xl">
-                {sortOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => {
-                      setSortMode(option.value)
-                      setSortOpen(false)
-                    }}
-                    className={`block w-full px-3 py-2 text-left text-sm transition ${sortMode === option.value ? 'is-active' : ''}`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="prompt-plaza-search flex h-10 min-w-0 items-center overflow-hidden rounded-xl border text-left">
-            <Search className="ml-3 h-4 w-4 text-slate-400" />
-            <input
-              value={searchKeyword}
-              onChange={(event) => setSearchKeyword(event.target.value)}
-              className="min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
-              placeholder="搜索编号、标签或上传人"
-            />
-            {searchKeyword ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchKeyword('')
-                }}
-                className="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
-                aria-label="清空搜索"
-              >
-                <XCircle className="h-4 w-4" />
-              </button>
-            ) : null}
-            <span className="prompt-plaza-search-button flex h-full items-center px-3 text-sm font-medium">
-              搜索
-            </span>
-          </div>
-        </div>
-
-        <section className="grid grid-cols-2 gap-1.5 sm:gap-2 lg:grid-cols-3 xl:grid-cols-5">
-          {visibleItems.map((item, index) => (
-            <PromptCard
-              key={item.id}
-              item={item}
-              priority={index < 6}
-              onOpenDetail={() => setActiveDetailId(item.id)}
-              onFavorite={() => onFavorite(item.id)}
-            />
-          ))}
-        </section>
-
-        {!visibleItems.length ? (
-          <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/60 px-4 py-6 text-center text-sm text-slate-400">
-            {favoritesOnly
-              ? '当前还没有已收藏的提示词。'
-              : myUploadsOnly
-                ? '当前还没有上传过提示词。'
-              : searchKeyword.trim()
-                ? '没有匹配到编号、标签或上传人，试试别的关键词。'
-                : '暂时没有可展示的提示词。'}
-          </div>
-        ) : null}
-      </div>
-
-      {showSubmissionModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
-          <button
-            type="button"
-            className="absolute inset-0"
-            aria-label="关闭上传分享"
-            onClick={() => setShowSubmissionModal(false)}
-          />
-          <div className="relative flex max-h-[86dvh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-            <div className="shrink-0 border-b border-slate-800 px-4 py-3">
-              <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-100">上传分享</h3>
-              <button
-                type="button"
-                onClick={() => setShowSubmissionModal(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
-              >
-                <XCircle className="h-4 w-4" />
-              </button>
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-              <Field label="标题">
-                <input
-                  value={submission.title}
-                  onChange={(event) => onSubmissionChange({ ...submission, title: event.target.value })}
-                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
-                  placeholder="给这个灵感起个名字"
-                />
-              </Field>
-              <Field label="提示词">
-                <textarea
-                  value={submission.prompt}
-                  onChange={(event) => onSubmissionChange({ ...submission, prompt: event.target.value })}
-                  onDragEnter={handleSubmissionPromptDrag}
-                  onDragOver={handleSubmissionPromptDrag}
-                  onDragLeave={handleSubmissionPromptDrag}
-                  onDrop={(event) => void handleSubmissionPromptDrop(event)}
-                  onPaste={(event) => void handleSubmissionPromptPaste(event)}
-                  className={`min-h-28 w-full resize-y rounded-md border bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400 ${
-                    submissionDragActive ? 'border-violet-400 ring-2 ring-violet-400/20' : 'border-slate-700'
-                  }`}
-                  placeholder="写下完整提示词，也可以拖入或粘贴本地图片作为缩略图"
-                />
-              </Field>
-              <Field label="标签（可选）">
-                <div className="space-y-2">
-                  {submission.tags.map((tag, index) => (
-                    <div key={index} className="flex gap-2">
-                      <input
-                        value={tag}
-                        onChange={(event) => {
-                          const nextTags = [...submission.tags]
-                          nextTags[index] = event.target.value
-                          onSubmissionChange({ ...submission, tags: nextTags })
-                        }}
-                        className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
-                        placeholder={`标签 ${index + 1}`}
-                      />
-                      {index === 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (submission.tags.length >= 4) return
-                            onSubmissionChange({ ...submission, tags: [...submission.tags, ''] })
-                          }}
-                          disabled={submission.tags.length >= 4}
-                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-700 text-lg text-slate-200 transition hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label="增加标签"
-                        >
-                          +
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onSubmissionChange({ ...submission, tags: submission.tags.filter((_, tagIndex) => tagIndex !== index) })}
-                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-rose-400 hover:text-rose-200"
-                          aria-label="删除标签"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </Field>
-              <Field label="缩略图链接">
-                <input
-                  value={submission.previewUrl}
-                  onChange={(event) => {
-                    setSubmissionImageName('')
-                    onSubmissionChange({ ...submission, previewUrl: event.target.value })
-                  }}
-                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
-                  placeholder="https://..."
-                />
-              </Field>
-              <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => submissionImageInputRef.current?.click()}
-                    disabled={submissionImageUploading}
-                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-700 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {submissionImageUploading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-                    {submissionImageUploading ? '上传中...' : '选择本地照片'}
-                  </button>
-                  <span className="text-xs text-slate-500">也可以拖拽或复制粘贴图片到提示词区域。</span>
-                </div>
-                <input
-                  ref={submissionImageInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  className="hidden"
-                  onChange={(event) => void handleSubmissionImageChange(event)}
-                />
-                {submission.previewUrl ? (
-                  <div className="mt-3 flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
-                    <Image className="h-4 w-4 shrink-0 text-slate-500" />
-                    <span className="min-w-0 flex-1 truncate">{submissionImageName || '已填写缩略图链接'}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSubmissionImageName('')
-                        onSubmissionChange({ ...submission, previewUrl: '' })
-                      }}
-                      className="shrink-0 rounded-md px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
-                    >
-                      移除
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <div className="shrink-0 border-t border-slate-800 p-4">
-              <button
-                type="button"
-                onClick={handleSubmitShare}
-                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400"
-              >
-                <Send className="h-4 w-4" />
-                提交审核
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <PromptDetailDialog
-        item={activeDetail}
-        onClose={() => setActiveDetailId(null)}
-        onFavorite={() => (activeDetail ? onFavorite(activeDetail.id) : undefined)}
-        onCopy={() => (activeDetail ? void handleCopyPromptText(activeDetail.prompt) : undefined)}
-      />
-    </div>
-  )
-}
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
+export async function copyTextToClipboard(text: string): Promise<boolean> {
   const value = String(text ?? '')
   if (!value.trim()) {
     return false
@@ -5650,27 +4187,7 @@ function normalizePromptGalleryItem(item: PromptGalleryItem): PromptGalleryItem 
   }
 }
 
-function normalizePromptTags(tags: unknown): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-  const source = Array.isArray(tags)
-    ? tags
-    : typeof tags === 'string'
-      ? parsePromptTagString(tags)
-      : []
-  for (const tag of source) {
-    const normalized = String(tag ?? '').trim().replace(/^#+/, '').replace(/\s+/g, '')
-    if (!normalized) continue
-    const key = normalized.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    result.push(Array.from(normalized).slice(0, 24).join(''))
-    if (result.length >= 4) break
-  }
-  return result
-}
-
-function parsePromptTagString(value: string): string[] {
+export function parsePromptTagString(value: string): string[] {
   const trimmed = value.trim()
   if (!trimmed) return []
   if (trimmed.startsWith('[')) {
@@ -5684,7 +4201,7 @@ function parsePromptTagString(value: string): string[] {
   return trimmed.split(/[,，#\s]+/).filter(Boolean)
 }
 
-function PromptCard({
+export function PromptCard({
   item,
   priority,
   onFavorite,
@@ -5750,7 +4267,7 @@ function PromptCard({
   )
 }
 
-function PromptDetailDialog({
+export function PromptDetailDialog({
   item,
   onClose,
   onFavorite,
@@ -5826,291 +4343,6 @@ function PromptDetailDialog({
             </button>
           </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function ProductPage({
-  items,
-  categories,
-  keyword,
-  activeCategoryId,
-  onKeywordChange,
-  onCategoryChange,
-  onOpenDetail,
-}: {
-  items: ProductItem[]
-  categories: ProductCategoryItem[]
-  keyword: string
-  activeCategoryId: string
-  onKeywordChange: (value: string) => void
-  onCategoryChange: (value: string) => void
-  onOpenDetail: (item: ProductItem) => void
-}) {
-  return (
-    <section className="space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
-        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-950/70">
-          <Search className="h-4 w-4 text-slate-400" />
-          <input
-            value={keyword}
-            onChange={(event) => onKeywordChange(event.target.value)}
-            placeholder="搜索商品名、说明或分类"
-            className="min-w-0 flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-100"
-          />
-          {keyword ? (
-            <button type="button" onClick={() => onKeywordChange('')} className="text-xs text-slate-400 transition hover:text-slate-600 dark:hover:text-slate-200">
-              清空
-            </button>
-          ) : null}
-        </div>
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-          <button
-            type="button"
-            onClick={() => onCategoryChange('')}
-            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
-              activeCategoryId ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' : 'bg-amber-400 text-slate-900'
-            }`}
-          >
-            全部
-          </button>
-          {categories.map((category) => (
-            <button
-              key={category.id}
-              type="button"
-              onClick={() => onCategoryChange(category.id)}
-              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                activeCategoryId === category.id
-                  ? 'bg-amber-400 text-slate-900'
-                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-              }`}
-            >
-              {category.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-5">
-        {items.map((item) => {
-          const imageUrl = item.previewUrl || item.previewThumbUrl
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onOpenDetail(item)}
-              className="overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className="aspect-square overflow-hidden bg-slate-100 dark:bg-slate-950">
-                {imageUrl ? (
-                  <img
-                    src={imageUrl}
-                    alt={item.name}
-                    loading="lazy"
-                    decoding="async"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-slate-400">
-                    <ShoppingBag className="h-8 w-8" />
-                  </div>
-                )}
-              </div>
-              <div className="flex min-h-[92px] flex-col p-3">
-                <h3 className="truncate text-[15px] font-semibold leading-5 text-slate-900 dark:text-slate-100">{item.name}</h3>
-                {item.shortDescription ? (
-                  <p className="mt-1 line-clamp-2 text-[12px] leading-4 text-slate-500 dark:text-slate-400">{item.shortDescription}</p>
-                ) : (
-                  <p className="mt-1 text-[12px] leading-4 text-slate-300 dark:text-slate-600"> </p>
-                )}
-                <div className="mt-auto flex justify-end pt-2 text-sm font-bold text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    </section>
-  )
-}
-
-function ProductDetailDialog({
-  item,
-  onClose,
-  onConfirm,
-}: {
-  item: ProductItem
-  onClose: () => void
-  onConfirm: () => void
-}) {
-  const imageUrl = item.previewUrl || item.previewThumbUrl
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
-      <button type="button" className="absolute inset-0" aria-label="关闭商品详情" onClick={onClose} />
-      <div className="relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-          <h3 className="line-clamp-2 text-xl font-black tracking-tight text-slate-950 dark:text-slate-100">{item.name}</h3>
-          {item.shortDescription ? (
-            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{item.shortDescription}</p>
-          ) : null}
-          <div className="mt-2 text-lg font-black text-amber-600 dark:text-amber-300">{money(item.amountCents)}</div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-950">
-            {imageUrl ? (
-              <img src={imageUrl} alt={item.name} loading="lazy" decoding="async" className="aspect-square w-full object-cover" />
-            ) : (
-              <div className="flex aspect-square items-center justify-center bg-slate-100 text-slate-500 dark:bg-slate-950 dark:text-slate-500">
-                <ShoppingBag className="h-12 w-12" />
-              </div>
-            )}
-          </div>
-          {item.categories.length ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {item.categories.map((category) => (
-                <span key={category.id} className="rounded-full bg-amber-300 px-2.5 py-1 text-xs font-medium text-amber-950">
-                  {category.name}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-3 inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">未分类</div>
-          )}
-          {item.description ? (
-            <div className="mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm leading-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
-              {item.description}
-            </div>
-          ) : null}
-        </div>
-        <div className="grid grid-cols-2 border-t border-slate-200 dark:border-slate-800">
-          <button type="button" onClick={onClose} className="h-12 border-r border-slate-200 text-sm font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-950">
-            取消
-          </button>
-          <button type="button" onClick={onConfirm} className="h-12 text-sm font-bold text-amber-600 transition hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-slate-950">
-            {item.productUrl ? '购买' : '待配置'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function PackageSection({
-  title,
-  description,
-  icon,
-  items,
-  busy,
-  emptyText,
-  actionLabel,
-  busyPrefix,
-  onAction,
-  renderMeta,
-}: {
-  title: string
-  description: string
-  icon: ReactNode
-  items: PackageItem[]
-  busy: BusyAction
-  emptyText: string
-  actionLabel: string | ((item: PackageItem) => string)
-  busyPrefix: 'purchase:'
-  onAction: (packageCode: string) => void
-  renderMeta: (item: PackageItem) => ReactNode
-}) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-medium text-slate-100">{title}</h3>
-          <p className="mt-1 text-xs text-slate-500">{description}</p>
-        </div>
-        {icon}
-      </div>
-
-      <div className="mt-3 space-y-2">
-        {items.length ? (
-          items.map((item) => {
-            const label = typeof actionLabel === 'function' ? actionLabel(item) : actionLabel
-            return (
-              <button
-                key={item.code}
-                type="button"
-                onClick={() => onAction(item.code)}
-                disabled={busy === `${busyPrefix}${item.code}` || item.enabled === false}
-                className="flex w-full items-start justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-slate-100">{item.name}</span>
-                    {item.enabled === false ? (
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-500">停用</span>
-                    ) : null}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">{renderMeta(item)}</div>
-                </div>
-                <span className="shrink-0 rounded-md bg-violet-500 px-3 py-1.5 text-sm font-medium text-slate-950">
-                  {busy === `${busyPrefix}${item.code}` ? '处理中' : label}
-                </span>
-              </button>
-            )
-          })
-        ) : (
-          <div className="rounded-md border border-dashed border-slate-800 bg-slate-900 p-4 text-sm text-slate-500">
-            {emptyText}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function RedeemCodePanel({
-  code,
-  busy,
-  onCodeChange,
-  onSubmit,
-}: {
-  code: string
-  busy: boolean
-  onCodeChange: (value: string) => void
-  onSubmit: () => void
-}) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-medium text-slate-100">兑换码</h3>
-          <p className="mt-1 text-xs text-slate-500">输入已获得的兑换码，兑换积分或福利次数。</p>
-        </div>
-        <KeyRound className="h-4 w-4 text-emerald-300" />
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-        <label className="block">
-          <span className="mb-2 block text-xs text-slate-500">兑换码</span>
-          <input
-            value={code}
-            onChange={(event) => onCodeChange(event.target.value.toUpperCase())}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                onSubmit()
-              }
-            }}
-            className="h-10 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm uppercase tracking-wider text-slate-100 outline-none transition focus:border-emerald-400"
-            placeholder="输入兑换码"
-            autoComplete="off"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={onSubmit}
-          disabled={busy}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-emerald-400 px-4 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-          兑换
-        </button>
       </div>
     </div>
   )
@@ -6233,7 +4465,7 @@ function ProgressStat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function MiniStat({ label, value }: { label: string; value: ReactNode }) {
+export function MiniStat({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
       <div className="text-xs text-slate-500">{label}</div>
@@ -6242,7 +4474,7 @@ function MiniStat({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
-function RewardLines({ points, credits }: { points: number; credits: number }) {
+export function RewardLines({ points, credits }: { points: number; credits: number }) {
   return (
     <div className="space-y-1 leading-tight">
       <div>{Math.max(0, Number(points) || 0)}积分</div>
@@ -6251,7 +4483,7 @@ function RewardLines({ points, credits }: { points: number; credits: number }) {
   )
 }
 
-function PointsLogRow({ item }: { item: PointsLogItem }) {
+export function PointsLogRow({ item }: { item: PointsLogItem }) {
   const isPositive = item.delta >= 0
   const title = item.remark || getPointsChangeTypeLabel(item.changeType)
   return (
@@ -6273,7 +4505,7 @@ function PointsLogRow({ item }: { item: PointsLogItem }) {
   )
 }
 
-function CreditLogRow({ item }: { item: CreditLogItem }) {
+export function CreditLogRow({ item }: { item: CreditLogItem }) {
   const { beforeTotal, afterTotal, deltaTotal } = getCreditLogTotals(item)
   const title = item.remark || getCreditChangeTypeLabel(item.changeType)
   return (
@@ -6362,7 +4594,7 @@ function isPartialImageTaskStatus(status: string, imageCount: number, requestedC
   return status === 'success' && imageCount > 0 && imageCount < requested
 }
 
-function getActivityRecordLabel(recordType: UserActivityItem['recordType']): string {
+export function getActivityRecordLabel(recordType: UserActivityItem['recordType']): string {
   switch (recordType) {
     case 'image_task':
       return '生图'
@@ -6375,7 +4607,7 @@ function getActivityRecordLabel(recordType: UserActivityItem['recordType']): str
   }
 }
 
-function getActivityShortLabel(recordType: UserActivityItem['recordType']): string {
+export function getActivityShortLabel(recordType: UserActivityItem['recordType']): string {
   switch (recordType) {
     case 'image_task':
       return '图'
@@ -6388,7 +4620,7 @@ function getActivityShortLabel(recordType: UserActivityItem['recordType']): stri
   }
 }
 
-function getActivityRecordValue(item: UserActivityItem): string {
+export function getActivityRecordValue(item: UserActivityItem): string {
   if (item.recordType === 'points_log' && item.deltaPoints != null) {
     return `积分 ${formatSignedNumber(item.deltaPoints)}`
   }
@@ -6402,7 +4634,7 @@ function getActivityRecordValue(item: UserActivityItem): string {
   return formatDateTime(item.createdAt)
 }
 
-function getUserRoleLabel(role: string): string {
+export function getUserRoleLabel(role: string): string {
   switch (role) {
     case 'admin':
       return '管理员'
@@ -6718,7 +4950,7 @@ function readInviteCodeFromLocation(): string {
   }
 }
 
-function buildInviteLink(inviteCode: string): string {
+export function buildInviteLink(inviteCode: string): string {
   const code = inviteCode.trim()
   if (!code) {
     return ''
@@ -6726,7 +4958,7 @@ function buildInviteLink(inviteCode: string): string {
   return `${window.location.origin}/register?invite=${encodeURIComponent(code)}`
 }
 
-function formatInviteReward(credits: number, points: number): string {
+export function formatInviteReward(credits: number, points: number): string {
   const parts: string[] = []
   if (credits > 0) {
     parts.push(`${credits} 福利次数`)
@@ -6966,7 +5198,7 @@ function trimDownloadFileCache(cache: Map<string, DownloadedFile>, maxItems = 12
   }
 }
 
-function formatDateTime(value: string): string {
+export function formatDateTime(value: string): string {
   if (!value) {
     return '-'
   }
@@ -6985,7 +5217,7 @@ function formatDateTime(value: string): string {
   }
 }
 
-function money(cents: number): string {
+export function money(cents: number): string {
   const value = Number(cents || 0) / 100
   return `${value.toFixed(2)} 元`
 }
