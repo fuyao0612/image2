@@ -135,7 +135,6 @@ type GenerationStatus = 'idle' | 'running' | 'success' | 'failed'
 
 const REGISTRATION_ENABLED = String(import.meta.env.VITE_REGISTRATION_ENABLED ?? 'true').toLowerCase() !== 'false'
 const USER_THEME_STORAGE_KEY = 'image2-user-theme'
-const ACTIVE_PAGE_STORAGE_KEY = 'image2-active-page'
 const BRAND_ICON_URL = '/brand-avatar.jpg'
 const ICP_RECORD_NUMBER = '粤ICP备2026057742号'
 const ICP_RECORD_URL = 'https://beian.miit.gov.cn/'
@@ -216,15 +215,6 @@ function readStoredUserTheme(): UserTheme {
     return window.localStorage.getItem(USER_THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light'
   } catch {
     return 'light'
-  }
-}
-
-function readStoredActivePage(): AppPage {
-  try {
-    const value = window.localStorage.getItem(ACTIVE_PAGE_STORAGE_KEY)
-    return APP_PAGES.includes(value as AppPage) ? (value as AppPage) : 'home'
-  } catch {
-    return 'home'
   }
 }
 
@@ -457,13 +447,6 @@ function App() {
     }
     }, [userTheme])
 
-    useEffect(() => {
-    try {
-      window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage)
-    } catch {
-      // Ignore storage errors; page state still works for the current session.
-    }
-    }, [activePage])
 
     useEffect(() => {
     if (!emailNotifyAvailable && emailNotifyOnComplete) {
