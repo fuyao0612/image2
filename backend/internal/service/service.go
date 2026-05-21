@@ -916,7 +916,10 @@ func imageURLsFromResult(result provider.GenerateResult) []string {
 }
 
 func normalizeGeneratedImageURLs(result provider.GenerateResult, requestedCount int, referenceImageURL string) []string {
-	urls := imageURLsFromResult(result)
+	urls := mergeStringURLs(nil, result.ImageURLs)
+	if requestedCount <= 1 || len(urls) == 0 {
+		urls = mergeStringURLs(urls, []string{result.ImageURL})
+	}
 	if len(urls) == 0 {
 		return urls
 	}
