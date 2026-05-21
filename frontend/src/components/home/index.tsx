@@ -200,6 +200,7 @@ export function TaskHistoryPanel({
   page,
   pageSize,
   total,
+  selectedTaskId,
   onSelect,
   onPageChange,
 }: {
@@ -207,6 +208,7 @@ export function TaskHistoryPanel({
   page: number
   pageSize: number
   total: number
+  selectedTaskId: string | null
   onSelect: (item: ImageTaskItem) => void
   onPageChange: (page: number) => void
 }) {
@@ -232,8 +234,13 @@ export function TaskHistoryPanel({
               <button
                 key={item.id}
                 type="button"
+                aria-pressed={selectedTaskId === item.id}
                 onClick={() => onSelect(item)}
-                className="flex w-full items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-violet-400/50 hover:bg-slate-900"
+                className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/30 ${
+                  selectedTaskId === item.id
+                    ? 'border-violet-400/80 bg-slate-900 ring-1 ring-violet-400/20'
+                    : 'border-slate-800 bg-slate-950 hover:border-violet-400/50 hover:bg-slate-900'
+                }`}
               >
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-900 text-xs font-medium text-slate-300">
                   {cover ? (

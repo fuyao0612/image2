@@ -907,6 +907,7 @@ function handleApplyPreviewDetail() {
                     <textarea
                       value={prompt}
                       onChange={(event) => setPrompt(event.target.value)}
+                      maxLength={8192}
                       onDragEnter={handlePromptDrag}
                       onDragOver={handlePromptDrag}
                       onDragLeave={handlePromptDragLeave}
@@ -1167,11 +1168,12 @@ function handleApplyPreviewDetail() {
               </section>
 
                   <aside className="min-w-0 space-y-4 overflow-hidden">
-                    <TaskHistoryPanel
+                  <TaskHistoryPanel
                       items={history}
                       page={historyPage}
                       pageSize={HISTORY_PAGE_SIZE}
                       total={historyTotal}
+                      selectedTaskId={preview.taskId && preview.taskId !== '-' ? preview.taskId : null}
                       onSelect={handleSelectTask}
                       onPageChange={(page: number) => void loadHistoryPage(page)}
                     />
