@@ -90,7 +90,6 @@ export interface HomePageProps {
   limitImageURLs?: any;
   normalizeImageURLs?: any;
   onTaskCreated: (result: any, requestSnapshot: TaskRequestSnapshot, startedAt: number) => void;
-  homeStateRef?: any;
   activePage: string;
   points: any;
   billingSettings: any;
@@ -256,17 +255,6 @@ export function HomePage(props: HomePageProps) {
     }
     }
 
-
-  useEffect(() => {
-    if (props.homeStateRef) {
-      props.homeStateRef.current = {
-        prompt, setPrompt, size, setSize, customWidth, setCustomWidth, customHeight, setCustomHeight,
-        style, setStyle, count, setCount, quality, setQuality, outputFormat, setOutputFormat,
-        showNetworkImageInput, setShowNetworkImageInput, referenceImageURL, setReferenceImageURL,
-        promptDragActive, setPromptDragActive, referenceImagesDialogOpen, setReferenceImagesDialogOpen, referenceImages, setReferenceImages, referenceImageUploading, setReferenceImageUploading, referenceImageName, setReferenceImageName, referenceImageSource, setReferenceImageSource, referenceImageInputRef
-      }
-    }
-  }, [props.homeStateRef, count, referenceImages.length])
 
   const {
     setMessage, setBusy, handleApiError,

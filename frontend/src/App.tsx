@@ -344,7 +344,6 @@ const emptyPreview: ImageTaskDetailResponse = {
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
 function App() {
-    const homeStateRef = useRef<any>({})
     const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
       ? 'reset'
@@ -1428,17 +1427,6 @@ function App() {
     setSidebarOpen(false)
     }
 
-    function handleClearReferenceImage() {
-    homeStateRef.current.setReferenceImageURL('')
-    homeStateRef.current.setReferenceImageName('')
-    homeStateRef.current.setReferenceImageSource('none')
-    homeStateRef.current.setReferenceImages([])
-    homeStateRef.current.setReferenceImagesDialogOpen(false)
-    homeStateRef.current.setShowNetworkImageInput(false)
-    if ((homeStateRef.current.referenceImageInputRef?.current)) {
-      (homeStateRef.current.referenceImageInputRef?.current).value = ''
-    }
-    }
 
 
 
@@ -1901,7 +1889,6 @@ function App() {
                 setMessage={setMessage}
                 setBusy={setBusy}
                 handleApiError={handleApiError}
-                homeStateRef={homeStateRef}
                 activePage={activePage}
                 points={points}
                 billingSettings={billingSettings}
