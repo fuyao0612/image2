@@ -343,9 +343,6 @@ const emptyPreview: ImageTaskDetailResponse = {
 
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
-const CUSTOM_SIZE_MIN_PIXELS = 655360
-const CUSTOM_SIZE_MAX_PIXELS = 8294400
-const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
 function App() {
     const homeStateRef = useRef<any>({})
     const [mode, setMode] = useState<AuthMode>(() =>
@@ -1268,126 +1265,73 @@ function App() {
     setMessage('已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
     }
 
-    async function handleCreateTask() {
-    if (busy === 'create-task') {
-      return
-    }
-    if (!isAuthed) {
-      setMessage('请先登录，再提交生图任务。')
-      return
-    }
-
-    if (!imageGenerationEnabled) {
-      return
-    }
-
-    if (!(homeStateRef.current.prompt || '').trim()) {
-      setMessage('提示词不能为空。')
-      return
-    }
-    if (homeStateRef.current.referenceImageUploading || busy === 'upload-reference') {
-      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
-      return
-    }
-
-    const promptText = (homeStateRef.current.prompt || '').trim()
-    const sizeValidationMessage = validateSelectedSize(homeStateRef.current.size, homeStateRef.current.customWidth, homeStateRef.current.customHeight)
-    if (sizeValidationMessage) {
-      setMessage(sizeValidationMessage)
-      return
-    }
-
-    const requestSize = resolveSelectedSize(homeStateRef.current.size, homeStateRef.current.customWidth, homeStateRef.current.customHeight)
-    const taskCount = clampCount(homeStateRef.current.count)
-    const selectedReferenceImages = homeStateRef.current.referenceImages || []
-    const requestSnapshot = {
-      prompt: promptText,
-      size: requestSize,
-      style: homeStateRef.current.style,
-      count: taskCount,
-      quality: homeStateRef.current.quality,
-      outputFormat: homeStateRef.current.outputFormat,
-      referenceImageUrl: selectedReferenceImages[0]?.url || (homeStateRef.current.referenceImageURL || '').trim() || undefined,
-      referenceImageUrls: selectedReferenceImages.map((item: any) => item.url).filter(Boolean),
-      referenceImages: selectedReferenceImages,
-      emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
-    } satisfies TaskRequestSnapshot
-    const startedAt = Date.now()
-
-    try {
-      setBusy('create-task')
-      const result = await api.createImageTask(requestSnapshot)
-
-      const now = new Date().toISOString()
-      const requestedCount = Number(result.requestedCount ?? taskCount)
-      const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
-      setPreview(
-        detailToPreview({
-          taskId: result.taskId,
-          requestedCount,
-          prompt: promptText,
-          imageUrl: result.imageUrl,
-          imageUrls: resultImageURLs,
-          costPoints: Number(result.costPoints ?? 0),
-          costCredits: Number(result.costCredits ?? taskCount),
-          freeCreditsCost: Number(result.freeCreditsCost ?? 0),
-          paidCreditsCost: Number(result.paidCreditsCost ?? 0),
-          creditSource: result.creditSource || 'free',
-          emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
-          emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
-          status: result.status || 'generating',
-          requestParams: stringifyTaskRequestSnapshot(requestSnapshot),
-          errorMessage: result.errorMessage,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      setPreviewImageIndex(0)
-      setHistoryPage(1)
-      void loadHistoryPage(1, { showBusy: false })
-      setPoints((current: any) => {
-        if (!current) {
-          return current
-        }
-        return {
-          ...current,
-          balance: result.pointsBalance ?? current.balance,
-          creditsBalance: getResponseCreditsBalance(result, current.totalCredits),
-          freeCredits: result.freeCreditsBalance ?? current.freeCredits,
-          paidCredits: result.paidCreditsBalance ?? current.paidCredits,
-          totalCredits: getResponseCreditsBalance(result, current.totalCredits),
-        }
-      })
-      const generationStatus = normalizeGenerationStatus(result.status)
-      upsertGenerationProgress({
+      function onTaskCreated(result: any, requestSnapshot: TaskRequestSnapshot, startedAt: number) {
+    const taskCount = requestSnapshot.count
+    const now = new Date().toISOString()
+    const requestedCount = Number(result.requestedCount ?? taskCount)
+    const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
+    setPreview(
+      detailToPreview({
         taskId: result.taskId,
-        prompt: promptText,
-        status: generationStatus,
-        startedAt,
-        elapsedSeconds: 0,
-        imageElapsedSeconds: [],
-        total: requestedCount,
-        completed: generationStatus === 'running' ? 0 : requestedCount,
-        success: generationStatus === 'success' ? requestedCount : 0,
-        running: generationStatus === 'running' ? requestedCount : 0,
-        attempt: 1,
-        backendUrl: api.API_BASE_URL,
-        message:
-          generationStatus === 'running'
-            ? `任务已提交，任务编号：${result.taskId}，消耗 ${formatTaskCost(result, taskCount)}`
-            : generationStatus === 'success'
-              ? `任务已提交，任务编号：${result.taskId}，已直接完成。`
-              : `任务已提交，任务编号：${result.taskId}，生成失败。`,
-      })
-      if (generationStatus === 'failed') {
-        setMessage(`任务已提交，任务编号：${result.taskId}，${result.errorMessage || '但生成失败。'}`)
+        requestedCount,
+        prompt: requestSnapshot.prompt || '',
+        imageUrl: result.imageUrl,
+        imageUrls: resultImageURLs,
+        costPoints: Number(result.costPoints ?? 0),
+        costCredits: Number(result.costCredits ?? taskCount),
+        freeCreditsCost: Number(result.freeCreditsCost ?? 0),
+        paidCreditsCost: Number(result.paidCreditsCost ?? 0),
+        creditSource: result.creditSource || 'free',
+        emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
+        emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
+        status: result.status || 'generating',
+        requestParams: stringifyTaskRequestSnapshot(requestSnapshot),
+        errorMessage: result.errorMessage,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+    setPreviewImageIndex(0)
+    setHistoryPage(1)
+    void loadHistoryPage(1, { showBusy: false })
+    setPoints((current: any) => {
+      if (!current) {
+        return current
       }
-    } catch (error) {
-      handleApiError(error, '提交失败')
-    } finally {
-      setBusy(null)
+      return {
+        ...current,
+        balance: result.pointsBalance ?? current.balance,
+        creditsBalance: getResponseCreditsBalance(result, current.totalCredits),
+        freeCredits: result.freeCreditsBalance ?? current.freeCredits,
+        paidCredits: result.paidCreditsBalance ?? current.paidCredits,
+        totalCredits: getResponseCreditsBalance(result, current.totalCredits),
+      }
+    })
+    const generationStatus = normalizeGenerationStatus(result.status)
+    upsertGenerationProgress({
+      taskId: result.taskId,
+      prompt: requestSnapshot.prompt || '',
+      status: generationStatus,
+      startedAt,
+      elapsedSeconds: 0,
+      imageElapsedSeconds: [],
+      total: requestedCount,
+      completed: generationStatus === 'running' ? 0 : requestedCount,
+      success: generationStatus === 'success' ? requestedCount : 0,
+      running: generationStatus === 'running' ? requestedCount : 0,
+      attempt: 1,
+      backendUrl: api.API_BASE_URL,
+      message:
+        generationStatus === 'running'
+          ? `任务已提交，任务编号：${result.taskId}，消耗 ${formatTaskCost(result, taskCount)}`
+          : generationStatus === 'success'
+            ? `任务已提交，任务编号：${result.taskId}，已直接完成。`
+            : `任务已提交，任务编号：${result.taskId}，生成失败。`,
+    })
+    if (generationStatus === 'failed') {
+      setMessage(`任务已提交，任务编号：${result.taskId}，${result.errorMessage || '但生成失败。'}`)
     }
-    }
+  }
 
     async function handleRetryTask(taskId: string) {
     if (!isAuthed) {
@@ -2347,7 +2291,7 @@ function App() {
         <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
             <div className={activePage === 'home' ? 'block' : 'hidden'}>
               <HomePage
-                handleCreateTask={handleCreateTask}
+                onTaskCreated={onTaskCreated}
                 setMessage={setMessage}
                 setBusy={setBusy}
                 handleApiError={handleApiError}
@@ -3635,52 +3579,11 @@ function progressFromImageTaskItem(item: ImageTaskItem): GenerationProgress {
   }
 }
 
-function resolveSelectedSize(size: string, width: string | number, height: string | number): string {
-  if (size !== 'custom') {
-    return size
-  }
 
-  const safeWidth = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(width) || 1024)))
-  const safeHeight = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(height) || 1024)))
-  return `${safeWidth}x${safeHeight}`
-}
 
-function validateSelectedSize(size: string, width: string | number, height: string | number): string | null {
-  if (size !== 'custom') {
-    return null
-  }
 
-  const normalizedWidth = Math.floor(parseCustomDimension(width))
-  const normalizedHeight = Math.floor(parseCustomDimension(height))
-  if (
-    !Number.isFinite(normalizedWidth) ||
-    !Number.isFinite(normalizedHeight) ||
-    normalizedWidth <= 0 ||
-    normalizedHeight <= 0 ||
-    normalizedWidth > CUSTOM_SIZE_MAX_SIDE ||
-    normalizedHeight > CUSTOM_SIZE_MAX_SIDE
-  ) {
-    return CUSTOM_SIZE_LIMIT_MESSAGE
-  }
 
-  const totalPixels = normalizedWidth * normalizedHeight
-  if (totalPixels < CUSTOM_SIZE_MIN_PIXELS || totalPixels > CUSTOM_SIZE_MAX_PIXELS) {
-    return CUSTOM_SIZE_LIMIT_MESSAGE
-  }
 
-  return null
-}
-
-function parseCustomDimension(value: string | number): number {
-  if (typeof value === 'number') {
-    return value
-  }
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return Number.NaN
-  }
-  return Number(trimmed)
-}
 
 function parseImageSize(size: string): { width: number; height: number } | null {
   const match = size.trim().toLowerCase().match(/^(\d+)x(\d+)$/)

@@ -19,13 +19,62 @@ import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, output
 import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams } from '../utils/imageTasks';
 import * as api from "../api/client";
 import type { UploadImageResponse } from "../types/api";
-import type { ReferenceImageSource, ReferenceImageItem } from "../types/app";
+import type { ReferenceImageSource, ReferenceImageItem, TaskRequestSnapshot } from "../types/app";
 import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost } from '../utils/helpers';
 import { RechargeConfirmDialog } from './RechargePage';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
 
+const CUSTOM_SIZE_MIN_PIXELS = 655360
+const CUSTOM_SIZE_MAX_PIXELS = 8294400
+const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
+
+function parseCustomDimension(value: string | number): number {
+  if (typeof value === 'number') {
+    return value
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return Number.NaN
+  }
+  return Number(trimmed)
+}
+function resolveSelectedSize(size: string, width: string | number, height: string | number): string {
+  if (size !== 'custom') {
+    return size
+  }
+
+  const safeWidth = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(width) || 1024)))
+  const safeHeight = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(height) || 1024)))
+  return `${safeWidth}x${safeHeight}`
+}
+function validateSelectedSize(size: string, width: string | number, height: string | number): string | null {
+  if (size !== 'custom') {
+    return null
+  }
+
+  const normalizedWidth = Math.floor(parseCustomDimension(width))
+  const normalizedHeight = Math.floor(parseCustomDimension(height))
+  if (
+    !Number.isFinite(normalizedWidth) ||
+    !Number.isFinite(normalizedHeight) ||
+    normalizedWidth <= 0 ||
+    normalizedHeight <= 0 ||
+    normalizedWidth > CUSTOM_SIZE_MAX_SIDE ||
+    normalizedHeight > CUSTOM_SIZE_MAX_SIDE
+  ) {
+    return CUSTOM_SIZE_LIMIT_MESSAGE
+  }
+
+  const totalPixels = normalizedWidth * normalizedHeight
+  if (totalPixels < CUSTOM_SIZE_MIN_PIXELS || totalPixels > CUSTOM_SIZE_MAX_PIXELS) {
+    return CUSTOM_SIZE_LIMIT_MESSAGE
+  }
+
+  return null
+}
+
 export interface HomePageProps {
-  handleCreateTask: () => void;
+  onTaskCreated: (result: any, requestSnapshot: TaskRequestSnapshot, startedAt: number) => void;
   homeStateRef?: any;
   activePage: string;
   points: any;
@@ -287,7 +336,64 @@ hasRunningGeneration, handleClearPromptOptions,
 
   function handleConfirmCreateTask() {
     setGenerateConfirmOpen(false)
-    void props.handleCreateTask()
+    void handleCreateTask()
+  }
+
+  async function handleCreateTask() {
+    if (busy === 'create-task') {
+      return
+    }
+    if (!isAuthed) {
+      setMessage('请先登录，再提交生图任务。')
+      return
+    }
+
+    if (!imageGenerationEnabled) {
+      return
+    }
+
+    if (!(prompt || '').trim()) {
+      setMessage('提示词不能为空。')
+      return
+    }
+    if (referenceImageUploading || busy === 'upload-reference') {
+      setMessage('参考图还在上传，请等上传完成后再生成。大图会稍慢一点。')
+      return
+    }
+
+    const promptText = (prompt || '').trim()
+    const sizeValidationMessage = validateSelectedSize(size, customWidth, customHeight)
+    if (sizeValidationMessage) {
+      setMessage(sizeValidationMessage)
+      return
+    }
+
+    const requestSize = resolveSelectedSize(size, customWidth, customHeight)
+    const taskCount = clampCount(count)
+    const selectedReferenceImages = referenceImages || []
+    const requestSnapshot = {
+      prompt: promptText,
+      size: requestSize,
+      style: style,
+      count: taskCount,
+      quality: quality,
+      outputFormat: outputFormat,
+      referenceImageUrl: selectedReferenceImages[0]?.url || (referenceImageURL || '').trim() || undefined,
+      referenceImageUrls: selectedReferenceImages.map((item: any) => item.url).filter(Boolean),
+      referenceImages: selectedReferenceImages,
+      emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
+    } satisfies TaskRequestSnapshot
+    const startedAt = Date.now()
+
+    try {
+      setBusy('create-task')
+      const result = await api.createImageTask(requestSnapshot)
+      props.onTaskCreated(result, requestSnapshot, startedAt)
+    } catch (error) {
+      handleApiError(error, '提交失败')
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
