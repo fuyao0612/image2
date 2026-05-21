@@ -18,7 +18,7 @@ import {
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from '../constants/app';
 import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams } from '../utils/imageTasks';
 import * as api from "../api/client";
-import type { UploadImageResponse } from "../types/api";
+import type { UploadImageResponse, ImageTaskItem, ImageTaskDetailResponse } from "../types/api";
 import type { ReferenceImageSource, ReferenceImageItem, TaskRequestSnapshot } from "../types/app";
 import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost } from '../utils/helpers';
 import { RechargeConfirmDialog } from './RechargePage';
@@ -74,6 +74,19 @@ function validateSelectedSize(size: string, width: string | number, height: stri
 }
 
 export interface HomePageProps {
+  polledPreviewUpdate?: any;
+  emptyPreview?: any;
+  toPreview?: any;
+  detailToPreview?: any;
+  getDownloadCacheKey?: any;
+  trimDownloadFileCache?: any;
+  triggerImageDownload?: any;
+  isWeChatBrowser?: any;
+  parseTaskRequestParams?: any;
+  parsePreviewSizeState?: any;
+  normalizeReferenceImagesFromSnapshot?: any;
+  limitImageURLs?: any;
+  normalizeImageURLs?: any;
   onTaskCreated: (result: any, requestSnapshot: TaskRequestSnapshot, startedAt: number) => void;
   homeStateRef?: any;
   activePage: string;
@@ -86,31 +99,14 @@ export interface HomePageProps {
   busy: any;
   clampCount: (val: number) => number;
   hasRunningGeneration: boolean;
-  handleClearPromptOptions: (e?: any) => void;
-  preview: any;
-  setPreview: (val: any) => void;
-  previewImageIndex: number;
-  setPreviewImageIndex: (val: number) => void;
-  previewDetailOpen: boolean;
-  setPreviewDetailOpen: (val: boolean) => void;
-  handleSaveCurrentImage: () => void;
-  handlePreviousPreviewImage: () => void;
-  handleNextPreviewImage: () => void;
-  loadPreviewTaskDetail: (taskId: string) => Promise<any>;
-  generationProgresses: any[];
+                        generationProgresses: any[];
   history: any[];
   historyPage: number;
   historyTotal: number;
   loadHistoryPage: (page: number) => void;
-  handleSelectTask: (task: any) => void;
-  wechatSaveGuide: any;
-  setWechatSaveGuide: (val: any) => void;
-  isAuthed: boolean;
+        isAuthed: boolean;
   imageGenerationEnabled: boolean;
-  handleOpenPreviewDetail: (item: any) => void;
-  previewImageURLs: string[];
-  previewThumbnailURLs: string[];
-  setMessage: (msg: string) => void;
+        setMessage: (msg: string) => void;
   setBusy: (busy: any) => void;
   handleApiError: (err: any, fallback: string) => void;
 }
@@ -278,18 +274,278 @@ export function HomePage(props: HomePageProps) {
     setMessage, setBusy, handleApiError,
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
     setEmailNotifyOnComplete, emailNotifyPointCost, busy, clampCount,
-hasRunningGeneration, handleClearPromptOptions,
-    preview, setPreview, previewImageIndex, setPreviewImageIndex, previewDetailOpen,
-    setPreviewDetailOpen, handleSaveCurrentImage, handlePreviousPreviewImage,
-    handleNextPreviewImage, loadPreviewTaskDetail, generationProgresses, history,
-    historyPage, historyTotal, loadHistoryPage, handleSelectTask, wechatSaveGuide,
-    setWechatSaveGuide, isAuthed, imageGenerationEnabled,
-    handleOpenPreviewDetail, previewImageURLs, previewThumbnailURLs,
+hasRunningGeneration,
+    generationProgresses, history,
+    historyPage, historyTotal, loadHistoryPage,
+    isAuthed, imageGenerationEnabled,
 
   } = props;
 
     const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false)
   const imageGeneratePointCost = Math.max(0, Math.floor(Number(billingSettings?.imageGeneratePointCost ?? 20)))
+
+  
+  const [preview, setPreview] = useState<any>(props.emptyPreview)
+  const [previewImageIndex, setPreviewImageIndex] = useState(0)
+  const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
+  const [wechatSaveGuide, setWechatSaveGuide] = useState<any>({
+    open: false,
+    imageUrl: '',
+    title: '',
+  })
+  const downloadFileCacheRef = useRef<Map<string, any>>(new Map())
+  const downloadPendingRef = useRef<Map<string, Promise<any>>>(new Map())
+
+  const previewImageURLs = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+  const previewThumbnailURLs = props.limitImageURLs(
+    props.normalizeImageURLs(preview.thumbnailUrls, preview.thumbnailUrl),
+    preview.requestedCount,
+  )
+
+  useEffect(() => {
+    if (!props.isAuthed) {
+      setPreview(props.emptyPreview)
+      setPreviewImageIndex(0)
+      setPreviewDetailOpen(false)
+      downloadFileCacheRef.current.clear()
+    }
+  }, [props.isAuthed])
+
+  useEffect(() => {
+    if (props.polledPreviewUpdate && props.polledPreviewUpdate.taskId === preview.taskId) {
+      setPreview((current: any) => ({ ...current, ...props.polledPreviewUpdate.preview }))
+      if (props.polledPreviewUpdate.isFinal) {
+        setPreviewImageIndex(0)
+      }
+    }
+  }, [props.polledPreviewUpdate])
+
+useEffect(() => {
+    const imageURLs = props.normalizeImageURLs(preview.imageUrls, preview.imageUrl)
+    if (!isAuthed || props.isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
+      return
+    }
+
+    imageURLs.forEach((_: any, index: number) => {
+      void prefetchImageDownload(preview.taskId, index)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.isAuthed, preview.taskId, preview.status, preview.imageUrl, preview.imageUrls])
+
+useEffect(() => {
+    if (previewImageURLs.length === 0) {
+      if (previewImageIndex !== 0) {
+        setPreviewImageIndex(0)
+      }
+      return
+    }
+
+    if (previewImageIndex >= previewImageURLs.length) {
+      setPreviewImageIndex(previewImageURLs.length - 1)
+    }
+    }, [previewImageIndex, previewImageURLs.length])
+
+function handleSelectTask(item: ImageTaskItem) {
+    if (preview.taskId === item.id) {
+      setPreview(props.emptyPreview)
+      setPreviewImageIndex(0)
+      setPreviewDetailOpen(false)
+      return
+    }
+    const nextPreview = props.toPreview(item)
+    setPreview(nextPreview)
+    setPreviewImageIndex(0)
+    if (item.id && item.id !== '-') {
+      void loadPreviewTaskDetail(item.id)
+    }
+    }
+
+function handlePreviousPreviewImage() {
+    setPreviewImageIndex((current: any) => {
+      const total = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
+      if (total <= 1) {
+        return current
+      }
+      return (current - 1 + total) % total
+    })
+    }
+
+function handleNextPreviewImage() {
+    setPreviewImageIndex((current: any) => {
+      const total = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
+      if (total <= 1) {
+        return current
+      }
+      return (current + 1) % total
+    })
+    }
+
+async function handleSaveCurrentImage() {
+    const imageURLs = props.limitImageURLs(props.normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
+    const imageUrl = imageURLs[previewImageIndex] ?? imageURLs[0]
+    if (!imageUrl) {
+      setMessage('当前没有可保存的图片。')
+      return
+    }
+    if (props.isWeChatBrowser()) {
+      setWechatSaveGuide({
+        open: true,
+        imageUrl,
+        title: preview.prompt ? `第 ${previewImageIndex + 1} 张图片` : '当前图片',
+      })
+      setMessage('微信内请长按图片保存。')
+      return
+    }
+    if (!preview.taskId || preview.taskId === '-') {
+      setMessage('当前图片缺少任务编号，暂时无法直接下载。')
+      return
+    }
+
+    try {
+      const cacheKey = props.getDownloadCacheKey(preview.taskId, previewImageIndex)
+      const cached = downloadFileCacheRef.current.get(cacheKey)
+      if (cached) {
+        props.triggerImageDownload(cached.blob, cached.fileName)
+        return
+      }
+
+      setMessage('正在准备下载，请稍等。')
+      const downloaded = await loadImageDownload(preview.taskId, previewImageIndex)
+      props.triggerImageDownload(downloaded.blob, downloaded.fileName)
+    } catch (error) {
+      handleApiError(error, '保存当前图片失败')
+    }
+    }
+
+async function prefetchImageDownload(taskId: string, imageIndex: number) {
+    const cacheKey = props.getDownloadCacheKey(taskId, imageIndex)
+    if (downloadFileCacheRef.current.has(cacheKey) || downloadPendingRef.current.has(cacheKey)) {
+      return
+    }
+
+    try {
+      await loadImageDownload(taskId, imageIndex)
+    } catch (error) {
+      console.warn('prefetch image download failed', error)
+    }
+    }
+
+async function loadImageDownload(taskId: string, imageIndex: number): Promise<api.DownloadedFile> {
+    const cacheKey = props.getDownloadCacheKey(taskId, imageIndex)
+    const cached = downloadFileCacheRef.current.get(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    const pending = downloadPendingRef.current.get(cacheKey)
+    if (pending) {
+      return pending
+    }
+
+    const pendingDownload = api.downloadImageTaskImage(taskId, imageIndex)
+      .then((downloaded) => {
+        downloadFileCacheRef.current.set(cacheKey, downloaded)
+        props.trimDownloadFileCache(downloadFileCacheRef.current)
+        return downloaded
+      })
+      .finally(() => {
+        downloadPendingRef.current.delete(cacheKey)
+      })
+
+    downloadPendingRef.current.set(cacheKey, pendingDownload)
+    return pendingDownload
+    }
+
+async function handleOpenPreviewDetail() {
+    if (!preview.taskId || preview.taskId === '-') {
+      setMessage('当前展示区还没有提示词详情。')
+      return
+    }
+
+    const detail = await loadPreviewTaskDetail(preview.taskId)
+    if (!detail) {
+      return
+    }
+    setPreviewDetailOpen(true)
+    }
+
+async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
+    if (!taskId || taskId === '-') {
+      return null
+    }
+
+    try {
+      const detail = await api.getImageTask(taskId)
+      const nextPreview = props.detailToPreview(detail)
+      setPreview((current: any) => (current.taskId === taskId ? nextPreview : current))
+      return nextPreview
+    } catch (error) {
+      handleApiError(error, '任务详情加载失败')
+      return null
+    }
+    }
+
+function handleApplyPreviewDetail() {
+    const parsed = props.parseTaskRequestParams(preview.requestParams)
+    const promptText = parsed?.prompt?.trim() || preview.prompt.trim()
+
+    setPrompt(promptText)
+    if (typeof parsed?.style === 'string') {
+      setStyle(parsed.style)
+    }
+    if (typeof parsed?.count === 'number' || typeof parsed?.count === 'string') {
+      setCount(clampCount(Number(parsed.count)))
+    }
+    if (typeof parsed?.quality === 'string') {
+      setQuality(parsed.quality)
+    }
+    if (typeof parsed?.outputFormat === 'string') {
+      setOutputFormat(parsed.outputFormat)
+    }
+
+    const sizeState = props.parsePreviewSizeState(parsed?.size)
+    if (sizeState) {
+      setSize(sizeState.size)
+      if (typeof sizeState.customWidth === 'number' && typeof sizeState.customHeight === 'number') {
+          setCustomWidth(String(sizeState.customWidth))
+          setCustomHeight(String(sizeState.customHeight))
+      }
+    }
+
+    const parsedReferenceImages = props.normalizeReferenceImagesFromSnapshot(parsed)
+    const firstReferenceImage = parsedReferenceImages[0]
+    setReferenceImages(parsedReferenceImages)
+    setReferenceImageURL(firstReferenceImage?.url || '')
+    setReferenceImageName(firstReferenceImage?.name || '')
+    setReferenceImageSource(firstReferenceImage?.source || 'none')
+    setShowNetworkImageInput(false)
+            setPreviewDetailOpen(false)
+    }
+
+
+  
+  function handleClearPromptOptions() {
+    const confirmed = window.confirm('是否清除当前提示词以及选项信息？')
+    if (!confirmed) {
+      return
+    }
+
+    setPrompt('')
+    setSize('1024x1024')
+    setStyle('')
+    setCount(1)
+    setQuality('auto')
+    setOutputFormat('default')
+    setCustomWidth('1024')
+    setCustomHeight('1024')
+    setReferenceImageURL('')
+    setReferenceImageName('')
+    setReferenceImageSource('none')
+    setShowNetworkImageInput(false)
+    if (referenceImageInputRef?.current) {
+      referenceImageInputRef.current.value = ''
+    }
+  }
 
   const estimatedGenerationPointCost = useMemo(() => {
     const taskCount = clampCount(Number(count) || 1)
@@ -389,6 +645,30 @@ hasRunningGeneration, handleClearPromptOptions,
       setBusy('create-task')
       const result = await api.createImageTask(requestSnapshot)
       props.onTaskCreated(result, requestSnapshot, startedAt)
+      const taskCount = requestSnapshot.count || 1
+      const requestedCount = Number(result.requestedCount ?? taskCount)
+      const resultImageURLs = props.limitImageURLs(props.normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
+      const now = new Date().toISOString()
+      setPreview(props.detailToPreview({
+        taskId: result.taskId,
+        requestedCount,
+        prompt: promptText,
+        imageUrl: result.imageUrl,
+        imageUrls: resultImageURLs,
+        costPoints: Number(result.costPoints ?? 0),
+        costCredits: Number(result.costCredits ?? taskCount),
+        freeCreditsCost: Number(result.freeCreditsCost ?? 0),
+        paidCreditsCost: Number(result.paidCreditsCost ?? 0),
+        creditSource: result.creditSource || 'free',
+        emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
+        emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
+        status: result.status || 'generating',
+        requestParams: '',
+        errorMessage: result.errorMessage,
+        createdAt: now,
+        updatedAt: now,
+      }))
+      setPreviewImageIndex(0)
     } catch (error) {
       handleApiError(error, '提交失败')
     } finally {
@@ -685,7 +965,7 @@ hasRunningGeneration, handleClearPromptOptions,
                       </div>
                       <button
                         type="button"
-                        onClick={() => void handleOpenPreviewDetail(preview)}
+                        onClick={() => void handleOpenPreviewDetail()}
                         className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
                       >
                         <Eye className="h-4 w-4" />
@@ -724,6 +1004,21 @@ hasRunningGeneration, handleClearPromptOptions,
                 </div>
               </div>
 
+      
+      {wechatSaveGuide.open ? (
+        <WechatSaveGuide
+          imageUrl={wechatSaveGuide.imageUrl}
+          title={wechatSaveGuide.title}
+          onClose={() => setWechatSaveGuide({ open: false, imageUrl: '', title: '' })}
+        />
+      ) : null}
+      {previewDetailOpen ? (
+        <PreviewDetailDialog
+          preview={preview}
+          onClose={() => setPreviewDetailOpen(false)}
+          onApply={handleApplyPreviewDetail}
+        />
+      ) : null}
       {referenceImagesDialogOpen ? (
         <ReferenceImagesDialog
           images={referenceImages}

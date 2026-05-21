@@ -421,9 +421,6 @@ function App() {
     const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
     const [announcementDialogOpen, setAnnouncementDialogOpen] = useState(false)
     const [activeAnnouncementId, setActiveAnnouncementId] = useState<string | null>(null)
-    const [preview, setPreview] = useState<ImageTaskDetailResponse>(emptyPreview)
-    const [previewImageIndex, setPreviewImageIndex] = useState(0)
-    const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
     const [wechatSaveGuide, setWechatSaveGuide] = useState<WechatSaveGuideState>({
     open: false,
     imageUrl: '',
@@ -439,11 +436,9 @@ function App() {
     previewUrl: '',
     tags: [''],
     })
-    const previewTaskIdRef = useRef(emptyPreview.taskId)
     const pollingTaskIdsRef = useRef<Set<string>>(new Set())
+    const [polledPreviewUpdate, setPolledPreviewUpdate] = useState<any>(null)
     const checkinInFlightRef = useRef(false)
-    const downloadFileCacheRef = useRef<Map<string, DownloadedFile>>(new Map())
-    const downloadPendingRef = useRef<Map<string, Promise<DownloadedFile>>>(new Map())
 
     const isAuthed = token.length > 0
     const isAdmin = currentUser?.role === 'admin'
@@ -523,21 +518,6 @@ function App() {
     void loadPackages()
     }, [])
 
-    useEffect(() => {
-    previewTaskIdRef.current = preview.taskId
-    }, [preview.taskId])
-
-    useEffect(() => {
-    const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
-    if (!isAuthed || isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
-      return
-    }
-
-    imageURLs.forEach((_, index) => {
-      void prefetchImageDownload(preview.taskId, index)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isAuthed, preview.taskId, preview.status, preview.imageUrl, preview.imageUrls])
 
     useEffect(() => {
     if (isAuthed) {
@@ -550,12 +530,7 @@ function App() {
       setAnnouncements([])
       setAnnouncementDialogOpen(false)
       setActiveAnnouncementId(null)
-      setPreview(emptyPreview)
-      setPreviewImageIndex(0)
-      setPreviewDetailOpen(false)
       setWechatSaveGuide({ open: false, imageUrl: '', title: '' })
-      downloadFileCacheRef.current.clear()
-      downloadPendingRef.current.clear()
       pollingTaskIdsRef.current.clear()
       setGenerationProgresses([])
     }
@@ -736,33 +711,7 @@ function App() {
                 ? `已拿到 ${imageURLs.length} 张图片`
                 : '任务已完成'
 
-          setPreview((current) =>
-            current.taskId === taskId
-                ? {
-                  ...current,
-                  requestedCount: detail.requestedCount || detailCount,
-                  prompt: detail.prompt,
-                  imageUrl: detail.imageUrl,
-                  imageUrls: imageURLs,
-                  imageElapsedSeconds: persistedElapsedSeconds,
-                  thumbnailUrl: detail.thumbnailUrl,
-                  thumbnailUrls: detail.thumbnailUrls,
-                  provider: detail.provider,
-                  providerTaskId: detail.providerTaskId,
-                  providerResponse: detail.providerResponse,
-                  costPoints: detail.costPoints,
-                  costCredits: detail.costCredits,
-                  freeCreditsCost: detail.freeCreditsCost,
-                  paidCreditsCost: detail.paidCreditsCost,
-                  creditSource: detail.creditSource,
-                  status: detail.status,
-                  requestParams: detail.requestParams,
-                  errorMessage: detail.errorMessage,
-                  createdAt: detail.createdAt,
-                  updatedAt: detail.updatedAt,
-                }
-              : current,
-          )
+          setPolledPreviewUpdate({ taskId, preview: { requestedCount: detail.requestedCount || detailCount, prompt: detail.prompt, imageUrl: detail.imageUrl, imageUrls: imageURLs, imageElapsedSeconds: persistedElapsedSeconds, thumbnailUrl: detail.thumbnailUrl, thumbnailUrls: detail.thumbnailUrls, provider: detail.provider, providerTaskId: detail.providerTaskId, providerResponse: detail.providerResponse, costPoints: detail.costPoints, costCredits: detail.costCredits, freeCreditsCost: detail.freeCreditsCost, paidCreditsCost: detail.paidCreditsCost, creditSource: detail.creditSource, status: detail.status, requestParams: detail.requestParams, errorMessage: detail.errorMessage, createdAt: detail.createdAt, updatedAt: detail.updatedAt }, isFinal: false })
           setHistory((current) =>
             current.map((item) =>
               item.id === taskId
@@ -791,11 +740,7 @@ function App() {
           )
 
           if (isFinal) {
-            const finalPreview = detailToPreview(detail)
-            setPreview((current) => (current.taskId === taskId ? finalPreview : current))
-            if (previewTaskIdRef.current === taskId) {
-              setPreviewImageIndex(0)
-            }
+            setPolledPreviewUpdate({ taskId, preview: detailToPreview(detail), isFinal: true })
             updateGenerationProgress(taskId, (current) => ({
               ...current,
               prompt: detail.prompt,
@@ -1270,28 +1215,6 @@ function App() {
     const now = new Date().toISOString()
     const requestedCount = Number(result.requestedCount ?? taskCount)
     const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
-    setPreview(
-      detailToPreview({
-        taskId: result.taskId,
-        requestedCount,
-        prompt: requestSnapshot.prompt || '',
-        imageUrl: result.imageUrl,
-        imageUrls: resultImageURLs,
-        costPoints: Number(result.costPoints ?? 0),
-        costCredits: Number(result.costCredits ?? taskCount),
-        freeCreditsCost: Number(result.freeCreditsCost ?? 0),
-        paidCreditsCost: Number(result.paidCreditsCost ?? 0),
-        creditSource: result.creditSource || 'free',
-        emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
-        emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
-        status: result.status || 'generating',
-        requestParams: stringifyTaskRequestSnapshot(requestSnapshot),
-        errorMessage: result.errorMessage,
-        createdAt: now,
-        updatedAt: now,
-      }),
-    )
-    setPreviewImageIndex(0)
     setHistoryPage(1)
     void loadHistoryPage(1, { showBusy: false })
     setPoints((current: any) => {
@@ -1333,270 +1256,25 @@ function App() {
     }
   }
 
-    async function handleRetryTask(taskId: string) {
-    if (!isAuthed) {
-      setMessage('请先登录，再重试任务。')
-      return
-    }
-    if (!taskId || taskId === '-') {
-      setMessage('请先选择一个历史任务。')
-      return
-    }
-    const startedAt = Date.now()
-    const optimisticTotal = getPreviewRequestedCount(preview, 1)
+    
 
-    try {
-      setBusy(`retry:${taskId}`)
-      const result = await api.retryImageTask(taskId)
-      const now = new Date().toISOString()
-      const requestedCount = Number(result.requestedCount ?? optimisticTotal)
-      const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
-      setPreview(
-        detailToPreview({
-          taskId: result.taskId,
-          requestedCount,
-          prompt: preview.prompt,
-          imageUrl: result.imageUrl,
-          imageUrls: resultImageURLs,
-          costPoints: Number(result.costPoints ?? 0),
-          costCredits: Number(result.costCredits ?? optimisticTotal),
-          freeCreditsCost: Number(result.freeCreditsCost ?? 0),
-          paidCreditsCost: Number(result.paidCreditsCost ?? 0),
-          creditSource: result.creditSource || 'free',
-          emailNotifyEnabled: Boolean(result.emailNotifyEnabled),
-          emailNotifyCostPoints: Number(result.emailNotifyCostPoints ?? 0),
-          status: result.status || 'generating',
-          requestParams: preview.requestParams,
-          errorMessage: result.errorMessage,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      setPreviewImageIndex(0)
-      setHistoryPage(1)
-      void loadHistoryPage(1, { showBusy: false })
-      setPoints((current: any) => {
-        if (!current) {
-          return current
-        }
-        return {
-          ...current,
-          balance: result.pointsBalance ?? current.balance,
-          creditsBalance: getResponseCreditsBalance(result, current.totalCredits),
-          freeCredits: result.freeCreditsBalance ?? current.freeCredits,
-          paidCredits: result.paidCreditsBalance ?? current.paidCredits,
-          totalCredits: getResponseCreditsBalance(result, current.totalCredits),
-        }
-      })
-      const generationStatus = normalizeGenerationStatus(result.status)
-      upsertGenerationProgress({
-        taskId: result.taskId,
-        prompt: preview.prompt,
-        status: generationStatus,
-        startedAt,
-        elapsedSeconds: 0,
-        imageElapsedSeconds: [],
-        total: requestedCount,
-        completed: generationStatus === 'running' ? 0 : requestedCount,
-        success: generationStatus === 'success' ? requestedCount : 0,
-        running: generationStatus === 'running' ? requestedCount : 0,
-        attempt: 1,
-        backendUrl: api.API_BASE_URL,
-        message:
-          generationStatus === 'running'
-            ? `任务已重试，任务编号：${result.taskId}`
-            : generationStatus === 'success'
-              ? `任务已重试，任务编号：${result.taskId}，已直接完成。`
-              : `任务已重试，任务编号：${result.taskId}，生成失败。`,
-      })
-      if (generationStatus === 'failed') {
-        setMessage(`任务已重试，任务编号：${result.taskId}，${result.errorMessage || '但生成失败。'}`)
-      }
-    } catch (error) {
-      handleApiError(error, '重试任务失败')
-    } finally {
-      setBusy(null)
-    }
-    }
+    
 
-    function handleSelectTask(item: ImageTaskItem) {
-    if (preview.taskId === item.id) {
-      setPreview(emptyPreview)
-      setPreviewImageIndex(0)
-      setPreviewDetailOpen(false)
-      return
-    }
-    const nextPreview = toPreview(item)
-    setPreview(nextPreview)
-    setPreviewImageIndex(0)
-    if (item.id && item.id !== '-') {
-      void loadPreviewTaskDetail(item.id)
-    }
-    }
+    
 
-    function handlePreviousPreviewImage() {
-    setPreviewImageIndex((current: any) => {
-      const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
-      if (total <= 1) {
-        return current
-      }
-      return (current - 1 + total) % total
-    })
-    }
+    
 
-    function handleNextPreviewImage() {
-    setPreviewImageIndex((current: any) => {
-      const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
-      if (total <= 1) {
-        return current
-      }
-      return (current + 1) % total
-    })
-    }
+    
 
-    async function handleSaveCurrentImage() {
-    const imageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
-    const imageUrl = imageURLs[previewImageIndex] ?? imageURLs[0]
-    if (!imageUrl) {
-      setMessage('当前没有可保存的图片。')
-      return
-    }
-    if (isWeChatBrowser()) {
-      setWechatSaveGuide({
-        open: true,
-        imageUrl,
-        title: preview.prompt ? `第 ${previewImageIndex + 1} 张图片` : '当前图片',
-      })
-      setMessage('微信内请长按图片保存。')
-      return
-    }
-    if (!preview.taskId || preview.taskId === '-') {
-      setMessage('当前图片缺少任务编号，暂时无法直接下载。')
-      return
-    }
+    
 
-    try {
-      const cacheKey = getDownloadCacheKey(preview.taskId, previewImageIndex)
-      const cached = downloadFileCacheRef.current.get(cacheKey)
-      if (cached) {
-        triggerImageDownload(cached.blob, cached.fileName)
-        return
-      }
+    
 
-      setMessage('正在准备下载，请稍等。')
-      const downloaded = await loadImageDownload(preview.taskId, previewImageIndex)
-      triggerImageDownload(downloaded.blob, downloaded.fileName)
-    } catch (error) {
-      handleApiError(error, '保存当前图片失败')
-    }
-    }
+    
 
-    async function prefetchImageDownload(taskId: string, imageIndex: number) {
-    const cacheKey = getDownloadCacheKey(taskId, imageIndex)
-    if (downloadFileCacheRef.current.has(cacheKey) || downloadPendingRef.current.has(cacheKey)) {
-      return
-    }
+    
 
-    try {
-      await loadImageDownload(taskId, imageIndex)
-    } catch (error) {
-      console.warn('prefetch image download failed', error)
-    }
-    }
-
-    async function loadImageDownload(taskId: string, imageIndex: number): Promise<DownloadedFile> {
-    const cacheKey = getDownloadCacheKey(taskId, imageIndex)
-    const cached = downloadFileCacheRef.current.get(cacheKey)
-    if (cached) {
-      return cached
-    }
-
-    const pending = downloadPendingRef.current.get(cacheKey)
-    if (pending) {
-      return pending
-    }
-
-    const pendingDownload = api.downloadImageTaskImage(taskId, imageIndex)
-      .then((downloaded) => {
-        downloadFileCacheRef.current.set(cacheKey, downloaded)
-        trimDownloadFileCache(downloadFileCacheRef.current)
-        return downloaded
-      })
-      .finally(() => {
-        downloadPendingRef.current.delete(cacheKey)
-      })
-
-    downloadPendingRef.current.set(cacheKey, pendingDownload)
-    return pendingDownload
-    }
-
-    async function handleOpenPreviewDetail() {
-    if (!preview.taskId || preview.taskId === '-') {
-      setMessage('当前展示区还没有提示词详情。')
-      return
-    }
-
-    const detail = await loadPreviewTaskDetail(preview.taskId)
-    if (!detail) {
-      return
-    }
-    setPreviewDetailOpen(true)
-    }
-
-    async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
-    if (!taskId || taskId === '-') {
-      return null
-    }
-
-    try {
-      const detail = await api.getImageTask(taskId)
-      const nextPreview = detailToPreview(detail)
-      setPreview((current) => (current.taskId === taskId ? nextPreview : current))
-      return nextPreview
-    } catch (error) {
-      handleApiError(error, '任务详情加载失败')
-      return null
-    }
-    }
-
-    function handleApplyPreviewDetail() {
-    const parsed = parseTaskRequestParams(preview.requestParams)
-    const promptText = parsed?.prompt?.trim() || preview.prompt.trim()
-
-    homeStateRef.current.setPrompt(promptText)
-    if (typeof parsed?.style === 'string') {
-      homeStateRef.current.setStyle(parsed.style)
-    }
-    if (typeof parsed?.count === 'number' || typeof parsed?.count === 'string') {
-      homeStateRef.current.setCount(clampCount(Number(parsed.count)))
-    }
-    if (typeof parsed?.quality === 'string') {
-      homeStateRef.current.setQuality(parsed.quality)
-    }
-    if (typeof parsed?.outputFormat === 'string') {
-      homeStateRef.current.setOutputFormat(parsed.outputFormat)
-    }
-
-    const sizeState = parsePreviewSizeState(parsed?.size)
-    if (sizeState) {
-      homeStateRef.current.setSize(sizeState.size)
-      if (typeof sizeState.customWidth === 'number' && typeof sizeState.customHeight === 'number') {
-          homeStateRef.current.setCustomWidth(String(sizeState.customWidth))
-          homeStateRef.current.setCustomHeight(String(sizeState.customHeight))
-      }
-    }
-
-    const parsedReferenceImages = normalizeReferenceImagesFromSnapshot(parsed)
-    const firstReferenceImage = parsedReferenceImages[0]
-    homeStateRef.current.setReferenceImages(parsedReferenceImages)
-    homeStateRef.current.setReferenceImageURL(firstReferenceImage?.url || '')
-    homeStateRef.current.setReferenceImageName(firstReferenceImage?.name || '')
-    homeStateRef.current.setReferenceImageSource(firstReferenceImage?.source || 'none')
-    homeStateRef.current.setShowNetworkImageInput(false)
-    setActivePage('home')
-    setSidebarOpen(false)
-    setPreviewDetailOpen(false)
-    }
+    
 
     async function loadAdminData() {
     if (!isAdmin) {
@@ -1795,47 +1473,8 @@ function App() {
     }
     }
 
-    function handleClearPromptOptions() {
-    const confirmed = window.confirm('是否清除当前提示词以及选项信息？')
-    if (!confirmed) {
-      return
-    }
 
-    homeStateRef.current.setPrompt('')
-    homeStateRef.current.setSize('1024x1024')
-    homeStateRef.current.setStyle('')
-    homeStateRef.current.setCount(1)
-    homeStateRef.current.setQuality('auto')
-    homeStateRef.current.setOutputFormat('default')
-    homeStateRef.current.setCustomWidth('1024')
-    homeStateRef.current.setCustomHeight('1024')
-    homeStateRef.current.setReferenceImageURL('')
-    homeStateRef.current.setReferenceImageName('')
-    homeStateRef.current.setReferenceImageSource('none')
-    homeStateRef.current.setShowNetworkImageInput(false)
-    if ((homeStateRef.current.referenceImageInputRef?.current)) {
-      (homeStateRef.current.referenceImageInputRef?.current).value = ''
-    }
-    }
 
-    const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
-    const previewThumbnailURLs = limitImageURLs(
-    normalizeImageURLs(preview.thumbnailUrls, preview.thumbnailUrl),
-    preview.requestedCount,
-    )
-
-    useEffect(() => {
-    if (previewImageURLs.length === 0) {
-      if (previewImageIndex !== 0) {
-        setPreviewImageIndex(0)
-      }
-      return
-    }
-
-    if (previewImageIndex >= previewImageURLs.length) {
-      setPreviewImageIndex(previewImageURLs.length - 1)
-    }
-    }, [previewImageIndex, previewImageURLs.length])
 
     // ── Unified context value for child pages ──────────────────────────
     // App.tsx owns all shared state; pages read/write through this context.
@@ -2306,30 +1945,26 @@ function App() {
                 busy={busy}
                 clampCount={clampCount}
                 hasRunningGeneration={hasRunningGeneration}
-                handleClearPromptOptions={handleClearPromptOptions}
-                preview={preview}
-                setPreview={setPreview}
-                previewImageIndex={previewImageIndex}
-                setPreviewImageIndex={setPreviewImageIndex}
-                previewDetailOpen={previewDetailOpen}
-                setPreviewDetailOpen={setPreviewDetailOpen}
-                handleSaveCurrentImage={handleSaveCurrentImage}
-                handlePreviousPreviewImage={handlePreviousPreviewImage}
-                handleNextPreviewImage={handleNextPreviewImage}
-                loadPreviewTaskDetail={loadPreviewTaskDetail}
+                polledPreviewUpdate={polledPreviewUpdate}
+                emptyPreview={emptyPreview}
+                toPreview={toPreview}
+                detailToPreview={detailToPreview}
+                getDownloadCacheKey={getDownloadCacheKey}
+                trimDownloadFileCache={trimDownloadFileCache}
+                triggerImageDownload={triggerImageDownload}
+                isWeChatBrowser={isWeChatBrowser}
+                parseTaskRequestParams={parseTaskRequestParams}
+                parsePreviewSizeState={parsePreviewSizeState}
+                normalizeReferenceImagesFromSnapshot={normalizeReferenceImagesFromSnapshot}
+                limitImageURLs={limitImageURLs}
+                normalizeImageURLs={normalizeImageURLs}
                 generationProgresses={generationProgresses}
                 history={history}
                 historyPage={historyPage}
                 historyTotal={historyTotal}
                 loadHistoryPage={loadHistoryPage}
-                handleSelectTask={handleSelectTask}
-                wechatSaveGuide={wechatSaveGuide}
-                setWechatSaveGuide={setWechatSaveGuide}
                 isAuthed={isAuthed}
                 imageGenerationEnabled={imageGenerationEnabled}
-                handleOpenPreviewDetail={handleOpenPreviewDetail}
-                previewImageURLs={previewImageURLs}
-                previewThumbnailURLs={previewThumbnailURLs}
               />
             </div>
 
@@ -2347,20 +1982,8 @@ function App() {
         </main>
       </div>
 
-      {wechatSaveGuide.open ? (
-        <WechatSaveGuide
-          imageUrl={wechatSaveGuide.imageUrl}
-          title={wechatSaveGuide.title}
-          onClose={() => setWechatSaveGuide({ open: false, imageUrl: '', title: '' })}
-        />
-      ) : null}
-      {previewDetailOpen ? (
-        <PreviewDetailDialog
-          preview={preview}
-          onClose={() => setPreviewDetailOpen(false)}
-          onApply={handleApplyPreviewDetail}
-        />
-      ) : null}
+      
+      
 
       {announcementDialogOpen ? (
         <AnnouncementDialog
