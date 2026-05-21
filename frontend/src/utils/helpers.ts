@@ -308,3 +308,29 @@ export function syncPrimaryReferenceImage(images: ReferenceImageItem[]): Referen
 export function getReferenceImageExtraPointCost(count: number): number {
   return Math.max(0, count - FREE_REFERENCE_IMAGE_COUNT)
 }
+
+export function triggerImageDownload(blob: Blob, fileName: string): void {
+  const downloadBlob = blob.type === 'application/octet-stream' ? blob : new Blob([blob], { type: 'application/octet-stream' })
+  const objectUrl = window.URL.createObjectURL(downloadBlob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = fileName
+  anchor.rel = 'noopener noreferrer'
+  anchor.target = '_self'
+  anchor.style.display = 'none'
+  document.body.appendChild(anchor)
+  anchor.click()
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(objectUrl)
+    anchor.remove()
+  }, 10_000)
+}
+
+export function isWeChatBrowser(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false
+  }
+
+  const userAgent = navigator.userAgent.toLowerCase()
+  return userAgent.includes('micromessenger')
+}

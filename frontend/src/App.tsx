@@ -307,7 +307,8 @@ const emptyPreview: ImageTaskDetailResponse = {
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
 function App() {
-    const [dashboardRunningTasks, setDashboardRunningTasks] = useState<any[]>([]);
+    // 仅用于向 HomePage 传递初始的运行中任务，避免状态扩散
+    const [dashboardRunningTasks, setDashboardRunningTasks] = useState<ImageTaskItem[]>([]);
     const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
       ? 'reset'
@@ -388,6 +389,7 @@ function App() {
     const [adminActionLogs, setAdminActionLogs] = useState<AdminActionLogItem[]>([])
     const [adminPackages, setAdminPackages] = useState<AdminPackageItem[]>([])
     const [points, setPoints] = useState<PointsResponse | null>(null)
+    // 仅用于通知 HomePage 重新拉取历史记录，避免状态扩散
     const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState<{timestamp: number, resetPage?: boolean}>({ timestamp: 0 })
     const [packages, setPackages] = useState<PackageItem[]>([])
     const [billingSettings, setBillingSettings] = useState<BillingSettingsResponse | null>(null)
@@ -427,7 +429,7 @@ function App() {
     
     const promptGalleryItems = useMemo(
     () =>
-      [...serverPromptItems, ...featuredPromptItems].map((item: any) => ({
+      [...serverPromptItems, ...featuredPromptItems].map((item) => ({
         ...item,
         tags: normalizePromptTags(item.tags ?? []),
         approvedAt: item.approvedAt ?? (item.status === 'approved' ? item.createdAt : undefined),
@@ -518,7 +520,7 @@ function App() {
 
     const timers = [0, 150, 500].map((delay) =>
       window.setTimeout(() => {
-        setAuthForm((current: any) => {
+        setAuthForm((current) => {
           if (!current.account && !current.password) {
             return current
           }
@@ -620,14 +622,14 @@ function App() {
                 }
                 if (announcementsResult) {
                   setAnnouncements(announcementsResult.items);
-                  const unreadPinned = announcementsResult.items.find((item: any) => item.kind === 'pinned' && !item.isRead);
+                  const unreadPinned = announcementsResult.items.find((item) => item.kind === 'pinned' && !item.isRead);
                   if (unreadPinned) {
                     setActiveAnnouncementId(unreadPinned.id);
                     setAnnouncementDialogOpen(true);
                   }
                 }
                 
-                const runningTasks = latestResult.items.filter((item: any) => item.status === 'generating' || item.status === 'running');
+                const runningTasks = latestResult.items.filter((item) => item.status === 'generating' || item.status === 'running');
                 setDashboardRunningTasks(runningTasks);
                 
                 if (updateMessage) {
@@ -655,7 +657,7 @@ function App() {
       setCaptcha(result)
       setRegistrationDailyLimitReached(false)
       setEmailCaptchaPassUntil(0)
-      setAuthForm((current: any) => ({ ...current, captchaCode: '' }))
+      setAuthForm((current) => ({ ...current, captchaCode: '' }))
       if (showMessage) {
         setMessage('图形验证码已刷新。')
       }
@@ -713,7 +715,7 @@ function App() {
         captchaId: hasCaptchaPass ? undefined : captcha?.captchaId,
         captchaCode: hasCaptchaPass ? undefined : authForm.captchaCode,
       })
-      setAuthForm((current: any) => ({ ...current, code: '' }))
+      setAuthForm((current) => ({ ...current, code: '' }))
       setEmailCaptchaPassUntil(Date.now() + result.expiresIn * 1000)
       setEmailCodeCountdown(60)
       setMessage(`验证码已发送，请查收最新一封邮件。有效时间 ${Math.floor(result.expiresIn / 60)} 分钟。`)
@@ -960,13 +962,13 @@ function App() {
     setMessage('已打开兑换码购买平台。购买完成后，请获取兑换码并返回本站兑换。')
     }
 
-      function onTaskCreated(result: any, requestSnapshot: TaskRequestSnapshot, startedAt: number) {
+      function onTaskCreated(result: import('./types/api').CreateImageTaskResponse, requestSnapshot: TaskRequestSnapshot, startedAt: number) {
     const taskCount = requestSnapshot.count
     const now = new Date().toISOString()
     const requestedCount = Number(result.requestedCount ?? taskCount)
     const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
     setHistoryRefreshTrigger({ timestamp: Date.now(), resetPage: true })
-    setPoints((current: any) => {
+    setPoints((current) => {
       if (!current) {
         return current
       }
@@ -1033,7 +1035,7 @@ function App() {
     }
 
     function handleToggleAdmin() {
-    setAdminOpen((current: any) => !current)
+    setAdminOpen((current) => !current)
     }
 
     function handleExitAdmin() {
@@ -1248,7 +1250,7 @@ function App() {
                             }
                           }}
                           onChange={(event) => {
-                            setAuthForm((current: any) => ({ ...current, username: event.target.value }))
+                            setAuthForm((current) => ({ ...current, username: event.target.value }))
                             setRegisterAvailabilityCheck(null)
                             setRegisterUsernameCheck(null)
                           }}
@@ -1280,7 +1282,7 @@ function App() {
                           }
                         }}
                         onChange={(event) => {
-                          setAuthForm((current: any) => ({ ...current, email: event.target.value }))
+                          setAuthForm((current) => ({ ...current, email: event.target.value }))
                           setEmailCodeCountdown(0)
                           setEmailCaptchaPassUntil(0)
                           setRegisterAvailabilityCheck(null)
@@ -1398,13 +1400,13 @@ function App() {
                           autoComplete="new-password"
                           type={showRegisterPassword ? 'text' : 'password'}
                           value={authForm.password}
-                          onChange={(event) => setAuthForm((current: any) => ({ ...current, password: event.target.value }))}
+                          onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
                           className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                           placeholder="请设置至少 8 位密码"
                         />
                         <button
                           type="button"
-                          onClick={() => setShowRegisterPassword((current: any) => !current)}
+                          onClick={() => setShowRegisterPassword((current) => !current)}
                           aria-label={showRegisterPassword ? '隐藏密码' : '显示密码'}
                           className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 transition hover:text-slate-200"
                         >
@@ -1420,14 +1422,14 @@ function App() {
                           type={showRegisterPassword ? 'text' : 'password'}
                           value={authForm.confirmPassword}
                           onChange={(event) =>
-                            setAuthForm((current: any) => ({ ...current, confirmPassword: event.target.value }))
+                            setAuthForm((current) => ({ ...current, confirmPassword: event.target.value }))
                           }
                           className="w-full rounded-md border border-slate-700 bg-slate-950 py-2 pl-3 pr-10 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                           placeholder="请再次输入密码"
                         />
                         <button
                           type="button"
-                          onClick={() => setShowRegisterPassword((current: any) => !current)}
+                          onClick={() => setShowRegisterPassword((current) => !current)}
                           aria-label={showRegisterPassword ? '隐藏密码' : '显示密码'}
                           className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 transition hover:text-slate-200"
                         >
@@ -1443,7 +1445,7 @@ function App() {
                         name={`login_account_${authFormSeed}`}
                         autoComplete="off"
                         value={authForm.account}
-                        onChange={(event) => setAuthForm((current: any) => ({ ...current, account: event.target.value }))}
+                        onChange={(event) => setAuthForm((current) => ({ ...current, account: event.target.value }))}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入用户名或邮箱"
                       />
@@ -1454,7 +1456,7 @@ function App() {
                         autoComplete="new-password"
                         type="password"
                         value={authForm.password}
-                        onChange={(event) => setAuthForm((current: any) => ({ ...current, password: event.target.value }))}
+                        onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
                         className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400"
                         placeholder="请输入密码"
                       />
@@ -1467,7 +1469,7 @@ function App() {
                       <input
                         type="checkbox"
                         checked={authForm.rememberMe}
-                        onChange={(event) => setAuthForm((current: any) => ({ ...current, rememberMe: event.target.checked }))}
+                        onChange={(event) => setAuthForm((current) => ({ ...current, rememberMe: event.target.checked }))}
                         className="h-4 w-4 shrink-0 rounded border-slate-300 bg-white text-violet-500 accent-violet-500"
                       />
                     </label>
@@ -1614,7 +1616,7 @@ function App() {
           open={sidebarOpen}
           onNavigate={navigateToPage}
           onToggleCollapsed={() => {
-            setSidebarCollapsed((current: any) => !current)
+            setSidebarCollapsed((current) => !current)
           }}
           onCloseMobile={() => {
             setSidebarOpen(false)
@@ -1630,7 +1632,7 @@ function App() {
             setSidebarOpen(true)
           }}
           onToggleUserTheme={() => {
-            setUserTheme((current: any) => (current === 'light' ? 'dark' : 'light'))
+            setUserTheme((current) => (current === 'light' ? 'dark' : 'light'))
           }}
           onNavigate={navigateToPage}
           onToggleAdmin={handleToggleAdmin}
@@ -1656,18 +1658,6 @@ function App() {
                 emailNotifyPointCost={emailNotifyPointCost}
                 busy={busy}
                 clampCount={clampCount}
-                emptyPreview={emptyPreview}
-                toPreview={toPreview}
-                detailToPreview={detailToPreview}
-                getDownloadCacheKey={getDownloadCacheKey}
-                trimDownloadFileCache={trimDownloadFileCache}
-                triggerImageDownload={triggerImageDownload}
-                isWeChatBrowser={isWeChatBrowser}
-                parseTaskRequestParams={parseTaskRequestParams}
-                parsePreviewSizeState={parsePreviewSizeState}
-                normalizeReferenceImagesFromSnapshot={normalizeReferenceImagesFromSnapshot}
-                limitImageURLs={limitImageURLs}
-                normalizeImageURLs={normalizeImageURLs}
                 historyRefreshTrigger={historyRefreshTrigger}
                 isAuthed={isAuthed}
                 imageGenerationEnabled={imageGenerationEnabled}
@@ -2058,7 +2048,7 @@ function AppTopBar({
           >
             <button
               type="button"
-              onClick={() => setUserMenuOpen((current: any) => !current)}
+              onClick={() => setUserMenuOpen((current) => !current)}
               className="inline-flex h-9 max-w-[42vw] items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 min-[380px]:max-w-[48vw] sm:max-w-none"
               title={currentUser ? currentUser.username : '已登录'}
               aria-expanded={userMenuOpen}

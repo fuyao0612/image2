@@ -283,12 +283,15 @@ func (s *Service) markProviderKeySuccess(ctx context.Context, keyID uint64) {
 		return
 	}
 	now := time.Now()
-	_ = s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(map[string]any{
+	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(map[string]any{
 		"success_count": gorm.Expr("success_count + ?", 1),
 		"last_used_at":  &now,
 		"last_error":    "",
 		"status":        model.ImageProviderKeyStatusActive,
 	}).Error
+	if err != nil {
+		log.Printf("更新生图 Key 成功状态失败 (keyID=%d): %v", keyID, err)
+	}
 }
 
 func (s *Service) markProviderKeyFailure(ctx context.Context, keyID uint64, reason string, lowBalance bool) {
@@ -302,7 +305,10 @@ func (s *Service) markProviderKeyFailure(ctx context.Context, keyID uint64, reas
 	if lowBalance {
 		updates["status"] = model.ImageProviderKeyStatusLowBalance
 	}
-	_ = s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(updates).Error
+	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(updates).Error
+	if err != nil {
+		log.Printf("更新生图 Key 失败状态失败 (keyID=%d, reason=%s): %v", keyID, reason, err)
+	}
 }
 
 func (s *Service) submitImageTaskWithProviderPool(ctx context.Context, taskID uint64, userID uint64, req provider.GenerateRequest) (provider.GenerateResult, *provider.MentaloutProvider, uint64, error) {

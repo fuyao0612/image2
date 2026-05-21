@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { ImageTaskDetailResponse, ImageTaskItem } from '../types/api';
 import type { GenerationProgress, GenerationStatus, TaskRequestSnapshot } from '../types/app';
 import { getTaskStatusLabel } from '../utils/helpers';
-import { sizeOptions, styleOptions, qualityOptions, outputFormatOptions } from '../constants/app';
+import { CUSTOM_SIZE_MAX_SIDE, sizeOptions, styleOptions, qualityOptions, outputFormatOptions } from '../constants/app';
 import { api } from '../api/client';
 import type { DownloadedFile } from '../api/client';
 
@@ -440,6 +440,54 @@ export function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetai
     errorMessage: detail.errorMessage,
     createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,
+  }
+}
+
+export const emptyPreview: import('../types/api').ImageTaskDetailResponse = {
+  taskId: '-',
+  requestedCount: 0,
+  prompt: '还没有生成任务，先提交一条提示词。',
+  imageUrl: '',
+  costPoints: 0,
+  costCredits: 0,
+  freeCreditsCost: 0,
+  paidCreditsCost: 0,
+  creditSource: 'free',
+  status: 'idle',
+  requestParams: '',
+  createdAt: '',
+  updatedAt: '',
+}
+
+export function clampDimension(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 1024
+  }
+  return Math.min(4096, Math.max(256, Math.floor(value)))
+}
+
+export function parsePreviewSizeState(size?: string): { size: string; customWidth?: number; customHeight?: number } | null {
+  const trimmed = size?.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (sizeOptions.some((option) => option.value === trimmed)) {
+    if (trimmed === 'custom') {
+      return { size: 'custom' }
+    }
+    return { size: trimmed }
+  }
+
+  const match = trimmed.match(/^(\d{2,4})x(\d{2,4})$/i)
+  if (!match) {
+    return null
+  }
+
+  return {
+    size: 'custom',
+    customWidth: clampDimension(Number(match[1])),
+    customHeight: clampDimension(Number(match[2])),
   }
 }
 

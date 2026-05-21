@@ -16,11 +16,11 @@ import {
   ShieldCheck, Wallet, XCircle
 } from 'lucide-react';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from '../constants/app';
-import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, limitGenerationProgresses, progressFromImageTaskItem, normalizeElapsedSeconds, buildImageElapsedSeconds, detailToPreview } from '../utils/imageTasks';
+import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, limitGenerationProgresses, progressFromImageTaskItem, normalizeElapsedSeconds, buildImageElapsedSeconds, detailToPreview, emptyPreview, toPreview, getDownloadCacheKey, trimDownloadFileCache, parsePreviewSizeState, normalizeReferenceImagesFromSnapshot } from '../utils/imageTasks';
 import * as api from "../api/client";
 import type { UploadImageResponse, ImageTaskItem, ImageTaskDetailResponse } from "../types/api";
 import type { ReferenceImageSource, ReferenceImageItem, TaskRequestSnapshot, GenerationProgress } from "../types/app";
-import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost } from '../utils/helpers';
+import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost, isWeChatBrowser, triggerImageDownload } from '../utils/helpers';
 import { RechargeConfirmDialog } from './RechargePage';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
 
@@ -75,35 +75,23 @@ function validateSelectedSize(size: string, width: string | number, height: stri
 
 export interface HomePageProps {
   historyRefreshTrigger?: {timestamp: number, resetPage?: boolean};
-  emptyPreview?: any;
-  toPreview?: any;
-  detailToPreview?: any;
-  getDownloadCacheKey?: any;
-  trimDownloadFileCache?: any;
-  triggerImageDownload?: any;
-  isWeChatBrowser?: any;
-  parseTaskRequestParams?: any;
-  parsePreviewSizeState?: any;
-  normalizeReferenceImagesFromSnapshot?: any;
-  limitImageURLs?: any;
-  normalizeImageURLs?: any;
-  onTaskCreated: (result: any, requestSnapshot: TaskRequestSnapshot, startedAt: number) => void;
+  onTaskCreated: (result: import('../types/api').CreateImageTaskResponse, requestSnapshot: TaskRequestSnapshot, startedAt: number) => void;
   activePage: string;
-  points: any;
-  billingSettings: any;
+  points: import('../types/api').PointsResponse | null;
+  billingSettings: import('../types/api').BillingSettingsResponse | null;
   emailNotifyAvailable: boolean;
   emailNotifyOnComplete: boolean;
   setEmailNotifyOnComplete: (val: boolean) => void;
   emailNotifyPointCost: number;
-  busy: any;
+  busy: import('../types/app').BusyAction;
   clampCount: (val: number) => number;
-        isAuthed: boolean;
+  isAuthed: boolean;
   imageGenerationEnabled: boolean;
-        setMessage: (msg: string) => void;
-  setBusy: (busy: any) => void;
-  handleApiError: (err: any, fallback: string) => void;
-    dashboardRunningTasks?: any[];
-    onDashboardRefresh: () => void;
+  setMessage: (msg: string) => void;
+  setBusy: (busy: import('../types/app').BusyAction) => void;
+  handleApiError: (err: unknown, fallback: string) => void;
+  dashboardRunningTasks?: import('../types/api').ImageTaskItem[];
+  onDashboardRefresh: () => void;
 }
 
 export function HomePage(props: HomePageProps) {
@@ -151,7 +139,7 @@ export function HomePage(props: HomePageProps) {
         name: result.fileName || file.name,
         source: 'local',
       }
-      setReferenceImages((current: any) => syncPrimaryReferenceImage([...current, nextImage]))
+      setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
       setReferenceImageURL(nextImage.url)
       setReferenceImageName(nextImage.name)
       setReferenceImageSource('local')
@@ -195,7 +183,7 @@ export function HomePage(props: HomePageProps) {
       name: getReferenceImageNameFromURL(trimmed) || '网络图片',
       source: 'network',
     }
-    setReferenceImages((current: any) => syncPrimaryReferenceImage([...current, nextImage]))
+    setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
     setReferenceImageName(nextImage.name)
     setReferenceImageSource('network')
     setReferenceImageURL('')
@@ -203,8 +191,8 @@ export function HomePage(props: HomePageProps) {
     }
 
   function handleDeleteReferenceImage(index: number) {
-    setReferenceImages((current: any) => {
-      const next = syncPrimaryReferenceImage(current.filter((_: any, itemIndex: number) => itemIndex !== index))
+    setReferenceImages((current) => {
+      const next = syncPrimaryReferenceImage(current.filter((_, itemIndex: number) => itemIndex !== index))
       const first = next[0]
       setReferenceImageURL(first?.url || '')
       setReferenceImageName(first?.name || '')
@@ -261,16 +249,16 @@ export function HomePage(props: HomePageProps) {
   const imageGeneratePointCost = Math.max(0, Math.floor(Number(props.billingSettings?.imageGeneratePointCost ?? 20)))
 
   
-  const [preview, setPreview] = useState<any>(props.emptyPreview)
+  const [preview, setPreview] = useState<import('../types/api').ImageTaskDetailResponse>(emptyPreview)
   const [previewImageIndex, setPreviewImageIndex] = useState(0)
   const [previewDetailOpen, setPreviewDetailOpen] = useState(false)
-  const [wechatSaveGuide, setWechatSaveGuide] = useState<any>({
+  const [wechatSaveGuide, setWechatSaveGuide] = useState({
     open: false,
     imageUrl: '',
     title: '',
   })
-  const downloadFileCacheRef = useRef<Map<string, any>>(new Map())
-  const downloadPendingRef = useRef<Map<string, Promise<any>>>(new Map())
+  const downloadFileCacheRef = useRef<Map<string, import('../api/client').DownloadedFile>>(new Map())
+  const downloadPendingRef = useRef<Map<string, Promise<import('../api/client').DownloadedFile>>>(new Map())
 
   const previewImageURLs = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount)
   const previewThumbnailURLs = limitImageURLs(
@@ -280,7 +268,7 @@ export function HomePage(props: HomePageProps) {
 
   useEffect(() => {
     if (!props.isAuthed) {
-      setPreview(props.emptyPreview)
+      setPreview(emptyPreview)
       setPreviewImageIndex(0)
       setPreviewDetailOpen(false)
       downloadFileCacheRef.current.clear()
@@ -288,11 +276,11 @@ export function HomePage(props: HomePageProps) {
   }, [props.isAuthed])
 useEffect(() => {
     const imageURLs = normalizeImageURLs(preview.imageUrls, preview.imageUrl)
-    if (!props.isAuthed || props.isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
+    if (!props.isAuthed || isWeChatBrowser() || preview.status !== 'success' || !preview.taskId || preview.taskId === '-') {
       return
     }
 
-    imageURLs.forEach((_: any, index: number) => {
+    imageURLs.forEach((_, index: number) => {
       void prefetchImageDownload(preview.taskId, index)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -313,12 +301,12 @@ useEffect(() => {
 
 function handleSelectTask(item: ImageTaskItem) {
     if (preview.taskId === item.id) {
-      setPreview(props.emptyPreview)
+      setPreview(emptyPreview)
       setPreviewImageIndex(0)
       setPreviewDetailOpen(false)
       return
     }
-    const nextPreview = props.toPreview(item)
+    const nextPreview = toPreview(item)
     setPreview(nextPreview)
     setPreviewImageIndex(0)
     if (item.id && item.id !== '-') {
@@ -327,7 +315,7 @@ function handleSelectTask(item: ImageTaskItem) {
     }
 
 function handlePreviousPreviewImage() {
-    setPreviewImageIndex((current: any) => {
+    setPreviewImageIndex((current) => {
       const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
@@ -337,7 +325,7 @@ function handlePreviousPreviewImage() {
     }
 
 function handleNextPreviewImage() {
-    setPreviewImageIndex((current: any) => {
+    setPreviewImageIndex((current) => {
       const total = limitImageURLs(normalizeImageURLs(preview.imageUrls, preview.imageUrl), preview.requestedCount).length
       if (total <= 1) {
         return current
@@ -353,7 +341,7 @@ async function handleSaveCurrentImage() {
       props.setMessage('当前没有可保存的图片。')
       return
     }
-    if (props.isWeChatBrowser()) {
+    if (isWeChatBrowser()) {
       setWechatSaveGuide({
         open: true,
         imageUrl,
@@ -368,23 +356,23 @@ async function handleSaveCurrentImage() {
     }
 
     try {
-      const cacheKey = props.getDownloadCacheKey(preview.taskId, previewImageIndex)
+      const cacheKey = getDownloadCacheKey(preview.taskId, previewImageIndex)
       const cached = downloadFileCacheRef.current.get(cacheKey)
       if (cached) {
-        props.triggerImageDownload(cached.blob, cached.fileName)
+        triggerImageDownload(cached.blob, cached.fileName)
         return
       }
 
       props.setMessage('正在准备下载，请稍等。')
       const downloaded = await loadImageDownload(preview.taskId, previewImageIndex)
-      props.triggerImageDownload(downloaded.blob, downloaded.fileName)
+      triggerImageDownload(downloaded.blob, downloaded.fileName)
     } catch (error) {
       props.handleApiError(error, '保存当前图片失败')
     }
     }
 
 async function prefetchImageDownload(taskId: string, imageIndex: number) {
-    const cacheKey = props.getDownloadCacheKey(taskId, imageIndex)
+    const cacheKey = getDownloadCacheKey(taskId, imageIndex)
     if (downloadFileCacheRef.current.has(cacheKey) || downloadPendingRef.current.has(cacheKey)) {
       return
     }
@@ -397,7 +385,7 @@ async function prefetchImageDownload(taskId: string, imageIndex: number) {
     }
 
 async function loadImageDownload(taskId: string, imageIndex: number): Promise<api.DownloadedFile> {
-    const cacheKey = props.getDownloadCacheKey(taskId, imageIndex)
+    const cacheKey = getDownloadCacheKey(taskId, imageIndex)
     const cached = downloadFileCacheRef.current.get(cacheKey)
     if (cached) {
       return cached
@@ -411,7 +399,7 @@ async function loadImageDownload(taskId: string, imageIndex: number): Promise<ap
     const pendingDownload = api.downloadImageTaskImage(taskId, imageIndex)
       .then((downloaded) => {
         downloadFileCacheRef.current.set(cacheKey, downloaded)
-        props.trimDownloadFileCache(downloadFileCacheRef.current)
+        trimDownloadFileCache(downloadFileCacheRef.current)
         return downloaded
       })
       .finally(() => {
@@ -443,7 +431,7 @@ async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailRes
     try {
       const detail = await api.getImageTask(taskId)
       const nextPreview = detailToPreview(detail)
-      setPreview((current: any) => (current.taskId === taskId ? nextPreview : current))
+      setPreview((current) => (current.taskId === taskId ? nextPreview : current))
       return nextPreview
     } catch (error) {
       props.handleApiError(error, '任务详情加载失败')
@@ -452,7 +440,7 @@ async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailRes
     }
 
 function handleApplyPreviewDetail() {
-    const parsed = props.parseTaskRequestParams(preview.requestParams)
+    const parsed = parseTaskRequestParams(preview.requestParams)
     const promptText = parsed?.prompt?.trim() || preview.prompt.trim()
 
     setPrompt(promptText)
@@ -469,7 +457,7 @@ function handleApplyPreviewDetail() {
       setOutputFormat(parsed.outputFormat)
     }
 
-    const sizeState = props.parsePreviewSizeState(parsed?.size)
+    const sizeState = parsePreviewSizeState(parsed?.size)
     if (sizeState) {
       setSize(sizeState.size)
       if (typeof sizeState.customWidth === 'number' && typeof sizeState.customHeight === 'number') {
@@ -478,7 +466,7 @@ function handleApplyPreviewDetail() {
       }
     }
 
-    const parsedReferenceImages = props.normalizeReferenceImagesFromSnapshot(parsed)
+    const parsedReferenceImages = normalizeReferenceImagesFromSnapshot(parsed)
     const firstReferenceImage = parsedReferenceImages[0]
     setReferenceImages(parsedReferenceImages)
     setReferenceImageURL(firstReferenceImage?.url || '')
@@ -640,7 +628,7 @@ function handleApplyPreviewDetail() {
       quality: quality,
       outputFormat: outputFormat,
       referenceImageUrl: selectedReferenceImages[0]?.url || (referenceImageURL || '').trim() || undefined,
-      referenceImageUrls: selectedReferenceImages.map((item: any) => item.url).filter(Boolean),
+      referenceImageUrls: selectedReferenceImages.map((item) => item.url).filter(Boolean),
       referenceImages: selectedReferenceImages,
       emailNotifyOnComplete: props.emailNotifyAvailable && props.emailNotifyOnComplete,
     } satisfies TaskRequestSnapshot
@@ -665,7 +653,7 @@ function handleApplyPreviewDetail() {
               imageUrl: '',
               thumbnailUrl: '',
               imageElapsedSeconds: []
-            } as any))
+            } as unknown as import('../types/api').ImageTaskItem))
       const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
       const now = new Date().toISOString()
       setPreview(detailToPreview({
@@ -772,7 +760,7 @@ function handleApplyPreviewDetail() {
               const detail = await api.getImageTask(taskId)
               if (!pollingTaskIdsRef.current.has(taskId)) return
 
-              const detailCount = getPreviewRequestedCount(detail as any, 1)
+              const detailCount = getPreviewRequestedCount(detail, 1)
               const imageURLs = limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount || detailCount)
               const persistedElapsedSeconds = normalizeElapsedSeconds(detail.imageElapsedSeconds)
               const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
@@ -781,9 +769,9 @@ function handleApplyPreviewDetail() {
               const nextMessage = detail.status === 'failed' ? detail.errorMessage ?? '生成失败' : imageURLs.length > 0 ? `已拿到 ${imageURLs.length} 张图片` : '任务已完成'
 
               // LOCAL Update Preview
-              setPreview((current: any) => {
+              setPreview((current) => {
                 if (current.taskId !== taskId && current.taskId !== '-' && current.taskId) return current;
-                return detailToPreview(detail as any)
+                return detailToPreview(detail)
               });
               
               // LOCAL Update History
@@ -791,7 +779,7 @@ function handleApplyPreviewDetail() {
                 if (item.id === taskId) {
                   return {
                     ...item,
-                    status: detail.status as any,
+                    status: detail.status as import('../types/app').GenerationStatus,
                     imageUrl: detail.imageUrl,
                     imageUrls: imageURLs,
                     imageElapsedSeconds: persistedElapsedSeconds,
@@ -837,10 +825,10 @@ function handleApplyPreviewDetail() {
                 attempt,
                 message: imageURLs.length > 0 ? nextMessage : '任务正在生成中',
               }))
-            } catch (error: any) {
+            } catch (error: unknown) {
               if (!pollingTaskIdsRef.current.has(taskId)) return
               
-              if (error && error.status === 401) {
+              if (error && typeof error === 'object' && 'status' in error && (error as { status?: number }).status === 401) {
                 pollingTaskIdsRef.current.clear()
                 return
               }
@@ -948,7 +936,7 @@ function handleApplyPreviewDetail() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setShowNetworkImageInput((current: any) => !current)}
+                        onClick={() => setShowNetworkImageInput((current) => !current)}
                         className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
                       >
                         <Link2 className="h-4 w-4" />
@@ -1019,7 +1007,7 @@ function handleApplyPreviewDetail() {
                           onChange={(event) => setSize(event.target.value)}
                           className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {sizeOptions.map((option: any) => (
+                          {sizeOptions.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -1082,7 +1070,7 @@ function handleApplyPreviewDetail() {
                           onChange={(event) => setStyle(event.target.value)}
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {styleOptions.map((option: any) => (
+                          {styleOptions.map((option) => (
                             <option key={option.value || 'none'} value={option.value}>
                               {option.label}
                             </option>
@@ -1097,7 +1085,7 @@ function handleApplyPreviewDetail() {
                           onChange={(event) => setQuality(event.target.value)}
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {qualityOptions.map((option: any) => (
+                          {qualityOptions.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -1112,7 +1100,7 @@ function handleApplyPreviewDetail() {
                           onChange={(event) => setOutputFormat(event.target.value)}
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
-                          {outputFormatOptions.map((option: any) => (
+                          {outputFormatOptions.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -1174,7 +1162,7 @@ function handleApplyPreviewDetail() {
 
                 <TaskDetailPanel
                   preview={preview}
-                  progress={generationProgresses.find((item: any) => item.taskId === preview.taskId) ?? null}
+                  progress={generationProgresses.find((item) => item.taskId === preview.taskId) ?? null}
                 />
               </section>
 
@@ -1185,7 +1173,7 @@ function handleApplyPreviewDetail() {
                       pageSize={HISTORY_PAGE_SIZE}
                       total={historyTotal}
                       onSelect={handleSelectTask}
-                      onPageChange={(page: any) => void loadHistoryPage(page)}
+                      onPageChange={(page: number) => void loadHistoryPage(page)}
                     />
                   </aside>
                 </div>
