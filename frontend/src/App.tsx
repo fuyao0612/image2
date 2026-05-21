@@ -353,6 +353,7 @@ const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
 function App() {
+    const homeStateRef = useRef<any>({})
     const [mode, setMode] = useState<AuthMode>(() =>
     window.location.pathname === '/reset-password'
       ? 'reset'
@@ -407,24 +408,24 @@ function App() {
     newPassword: '',
     confirmNewPassword: '',
     })
-    const [prompt, setPrompt] = useState('')
-    const [size, setSize] = useState('1024x1024')
-    const [style, setStyle] = useState('')
-    const [count, setCount] = useState(1)
-    const [quality, setQuality] = useState('auto')
-    const [outputFormat, setOutputFormat] = useState('default')
-    const [customWidth, setCustomWidth] = useState('1024')
-    const [customHeight, setCustomHeight] = useState('1024')
-    const [referenceImageURL, setReferenceImageURL] = useState('')
+    
+    
+    
+    
+    
+    
+    
+    
+    
     const [referenceImageName, setReferenceImageName] = useState('')
     const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
     const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
-    const [referenceImagesDialogOpen, setReferenceImagesDialogOpen] = useState(false)
+    
     const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
-    const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
+    
     const [showRegisterPassword, setShowRegisterPassword] = useState(false)
     const [referenceImageUploading, setReferenceImageUploading] = useState(false)
-    const [promptDragActive, setPromptDragActive] = useState(false)
+    
     const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
     const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
     const [adminOpen, setAdminOpen] = useState(() => window.location.pathname.startsWith('/admin'))
@@ -484,14 +485,14 @@ function App() {
       emailNotifyPointCost > 0,
     )
     const estimatedGenerationPointCost = useMemo(() => {
-    const taskCount = clampCount(Number(count) || 1)
+    const taskCount = clampCount(Number(homeStateRef.current.count) || 1)
     const availableCredits = Math.max(0, Math.floor(Number(points?.totalCredits ?? 0)))
     const pointPaidCount = Math.max(0, taskCount - Math.min(taskCount, availableCredits))
     const referenceExtraPointCost = getReferenceImageExtraPointCost(referenceImages.length)
     const emailPointCost = emailNotifyAvailable && emailNotifyOnComplete ? emailNotifyPointCost : 0
     return pointPaidCount * imageGeneratePointCost + referenceExtraPointCost + emailPointCost
     }, [
-    count,
+    homeStateRef.current.count,
     emailNotifyAvailable,
     emailNotifyOnComplete,
     emailNotifyPointCost,
@@ -1325,7 +1326,7 @@ function App() {
     if (!imageGenerationEnabled) {
       return
     }
-    if (!prompt.trim()) {
+    if (!(homeStateRef.current.prompt || '').trim()) {
       setMessage('提示词不能为空。')
       return
     }
@@ -1358,7 +1359,7 @@ function App() {
       return
     }
 
-    if (!prompt.trim()) {
+    if (!(homeStateRef.current.prompt || '').trim()) {
       setMessage('提示词不能为空。')
       return
     }
@@ -1367,23 +1368,23 @@ function App() {
       return
     }
 
-    const promptText = prompt.trim()
-    const sizeValidationMessage = validateSelectedSize(size, customWidth, customHeight)
+    const promptText = (homeStateRef.current.prompt || '').trim()
+    const sizeValidationMessage = validateSelectedSize(homeStateRef.current.size, homeStateRef.current.customWidth, homeStateRef.current.customHeight)
     if (sizeValidationMessage) {
       setMessage(sizeValidationMessage)
       return
     }
 
-    const requestSize = resolveSelectedSize(size, customWidth, customHeight)
-    const taskCount = clampCount(count)
+    const requestSize = resolveSelectedSize(homeStateRef.current.size, homeStateRef.current.customWidth, homeStateRef.current.customHeight)
+    const taskCount = clampCount(homeStateRef.current.count)
     const requestSnapshot = {
       prompt: promptText,
       size: requestSize,
-      style,
+      style: homeStateRef.current.style,
       count: taskCount,
-      quality,
-      outputFormat,
-      referenceImageUrl: referenceImages[0]?.url || referenceImageURL.trim() || undefined,
+      quality: homeStateRef.current.quality,
+      outputFormat: homeStateRef.current.outputFormat,
+      referenceImageUrl: referenceImages[0]?.url || (homeStateRef.current.referenceImageURL || '').trim() || undefined,
       referenceImageUrls: referenceImages.map((item) => item.url).filter(Boolean),
       referenceImages,
       emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
@@ -1695,36 +1696,36 @@ function App() {
     const parsed = parseTaskRequestParams(preview.requestParams)
     const promptText = parsed?.prompt?.trim() || preview.prompt.trim()
 
-    setPrompt(promptText)
+    homeStateRef.current.setPrompt(promptText)
     if (typeof parsed?.style === 'string') {
-      setStyle(parsed.style)
+      homeStateRef.current.setStyle(parsed.style)
     }
     if (typeof parsed?.count === 'number' || typeof parsed?.count === 'string') {
-      setCount(clampCount(Number(parsed.count)))
+      homeStateRef.current.setCount(clampCount(Number(parsed.count)))
     }
     if (typeof parsed?.quality === 'string') {
-      setQuality(parsed.quality)
+      homeStateRef.current.setQuality(parsed.quality)
     }
     if (typeof parsed?.outputFormat === 'string') {
-      setOutputFormat(parsed.outputFormat)
+      homeStateRef.current.setOutputFormat(parsed.outputFormat)
     }
 
     const sizeState = parsePreviewSizeState(parsed?.size)
     if (sizeState) {
-      setSize(sizeState.size)
+      homeStateRef.current.setSize(sizeState.size)
       if (typeof sizeState.customWidth === 'number' && typeof sizeState.customHeight === 'number') {
-          setCustomWidth(String(sizeState.customWidth))
-          setCustomHeight(String(sizeState.customHeight))
+          homeStateRef.current.setCustomWidth(String(sizeState.customWidth))
+          homeStateRef.current.setCustomHeight(String(sizeState.customHeight))
       }
     }
 
     const parsedReferenceImages = normalizeReferenceImagesFromSnapshot(parsed)
     const firstReferenceImage = parsedReferenceImages[0]
     setReferenceImages(parsedReferenceImages)
-    setReferenceImageURL(firstReferenceImage?.url || '')
+    homeStateRef.current.setReferenceImageURL(firstReferenceImage?.url || '')
     setReferenceImageName(firstReferenceImage?.name || '')
     setReferenceImageSource(firstReferenceImage?.source || 'none')
-    setShowNetworkImageInput(false)
+    homeStateRef.current.setShowNetworkImageInput(false)
     setActivePage('home')
     setSidebarOpen(false)
     setPreviewDetailOpen(false)
@@ -1941,10 +1942,10 @@ function App() {
         source: 'local',
       }
       setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
-      setReferenceImageURL(nextImage.url)
+      homeStateRef.current.setReferenceImageURL(nextImage.url)
       setReferenceImageName(nextImage.name)
       setReferenceImageSource('local')
-      setShowNetworkImageInput(false)
+      homeStateRef.current.setShowNetworkImageInput(false)
     } catch (error) {
       handleApiError(error, '上传图片失败')
     } finally {
@@ -1970,19 +1971,19 @@ function App() {
     }
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
-    setPromptDragActive(true)
+    homeStateRef.current.setPromptDragActive(true)
     }
 
     function handlePromptDragLeave(event: DragEvent<HTMLTextAreaElement>) {
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
       return
     }
-    setPromptDragActive(false)
+    homeStateRef.current.setPromptDragActive(false)
     }
 
     async function handlePromptDrop(event: DragEvent<HTMLTextAreaElement>) {
     event.preventDefault()
-    setPromptDragActive(false)
+    homeStateRef.current.setPromptDragActive(false)
     const files = Array.from(event.dataTransfer.files).filter((item) => item.type.startsWith('image/'))
     if (!files.length) {
       setMessage('请拖入 JPEG、PNG、WebP 或 GIF 图片。')
@@ -2005,12 +2006,12 @@ function App() {
     }
 
     function handleNetworkReferenceImageInput(value: string) {
-    setReferenceImageURL(value)
+    homeStateRef.current.setReferenceImageURL(value)
     setReferenceImageSource(value.trim() ? 'network' : 'none')
     }
 
     function handleAddNetworkReferenceImage() {
-    const trimmed = referenceImageURL.trim()
+    const trimmed = (homeStateRef.current.referenceImageURL || '').trim()
     if (!trimmed) {
       setMessage('请输入网络图片链接。')
       return
@@ -2027,17 +2028,17 @@ function App() {
     setReferenceImages((current) => syncPrimaryReferenceImage([...current, nextImage]))
     setReferenceImageName(nextImage.name)
     setReferenceImageSource('network')
-    setReferenceImageURL('')
-    setShowNetworkImageInput(false)
+    homeStateRef.current.setReferenceImageURL('')
+    homeStateRef.current.setShowNetworkImageInput(false)
     }
 
     function handleClearReferenceImage() {
-    setReferenceImageURL('')
+    homeStateRef.current.setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
     setReferenceImages([])
-    setReferenceImagesDialogOpen(false)
-    setShowNetworkImageInput(false)
+    homeStateRef.current.setReferenceImagesDialogOpen(false)
+    homeStateRef.current.setShowNetworkImageInput(false)
     if (referenceImageInputRef.current) {
       referenceImageInputRef.current.value = ''
     }
@@ -2047,11 +2048,11 @@ function App() {
     setReferenceImages((current) => {
       const next = syncPrimaryReferenceImage(current.filter((_, itemIndex) => itemIndex !== index))
       const first = next[0]
-      setReferenceImageURL(first?.url || '')
+      homeStateRef.current.setReferenceImageURL(first?.url || '')
       setReferenceImageName(first?.name || '')
       setReferenceImageSource(first?.source || 'none')
       if (!next.length) {
-        setReferenceImagesDialogOpen(false)
+        homeStateRef.current.setReferenceImagesDialogOpen(false)
       }
       return next
     })
@@ -2063,18 +2064,18 @@ function App() {
       return
     }
 
-    setPrompt('')
-    setSize('1024x1024')
-    setStyle('')
-    setCount(1)
-    setQuality('auto')
-    setOutputFormat('default')
-    setCustomWidth('1024')
-    setCustomHeight('1024')
-    setReferenceImageURL('')
+    homeStateRef.current.setPrompt('')
+    homeStateRef.current.setSize('1024x1024')
+    homeStateRef.current.setStyle('')
+    homeStateRef.current.setCount(1)
+    homeStateRef.current.setQuality('auto')
+    homeStateRef.current.setOutputFormat('default')
+    homeStateRef.current.setCustomWidth('1024')
+    homeStateRef.current.setCustomHeight('1024')
+    homeStateRef.current.setReferenceImageURL('')
     setReferenceImageName('')
     setReferenceImageSource('none')
-    setShowNetworkImageInput(false)
+    homeStateRef.current.setShowNetworkImageInput(false)
     if (referenceImageInputRef.current) {
       referenceImageInputRef.current.value = ''
     }
@@ -2553,7 +2554,7 @@ function App() {
 
         <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
             <div className={activePage === 'home' ? 'block' : 'hidden'}>
-              <HomePage
+              <HomePage homeStateRef={homeStateRef}
                 activePage={activePage}
                 points={points}
                 billingSettings={billingSettings}
@@ -2561,39 +2562,20 @@ function App() {
                 emailNotifyOnComplete={emailNotifyOnComplete}
                 setEmailNotifyOnComplete={setEmailNotifyOnComplete}
                 emailNotifyPointCost={emailNotifyPointCost}
-                prompt={prompt}
-                setPrompt={setPrompt}
                 handlePromptDrag={handlePromptDrag}
                 handlePromptDragLeave={handlePromptDragLeave}
                 handlePromptDrop={handlePromptDrop}
                 handlePromptPaste={handlePromptPaste}
-                promptDragActive={promptDragActive}
                 referenceImageInputRef={referenceImageInputRef}
                 referenceImageUploading={referenceImageUploading}
                 busy={busy}
-                setShowNetworkImageInput={setShowNetworkImageInput}
-                showNetworkImageInput={showNetworkImageInput}
+
                 handleNetworkReferenceImageInput={handleNetworkReferenceImageInput}
                 referenceImages={referenceImages}
                 handleDeleteReferenceImage={handleDeleteReferenceImage}
-                setReferenceImagesDialogOpen={setReferenceImagesDialogOpen}
-                referenceImagesDialogOpen={referenceImagesDialogOpen}
+
                 getReferenceImageExtraPointCost={getReferenceImageExtraPointCost}
-                size={size}
-                setSize={setSize}
-                customWidth={customWidth}
-                setCustomWidth={setCustomWidth}
-                customHeight={customHeight}
-                setCustomHeight={setCustomHeight}
-                style={style}
-                setStyle={setStyle}
-                count={count}
-                setCount={setCount}
                 clampCount={clampCount}
-                quality={quality}
-                setQuality={setQuality}
-                outputFormat={outputFormat}
-                setOutputFormat={setOutputFormat}
                 estimatedGenerationPointCost={estimatedGenerationPointCost}
                 handleOpenCreateTaskConfirm={handleOpenCreateTaskConfirm}
                 hasRunningGeneration={hasRunningGeneration}
@@ -2619,8 +2601,7 @@ function App() {
                 generateConfirmOpen={generateConfirmOpen}
                 setGenerateConfirmOpen={setGenerateConfirmOpen}
                 handleLocalReferenceImageChange={handleLocalReferenceImageChange}
-                referenceImageURL={referenceImageURL}
-                setReferenceImageURL={setReferenceImageURL}
+
                 handleAddNetworkReferenceImage={handleAddNetworkReferenceImage}
                 isAuthed={isAuthed}
                 imageGenerationEnabled={imageGenerationEnabled}
@@ -2652,7 +2633,7 @@ function App() {
           lines={[
             '确认是否提交生图任务？',
             `上传参考图：${referenceImages.length} 张`,
-            `生成张数：${clampCount(Number(count) || 1)} 张`,
+            `生成张数：${clampCount(Number(homeStateRef.current.count) || 1)} 张`,
             `本次预计消耗：${estimatedGenerationPointCost} 积分`,
           ]}
           confirmLabel="确定"
@@ -2676,11 +2657,11 @@ function App() {
         />
       ) : null}
 
-      {referenceImagesDialogOpen ? (
+      {homeStateRef.current.referenceImagesDialogOpen ? (
         <ReferenceImagesDialog
           images={referenceImages}
           onDelete={handleDeleteReferenceImage}
-          onClose={() => setReferenceImagesDialogOpen(false)}
+          onClose={() => homeStateRef.current.setReferenceImagesDialogOpen(false)}
         />
       ) : null}
 

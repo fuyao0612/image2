@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   ArrowUpDown, BadgeCheck, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
   Copy, Download, Eye, EyeOff, Gift, Heart, History, Home, Image as ImageIcon,
@@ -12,6 +12,7 @@ import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreview
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
 
 export interface HomePageProps {
+  homeStateRef?: any;
   activePage: string;
   points: any;
   billingSettings: any;
@@ -19,39 +20,18 @@ export interface HomePageProps {
   emailNotifyOnComplete: boolean;
   setEmailNotifyOnComplete: (val: boolean) => void;
   emailNotifyPointCost: number;
-  prompt: string;
-  setPrompt: (val: string) => void;
   handlePromptDrag: (e: any) => void;
   handlePromptDragLeave: (e: any) => void;
   handlePromptDrop: (e: any) => void;
   handlePromptPaste: (e: any) => void;
-  promptDragActive: boolean;
   referenceImageInputRef: any;
   referenceImageUploading: any;
   busy: any;
-  setShowNetworkImageInput: (val: any) => void;
-  showNetworkImageInput: boolean;
   handleNetworkReferenceImageInput: (e: any) => void;
   referenceImages: any[];
   handleDeleteReferenceImage: (index: number) => void;
-  setReferenceImagesDialogOpen: (val: boolean) => void;
-  referenceImagesDialogOpen: boolean;
   getReferenceImageExtraPointCost: (count: number) => number;
-  size: string;
-  setSize: (val: string) => void;
-  customWidth: string;
-  setCustomWidth: (val: string) => void;
-  customHeight: string;
-  setCustomHeight: (val: string) => void;
-  style: string;
-  setStyle: (val: string) => void;
-  count: number;
-  setCount: (val: number) => void;
   clampCount: (val: number) => number;
-  quality: string;
-  setQuality: (val: string) => void;
-  outputFormat: string;
-  setOutputFormat: (val: string) => void;
   estimatedGenerationPointCost: number;
   handleOpenCreateTaskConfirm: () => void;
   hasRunningGeneration: boolean;
@@ -77,8 +57,6 @@ export interface HomePageProps {
   generateConfirmOpen: boolean;
   setGenerateConfirmOpen: (val: boolean) => void;
   handleLocalReferenceImageChange: (e: any) => void;
-  referenceImageURL: string;
-  setReferenceImageURL: (val: string) => void;
   handleAddNetworkReferenceImage: () => void;
   isAuthed: boolean;
   imageGenerationEnabled: boolean;
@@ -90,25 +68,44 @@ export interface HomePageProps {
 }
 
 export function HomePage(props: HomePageProps) {
+  const [prompt, setPrompt] = useState('')
+  const [size, setSize] = useState('1024x1024')
+  const [style, setStyle] = useState('')
+  const [count, setCount] = useState(1)
+  const [quality, setQuality] = useState('auto')
+  const [outputFormat, setOutputFormat] = useState('default')
+  const [customWidth, setCustomWidth] = useState('1024')
+  const [customHeight, setCustomHeight] = useState('1024')
+  const [referenceImageURL, setReferenceImageURL] = useState('')
+  const [referenceImagesDialogOpen, setReferenceImagesDialogOpen] = useState(false)
+  const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
+  const [promptDragActive, setPromptDragActive] = useState(false)
+
+  useEffect(() => {
+    if (props.homeStateRef) {
+      props.homeStateRef.current = {
+        prompt, setPrompt, size, setSize, customWidth, setCustomWidth, customHeight, setCustomHeight,
+        style, setStyle, count, setCount, quality, setQuality, outputFormat, setOutputFormat,
+        showNetworkImageInput, setShowNetworkImageInput, referenceImageURL, setReferenceImageURL,
+        promptDragActive, setPromptDragActive, referenceImagesDialogOpen, setReferenceImagesDialogOpen
+      }
+    }
+  })
+
   const {
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
-    setEmailNotifyOnComplete, emailNotifyPointCost, prompt, setPrompt, handlePromptDrag,
-    handlePromptDragLeave, handlePromptDrop, handlePromptPaste, promptDragActive,
-    referenceImageInputRef,
-    referenceImageUploading, busy, setShowNetworkImageInput, showNetworkImageInput,
-    handleNetworkReferenceImageInput, referenceImages, handleDeleteReferenceImage,
-    setReferenceImagesDialogOpen, referenceImagesDialogOpen,
-    getReferenceImageExtraPointCost, size, setSize, customWidth, setCustomWidth,
-    customHeight, setCustomHeight, style, setStyle, count, setCount, clampCount,
-    quality, setQuality, outputFormat, setOutputFormat, estimatedGenerationPointCost,
+    setEmailNotifyOnComplete, emailNotifyPointCost, handlePromptDrag,
+    handlePromptDragLeave, handlePromptDrop, handlePromptPaste, referenceImageInputRef,
+    referenceImageUploading, busy, handleNetworkReferenceImageInput, referenceImages, handleDeleteReferenceImage,
+    getReferenceImageExtraPointCost, clampCount,
+    estimatedGenerationPointCost,
     handleOpenCreateTaskConfirm, hasRunningGeneration, handleClearPromptOptions,
     preview, setPreview, previewImageIndex, setPreviewImageIndex, previewDetailOpen,
     setPreviewDetailOpen, handleSaveCurrentImage, handlePreviousPreviewImage,
     handleNextPreviewImage, loadPreviewTaskDetail, generationProgresses, history,
     historyPage, historyTotal, loadHistoryPage, handleSelectTask, wechatSaveGuide,
     setWechatSaveGuide, generateConfirmOpen, setGenerateConfirmOpen,
-    handleLocalReferenceImageChange, referenceImageURL, setReferenceImageURL,
-    handleAddNetworkReferenceImage, isAuthed, imageGenerationEnabled,
+    handleLocalReferenceImageChange, handleAddNetworkReferenceImage, isAuthed, imageGenerationEnabled,
     handleOpenPreviewDetail, previewImageURLs, previewThumbnailURLs,
     handleCancelCreateTaskConfirm, handleConfirmCreateTask
   } = props;
