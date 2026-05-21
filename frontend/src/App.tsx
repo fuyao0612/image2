@@ -90,6 +90,7 @@ import { ProductsPage } from "./pages/ProductsPage";
 import { PromptsPage } from "./pages/PromptsPage";
 import { HomePage } from './pages/HomePage';
 import { RechargeConfirmDialog } from "./pages/RechargePage";
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { AppProvider } from './contexts/AppContext';
 import type { AppContextType } from './contexts/AppContext';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from './constants/app';
@@ -324,7 +325,20 @@ function App() {
         ? 'register'
         : 'login',
     )
-    const [activePage, setActivePage] = useState<AppPage>(() => readStoredActivePage())
+    const location = useLocation()
+    const navigate = useNavigate()
+
+    const activePage: AppPage = (() => {
+      const path = location.pathname.replace(/\/$/, '') || '/'
+      if (path === '/' || path === '/home') return 'home'
+      if (path === '/orders') return 'orders'
+      if (path === '/flows') return 'flows'
+      if (path === '/profile') return 'profile'
+      if (path === '/recharge') return 'recharge'
+      if (path === '/prompts') return 'prompts'
+      if (path === '/products') return 'products'
+      return 'home'
+    })()
     const [userTheme, setUserTheme] = useState<UserTheme>(() => readStoredUserTheme())
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
     const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -1184,8 +1198,8 @@ function App() {
     }
 
     function navigateToPage(page: AppPage) {
-    setActivePage(page)
-    setSidebarOpen(false)
+      navigate(page === 'home' ? '/' : `/${page}`)
+      setSidebarOpen(false)
     }
 
 
@@ -1679,16 +1693,23 @@ function App() {
               />
             </div>
 
-            {activePage === 'orders' ? <OrdersPage /> : null}
+            <Routes>
+              <Route path="/orders" element={<OrdersPage />} />
+              <Route path="/profile" element={<ProfilePage />} />
+              <Route path="/flows" element={<FlowsPage />} />
+              <Route path="/recharge" element={<RechargePage />} />
+              <Route path="/prompts" element={<PromptsPage />} />
+              <Route path="/products" element={<ProductsPage />} />
+            </Routes>
 
-            {activePage === 'profile' ? <ProfilePage /> : null}
+            
 
-            {activePage === 'flows' ? <FlowsPage /> : null}
+            
 
-            {activePage === 'recharge' ? <RechargePage /> : null}
+            
 
-            {activePage === 'prompts' ? <PromptsPage /> : null}
-            {activePage === 'products' ? <ProductsPage /> : null}
+            
+            
             <IcpFooter className="mt-8" />
         </main>
       </div>
