@@ -118,6 +118,7 @@ func New(cfg config.Config, h *handler.Handler) *gin.Engine {
 		admin.Use(middleware.RequireAuth(h.JWT()))
 		admin.Use(h.RequireCurrentSession())
 		admin.Use(h.RequireActiveUser())
+		admin.Use(h.RequireAdminRole())
 		{
 			admin.GET("/stats", h.AdminStats)
 			admin.GET("/users", h.AdminListUsers)

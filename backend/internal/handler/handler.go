@@ -53,6 +53,24 @@ func (h *Handler) RequireActiveUser() gin.HandlerFunc {
 	}
 }
 
+// RequireAdminRole 确保当前用户具备管理员权限。
+func (h *Handler) RequireAdminRole() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, ok := middleware.CurrentUserID(c)
+		if !ok {
+			response.Unauthorized(c, "请先登录")
+			c.Abort()
+			return
+		}
+		if err := h.svc.RequireAdmin(c.Request.Context(), userID); err != nil {
+			response.Forbidden(c, "无权访问此资源")
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // RequireCurrentSession 确保当前 token 版本仍然是该账号的最新版本。
 func (h *Handler) RequireCurrentSession() gin.HandlerFunc {
 	return middleware.RequireTokenVersionMatch(h.svc.TokenVersionView)

@@ -96,7 +96,9 @@ func (s *Service) AdminCreateProviderKey(ctx context.Context, adminID uint64, re
 		return dto.AdminProviderKeyItem{}, err
 	}
 	key.APIKeyMasked = maskSecret(key.APIKey)
-	_ = s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", key.ID).Update("api_key_masked", key.APIKeyMasked).Error
+	if err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", key.ID).Update("api_key_masked", key.APIKeyMasked).Error; err != nil {
+		return dto.AdminProviderKeyItem{}, err
+	}
 	return providerKeyToDTO(key), nil
 }
 
