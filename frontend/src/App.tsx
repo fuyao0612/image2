@@ -88,6 +88,7 @@ import { ProfilePage } from "./pages/ProfilePage";
 import { RechargePage } from "./pages/RechargePage";
 import { ProductsPage } from "./pages/ProductsPage";
 import { PromptsPage } from "./pages/PromptsPage";
+import { HomePage } from './pages/HomePage';
 import { RechargeConfirmDialog } from "./pages/RechargePage";
 import { AppProvider } from './contexts/AppContext';
 import type { AppContextType } from './contexts/AppContext';
@@ -184,8 +185,8 @@ interface PromptGalleryItem {
 
 export type PromptSortMode = 'recommended' | 'favorites' | 'latest-approved' | 'serial'
 
-const MAX_REFERENCE_IMAGES = 12
-const FREE_REFERENCE_IMAGE_COUNT = 3
+export const MAX_REFERENCE_IMAGES = 12
+export const FREE_REFERENCE_IMAGE_COUNT = 3
 
 interface PasswordChangeForm {
   currentPassword: string
@@ -306,7 +307,7 @@ const appNavItems: Array<{
 
 const featuredPromptItems: PromptGalleryItem[] = []
 
-const sizeOptions = [
+export const sizeOptions = [
   { value: '1024x1024', label: '1024x1024 方图' },
   { value: '1024x1536', label: '1024x1536 竖图' },
   { value: '1536x1024', label: '1536x1024 横图' },
@@ -319,7 +320,7 @@ const sizeOptions = [
   { value: 'auto', label: '自动' },
 ]
 
-const styleOptions = [
+export const styleOptions = [
   { value: '', label: '无' },
   { value: 'realistic', label: '写实' },
   { value: 'anime', label: '动漫' },
@@ -330,14 +331,14 @@ const styleOptions = [
   { value: 'cinematic', label: '电影感' },
 ]
 
-const qualityOptions = [
+export const qualityOptions = [
   { value: 'auto', label: '自动' },
   { value: 'low', label: '低质量，通常更快' },
   { value: 'medium', label: '中' },
   { value: 'high', label: '高质量，通常更慢' },
 ]
 
-const outputFormatOptions = [
+export const outputFormatOptions = [
   { value: 'default', label: '默认' },
   { value: 'jpeg', label: 'JPEG' },
   { value: 'webp', label: 'WebP' },
@@ -379,10 +380,10 @@ const emptyPreview: ImageTaskDetailResponse = {
   updatedAt: '',
 }
 
-const HISTORY_PAGE_SIZE = 5
+export const HISTORY_PAGE_SIZE = 5
 const ACTIVITY_PAGE_SIZE = 10
 const FLOW_LOG_PAGE_SIZE = 10
-const CUSTOM_SIZE_MAX_SIDE = 3840
+export const CUSTOM_SIZE_MAX_SIDE = 3840
 const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
@@ -2586,333 +2587,85 @@ function App() {
         />
 
         <main className="app-shell__main min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 lg:px-6">
-            {activePage === 'home' ? (
-              <div className="space-y-4">
-                <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)_360px]">
-                  <section className="min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h2 className="text-lg font-medium text-slate-50">提示词</h2>
-                        <p className="mt-1 text-sm text-slate-400">在这里输入提示词，再选择生成参数。</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleClearPromptOptions}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-rose-400 hover:text-rose-200"
-                        title="清除当前提示词和生成选项"
-                      >
-                        <XCircle className="h-3.5 w-3.5" />
-                        清除
-                      </button>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-                      <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
-                        <div className="text-xs text-slate-500">当前积分</div>
-                        <div className="mt-1 text-base font-semibold text-slate-100">{points ? points.balance : 0}</div>
-                      </div>
-                      <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
-                        <div className="text-xs text-slate-500">可用福利次数</div>
-                        <div className="mt-1 text-base font-semibold text-slate-100">
-                          {points ? points.totalCredits : 0}
-                        </div>
-                      </div>
-                      <div className="col-span-2 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300">
-                        <div className="text-sm font-medium text-slate-100">
-                          今日生图消耗 {billingSettings?.imageGeneratePointCost ?? 20} 积分
-                        </div>
-                      </div>
-                    </div>
-
-                    {emailNotifyAvailable ? (
-                      <label className="mt-3 flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={emailNotifyOnComplete}
-                          onChange={(event) => setEmailNotifyOnComplete(event.target.checked)}
-                          className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-violet-500 focus:ring-violet-400"
-                        />
-                        <span className="min-w-0 leading-6">
-                          额外消耗 {emailNotifyPointCost} 积分，任务完成后发送邮件至账号邮箱，失败将退还积分。
-                        </span>
-                      </label>
-                    ) : null}
-
-                    <textarea
-                      value={prompt}
-                      onChange={(event) => setPrompt(event.target.value)}
-                      onDragEnter={handlePromptDrag}
-                      onDragOver={handlePromptDrag}
-                      onDragLeave={handlePromptDragLeave}
-                      onDrop={handlePromptDrop}
-                      onPaste={handlePromptPaste}
-                      className={`mt-4 min-h-32 w-full resize-y rounded-md border px-3 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-violet-400 ${
-                        promptDragActive
-                          ? 'border-violet-400 bg-violet-950/40 ring-2 ring-violet-400/40'
-                          : 'border-slate-700 bg-slate-900'
-                      }`}
-                      placeholder={`请输入提示词，或将本地图片拖入 / 粘贴到此框中\n可免费使用 ${FREE_REFERENCE_IMAGE_COUNT} 张参考图，后续每多 1 张额外消耗 1 积分，最多可添加 ${MAX_REFERENCE_IMAGES} 张。`}
-                    />
-
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => referenceImageInputRef.current?.click()}
-                        disabled={referenceImageUploading || busy === 'upload-reference'}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {referenceImageUploading || busy === 'upload-reference' ? (
-                          <LoaderCircle className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <ImagePlus className="h-4 w-4" />
-                        )}
-                        添加本地图片
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowNetworkImageInput((current) => !current)}
-                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
-                      >
-                        <Link2 className="h-4 w-4" />
-                        添加网络图片
-                      </button>
-                    </div>
-
-                    <input
-                      ref={referenceImageInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif"
-                      multiple
-                      className="hidden"
-                      onChange={handleLocalReferenceImageChange}
-                    />
-
-                    {showNetworkImageInput ? (
-                      <label className="mt-3 block">
-                        <span className="mb-2 block text-sm text-slate-400">网络图片链接</span>
-                        <div className="flex overflow-hidden rounded-md border border-slate-700 bg-slate-900 focus-within:border-violet-400">
-                          <input
-                            value={referenceImageURL}
-                            onChange={(event) => handleNetworkReferenceImageInput(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                handleAddNetworkReferenceImage()
-                              }
-                            }}
-                            className="h-11 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
-                            placeholder="请输入公网图片链接"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleAddNetworkReferenceImage}
-                            className="h-11 shrink-0 border-l border-slate-700 px-4 text-sm font-medium text-violet-200 transition hover:bg-violet-500/10 hover:text-violet-100"
-                          >
-                            确定
-                          </button>
-                        </div>
-                      </label>
-                    ) : null}
-
-                    <div className="mt-3 space-y-2">
-                      {referenceImages.length ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => setReferenceImagesDialogOpen(true)}
-                            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm font-medium text-slate-100 transition hover:border-violet-400 hover:bg-slate-800"
-                          >
-                            查看已添加的 {referenceImages.length} 张图片（最多 {MAX_REFERENCE_IMAGES} 张）
-                          </button>
-                          <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-500">
-                            参考图额外消耗 {getReferenceImageExtraPointCost(referenceImages.length)} 积分
-                          </div>
-                        </>
-                      ) : (
-                        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-500">未添加参考图片。</div>
-                      )}
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-slate-400">尺寸</span>
-                        <select
-                          value={size}
-                          onChange={(event) => setSize(event.target.value)}
-                          className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                        >
-                          {sizeOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="block">
-                        <span className="mb-2 block text-sm text-slate-400">张数</span>
-                        <select
-                          value={count}
-                          onChange={(event) => setCount(Number(event.target.value))}
-                          className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                        >
-                          {[1, 2, 3, 4, 5, 6].map((value) => (
-                            <option key={value} value={value}>
-                              {value} 张
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-
-                    {size === 'custom' ? (
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <label className="block">
-                          <span className="mb-2 block text-sm text-slate-400">自定义宽度</span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={CUSTOM_SIZE_MAX_SIDE}
-                            step={64}
-                            value={customWidth}
-                            onChange={(event) => setCustomWidth(event.target.value)}
-                            placeholder="1024"
-                            className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="mb-2 block text-sm text-slate-400">自定义高度</span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={CUSTOM_SIZE_MAX_SIDE}
-                            step={64}
-                            value={customHeight}
-                            onChange={(event) => setCustomHeight(event.target.value)}
-                            placeholder="1024"
-                            className="h-11 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                          />
-                        </label>
-                      </div>
-                    ) : null}
-
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      <label className="block min-w-0">
-                        <span className="mb-2 block text-sm text-slate-400">风格</span>
-                        <select
-                          value={style}
-                          onChange={(event) => setStyle(event.target.value)}
-                          className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                        >
-                          {styleOptions.map((option) => (
-                            <option key={option.value || 'none'} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="block min-w-0">
-                        <span className="mb-2 block text-sm text-slate-400">质量</span>
-                        <select
-                          value={quality}
-                          onChange={(event) => setQuality(event.target.value)}
-                          className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                        >
-                          {qualityOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="block min-w-0">
-                        <span className="mb-2 block text-sm text-slate-400">输出格式</span>
-                        <select
-                          value={outputFormat}
-                          onChange={(event) => setOutputFormat(event.target.value)}
-                          className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
-                        >
-                          {outputFormatOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        onClick={handleOpenCreateTaskConfirm}
-                        disabled={!isAuthed || busy === 'create-task' || busy === 'upload-reference' || referenceImageUploading || !prompt.trim() || !imageGenerationEnabled}
-                        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-violet-500 px-4 text-sm font-medium text-slate-950 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {busy === 'create-task' ? (
-                          <LoaderCircle className="h-4 w-4 animate-spin" />
-                        ) : referenceImageUploading || busy === 'upload-reference' ? (
-                          <LoaderCircle className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Sparkles className="h-4 w-4" />
-                        )}
-                        {imageGenerationEnabled
-                          ? referenceImageUploading || busy === 'upload-reference'
-                            ? '参考图上传中...'
-                            : `生成图片，本次预计消耗 ${estimatedGenerationPointCost} 积分`
-                          : '暂时关闭，详情见公告'}
-                      </button>
-                    </div>
-                  </section>
-
-                  <section className="min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h2 className="text-lg font-medium text-slate-50">展示区</h2>
-                        <p className="mt-1 text-sm text-slate-400">长按图片可选择放大预览</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleOpenPreviewDetail()}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white"
-                      >
-                        <Eye className="h-4 w-4" />
-                        提示词详情
-                      </button>
-                    </div>
-
-                <PreviewImageStage
-                  preview={preview}
-                  imageURLs={previewImageURLs}
-                  thumbnailURLs={previewThumbnailURLs}
-                  activeIndex={previewImageIndex}
-                  onPrevious={handlePreviousPreviewImage}
-                  onNext={handleNextPreviewImage}
-                  onSaveCurrent={handleSaveCurrentImage}
-                  onSelectThumbnail={setPreviewImageIndex}
-                  onImageLoadError={loadPreviewTaskDetail}
-                />
-
-                <TaskDetailPanel
-                  preview={preview}
-                  progress={generationProgresses.find((item) => item.taskId === preview.taskId) ?? null}
-                />
-              </section>
-
-                  <aside className="min-w-0 space-y-4 overflow-hidden">
-                    <TaskHistoryPanel
-                      items={history}
-                      page={historyPage}
-                      pageSize={HISTORY_PAGE_SIZE}
-                      total={historyTotal}
-                      onSelect={handleSelectTask}
-                      onPageChange={(page) => void loadHistoryPage(page)}
-                    />
-                  </aside>
-                </div>
-              </div>
-            ) : null}
+            <div className={activePage === 'home' ? 'block' : 'hidden'}>
+              <HomePage
+                activePage={activePage}
+                points={points}
+                billingSettings={billingSettings}
+                emailNotifyAvailable={emailNotifyAvailable}
+                emailNotifyOnComplete={emailNotifyOnComplete}
+                setEmailNotifyOnComplete={setEmailNotifyOnComplete}
+                emailNotifyPointCost={emailNotifyPointCost}
+                prompt={prompt}
+                setPrompt={setPrompt}
+                handlePromptDrag={handlePromptDrag}
+                handlePromptDragLeave={handlePromptDragLeave}
+                handlePromptDrop={handlePromptDrop}
+                handlePromptPaste={handlePromptPaste}
+                promptDragActive={promptDragActive}
+                referenceImageInputRef={referenceImageInputRef}
+                referenceImageUploading={referenceImageUploading}
+                busy={busy}
+                setShowNetworkImageInput={setShowNetworkImageInput}
+                showNetworkImageInput={showNetworkImageInput}
+                handleNetworkReferenceImageInput={handleNetworkReferenceImageInput}
+                referenceImages={referenceImages}
+                handleDeleteReferenceImage={handleDeleteReferenceImage}
+                setReferenceImagesDialogOpen={setReferenceImagesDialogOpen}
+                referenceImagesDialogOpen={referenceImagesDialogOpen}
+                getReferenceImageExtraPointCost={getReferenceImageExtraPointCost}
+                size={size}
+                setSize={setSize}
+                customWidth={customWidth}
+                setCustomWidth={setCustomWidth}
+                customHeight={customHeight}
+                setCustomHeight={setCustomHeight}
+                style={style}
+                setStyle={setStyle}
+                count={count}
+                setCount={setCount}
+                clampCount={clampCount}
+                quality={quality}
+                setQuality={setQuality}
+                outputFormat={outputFormat}
+                setOutputFormat={setOutputFormat}
+                estimatedGenerationPointCost={estimatedGenerationPointCost}
+                handleOpenCreateTaskConfirm={handleOpenCreateTaskConfirm}
+                hasRunningGeneration={hasRunningGeneration}
+                handleClearPromptOptions={handleClearPromptOptions}
+                preview={preview}
+                setPreview={setPreview}
+                previewImageIndex={previewImageIndex}
+                setPreviewImageIndex={setPreviewImageIndex}
+                previewDetailOpen={previewDetailOpen}
+                setPreviewDetailOpen={setPreviewDetailOpen}
+                handleSaveCurrentImage={handleSaveCurrentImage}
+                handlePreviousPreviewImage={handlePreviousPreviewImage}
+                handleNextPreviewImage={handleNextPreviewImage}
+                loadPreviewTaskDetail={loadPreviewTaskDetail}
+                generationProgresses={generationProgresses}
+                history={history}
+                historyPage={historyPage}
+                historyTotal={historyTotal}
+                loadHistoryPage={loadHistoryPage}
+                handleSelectTask={handleSelectTask}
+                wechatSaveGuide={wechatSaveGuide}
+                setWechatSaveGuide={setWechatSaveGuide}
+                generateConfirmOpen={generateConfirmOpen}
+                setGenerateConfirmOpen={setGenerateConfirmOpen}
+                handleLocalReferenceImageChange={handleLocalReferenceImageChange}
+                referenceImageURL={referenceImageURL}
+                setReferenceImageURL={setReferenceImageURL}
+                handleAddNetworkReferenceImage={handleAddNetworkReferenceImage}
+                isAuthed={isAuthed}
+                imageGenerationEnabled={imageGenerationEnabled}
+                handleOpenPreviewDetail={handleOpenPreviewDetail}
+                previewImageURLs={previewImageURLs}
+                previewThumbnailURLs={previewThumbnailURLs}
+                handleCancelCreateTaskConfirm={handleCancelCreateTaskConfirm}
+                handleConfirmCreateTask={handleConfirmCreateTask}
+              />
+            </div>
 
             {activePage === 'orders' ? <OrdersPage /> : null}
 
@@ -3178,7 +2931,7 @@ function AnnouncementListGroup({
   )
 }
 
-function WechatSaveGuide({
+export function WechatSaveGuide({
   imageUrl,
   title,
   onClose,
@@ -3228,7 +2981,7 @@ function WechatSaveGuide({
   )
 }
 
-function ReferenceImagesDialog({
+export function ReferenceImagesDialog({
   images,
   onDelete,
   onClose,
@@ -3284,7 +3037,7 @@ function ReferenceImagesDialog({
   )
 }
 
-function PreviewDetailDialog({
+export function PreviewDetailDialog({
   preview,
   onApply,
   onClose,
@@ -3752,7 +3505,7 @@ export function PanelPagination({
   )
 }
 
-function TaskHistoryPanel({
+export function TaskHistoryPanel({
   items,
   page,
   pageSize,
@@ -3852,7 +3605,7 @@ export function FlowLogTabButton({
   )
 }
 
-function TaskDetailPanel({
+export function TaskDetailPanel({
   preview,
   progress,
 }: {
@@ -3898,7 +3651,7 @@ function TaskDetailPanel({
   )
 }
 
-function PreviewImageStage({
+export function PreviewImageStage({
   preview,
   imageURLs,
   thumbnailURLs,
@@ -4104,7 +3857,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
   return copied
 }
 
-function PromptSearchOverlay({
+export function PromptSearchOverlay({
   value,
   suggestions,
   onChange,
@@ -4396,7 +4149,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   )
 }
 
-function GenerationProgressPanel({ progresses }: { progresses: GenerationProgress[] }) {
+export function GenerationProgressPanel({ progresses }: { progresses: GenerationProgress[] }) {
   const runningCount = progresses.filter((item) => item.status === 'running').length
   const successCount = progresses.filter((item) => item.status === 'success').length
   const failedCount = progresses.filter((item) => item.status === 'failed').length
@@ -4431,7 +4184,7 @@ function GenerationProgressPanel({ progresses }: { progresses: GenerationProgres
   )
 }
 
-function GenerationProgressCard({ progress }: { progress: GenerationProgress }) {
+export function GenerationProgressCard({ progress }: { progress: GenerationProgress }) {
   const isRunning = progress.status === 'running'
   const isSuccess = progress.status === 'success'
   const statusClass = isSuccess
@@ -4478,7 +4231,7 @@ function GenerationProgressCard({ progress }: { progress: GenerationProgress }) 
   )
 }
 
-function ProgressStat({ label, value }: { label: string; value: string }) {
+export function ProgressStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
       <div className="text-xs text-slate-500">{label}</div>
@@ -4552,7 +4305,7 @@ function getGenerationStatusLabel(status: GenerationStatus): string {
   return getTaskStatusLabel(status)
 }
 
-function getImageTaskStatusLabel(status: string): string {
+export function getImageTaskStatusLabel(status: string): string {
   return getTaskStatusLabel(status)
 }
 
