@@ -413,9 +413,7 @@ function App() {
     const [adminPackages, setAdminPackages] = useState<AdminPackageItem[]>([])
     const [generationProgresses, setGenerationProgresses] = useState<GenerationProgress[]>([])
     const [points, setPoints] = useState<PointsResponse | null>(null)
-    const [history, setHistory] = useState<ImageTaskItem[]>([])
-    const [historyPage, setHistoryPage] = useState(1)
-    const [historyTotal, setHistoryTotal] = useState(0)
+    const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState<{timestamp: number, resetPage?: boolean}>({ timestamp: 0 })
     const [packages, setPackages] = useState<PackageItem[]>([])
     const [billingSettings, setBillingSettings] = useState<BillingSettingsResponse | null>(null)
     const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
@@ -438,6 +436,7 @@ function App() {
     })
     const pollingTaskIdsRef = useRef<Set<string>>(new Set())
     const [polledPreviewUpdate, setPolledPreviewUpdate] = useState<any>(null)
+    const [polledHistoryUpdate, setPolledHistoryUpdate] = useState<any>(null)
     const checkinInFlightRef = useRef(false)
 
     const isAuthed = token.length > 0
@@ -712,32 +711,26 @@ function App() {
                 : '任务已完成'
 
           setPolledPreviewUpdate({ taskId, preview: { requestedCount: detail.requestedCount || detailCount, prompt: detail.prompt, imageUrl: detail.imageUrl, imageUrls: imageURLs, imageElapsedSeconds: persistedElapsedSeconds, thumbnailUrl: detail.thumbnailUrl, thumbnailUrls: detail.thumbnailUrls, provider: detail.provider, providerTaskId: detail.providerTaskId, providerResponse: detail.providerResponse, costPoints: detail.costPoints, costCredits: detail.costCredits, freeCreditsCost: detail.freeCreditsCost, paidCreditsCost: detail.paidCreditsCost, creditSource: detail.creditSource, status: detail.status, requestParams: detail.requestParams, errorMessage: detail.errorMessage, createdAt: detail.createdAt, updatedAt: detail.updatedAt }, isFinal: false })
-          setHistory((current) =>
-            current.map((item) =>
-              item.id === taskId
-                ? {
-                  ...item,
-                  requestedCount: detail.requestedCount || detailCount,
-                  prompt: detail.prompt,
-                  imageUrl: detail.imageUrl,
-                  imageUrls: imageURLs,
-                  imageElapsedSeconds: persistedElapsedSeconds,
-                  thumbnailUrl: detail.thumbnailUrl,
-                  thumbnailUrls: detail.thumbnailUrls,
-                  costPoints: detail.costPoints,
-                    costCredits: detail.costCredits,
-                    freeCreditsCost: detail.freeCreditsCost,
-                    paidCreditsCost: detail.paidCreditsCost,
-                    creditSource: detail.creditSource,
-                    status: detail.status,
-                    requestParams: detail.requestParams,
-                    errorMessage: detail.errorMessage,
-                    createdAt: detail.createdAt,
-                    updatedAt: detail.updatedAt,
-                  }
-                : item,
-            ),
-          )
+          setPolledHistoryUpdate({
+            taskId,
+            requestedCount: detail.requestedCount || detailCount,
+            prompt: detail.prompt,
+            imageUrl: detail.imageUrl,
+            imageUrls: imageURLs,
+            imageElapsedSeconds: persistedElapsedSeconds,
+            thumbnailUrl: detail.thumbnailUrl,
+            thumbnailUrls: detail.thumbnailUrls,
+            costPoints: detail.costPoints,
+            costCredits: detail.costCredits,
+            freeCreditsCost: detail.freeCreditsCost,
+            paidCreditsCost: detail.paidCreditsCost,
+            creditSource: detail.creditSource,
+            status: detail.status,
+            requestParams: detail.requestParams,
+            errorMessage: detail.errorMessage,
+            createdAt: detail.createdAt,
+            updatedAt: detail.updatedAt,
+          })
 
           if (isFinal) {
             setPolledPreviewUpdate({ taskId, preview: detailToPreview(detail), isFinal: true })
@@ -820,22 +813,18 @@ function App() {
                 setCurrentUser(meResult);
                 const [
                   pointsResult,
-                  historyResult,
                   latestResult,
                   announcementsResult,
                   settingsResult
                 ] = await Promise.all([
                   api.getPoints(),
-                  api.listImageTasks(historyPage, HISTORY_PAGE_SIZE),
                   api.listImageTasks(1, HISTORY_PAGE_SIZE),
                   api.listAnnouncements().catch(() => null),
                   api.getBillingSettings().catch(() => null)
                 ]);
                 
+                setHistoryRefreshTrigger({ timestamp: Date.now(), resetPage: false })
                 setPoints(pointsResult);
-                setHistory(historyResult.items);
-                setHistoryPage(historyResult.page);
-                setHistoryTotal(historyResult.total);
                 
                 if (settingsResult) {
                   setBillingSettings(settingsResult);
@@ -873,24 +862,6 @@ function App() {
             
     }
 
-    async function loadHistoryPage(page: number, options: { showBusy?: boolean } = {}) {
-    const { showBusy = false } = options
-    try {
-      if (showBusy) {
-        setBusy('refresh')
-      }
-      const pageResult = await api.listImageTasks(page, HISTORY_PAGE_SIZE)
-      setHistory(pageResult.items)
-      setHistoryPage(pageResult.page)
-      setHistoryTotal(pageResult.total)
-    } catch (error) {
-      handleApiError(error, '历史记录加载失败')
-    } finally {
-      if (showBusy) {
-        setBusy(null)
-      }
-    }
-    }
 
     async function refreshCaptcha(showMessage = false) {
     if (mode !== 'register' && mode !== 'reset') {
@@ -1215,8 +1186,7 @@ function App() {
     const now = new Date().toISOString()
     const requestedCount = Number(result.requestedCount ?? taskCount)
     const resultImageURLs = limitImageURLs(normalizeImageURLs(result.imageUrls, result.imageUrl), requestedCount)
-    setHistoryPage(1)
-    void loadHistoryPage(1, { showBusy: false })
+    setHistoryRefreshTrigger({ timestamp: Date.now(), resetPage: true })
     setPoints((current: any) => {
       if (!current) {
         return current
@@ -1364,9 +1334,6 @@ function App() {
               setToken('');
               setCurrentUser(null);
               setPoints(null);
-              setHistory([]);
-              setHistoryPage(1);
-              setHistoryTotal(0);
               setBillingSettings(null);
               setAnnouncements([]);
               setActiveAnnouncementId(null);
@@ -1959,10 +1926,8 @@ function App() {
                 limitImageURLs={limitImageURLs}
                 normalizeImageURLs={normalizeImageURLs}
                 generationProgresses={generationProgresses}
-                history={history}
-                historyPage={historyPage}
-                historyTotal={historyTotal}
-                loadHistoryPage={loadHistoryPage}
+                historyRefreshTrigger={historyRefreshTrigger}
+                polledHistoryUpdate={polledHistoryUpdate}
                 isAuthed={isAuthed}
                 imageGenerationEnabled={imageGenerationEnabled}
               />

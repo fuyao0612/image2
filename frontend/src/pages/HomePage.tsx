@@ -74,6 +74,8 @@ function validateSelectedSize(size: string, width: string | number, height: stri
 }
 
 export interface HomePageProps {
+  historyRefreshTrigger?: {timestamp: number, resetPage?: boolean};
+  polledHistoryUpdate?: any;
   polledPreviewUpdate?: any;
   emptyPreview?: any;
   toPreview?: any;
@@ -100,10 +102,6 @@ export interface HomePageProps {
   clampCount: (val: number) => number;
   hasRunningGeneration: boolean;
                         generationProgresses: any[];
-  history: any[];
-  historyPage: number;
-  historyTotal: number;
-  loadHistoryPage: (page: number) => void;
         isAuthed: boolean;
   imageGenerationEnabled: boolean;
         setMessage: (msg: string) => void;
@@ -275,8 +273,7 @@ export function HomePage(props: HomePageProps) {
     activePage, points, billingSettings, emailNotifyAvailable, emailNotifyOnComplete,
     setEmailNotifyOnComplete, emailNotifyPointCost, busy, clampCount,
 hasRunningGeneration,
-    generationProgresses, history,
-    historyPage, historyTotal, loadHistoryPage,
+    generationProgresses,
     isAuthed, imageGenerationEnabled,
 
   } = props;
@@ -546,6 +543,57 @@ function handleApplyPreviewDetail() {
       referenceImageInputRef.current.value = ''
     }
   }
+
+  
+  const [history, setHistory] = useState<ImageTaskItem[]>([])
+  const [historyPage, setHistoryPage] = useState(1)
+  const [historyTotal, setHistoryTotal] = useState(0)
+
+  async function loadHistoryPage(page: number, options: { showBusy?: boolean } = {}) {
+    const { showBusy = false } = options
+    try {
+      if (showBusy) {
+        props.setBusy('refresh')
+      }
+      const pageResult = await api.listImageTasks(page, HISTORY_PAGE_SIZE)
+      setHistory(pageResult.items)
+      setHistoryPage(pageResult.page)
+      setHistoryTotal(pageResult.total)
+    } catch (error) {
+      props.handleApiError(error, '历史记录加载失败')
+    } finally {
+      if (showBusy) {
+        props.setBusy(null)
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (props.polledHistoryUpdate) {
+      setHistory((current) =>
+        current.map((item) =>
+          item.id === props.polledHistoryUpdate.taskId
+            ? { ...item, ...props.polledHistoryUpdate }
+            : item
+        )
+      )
+    }
+  }, [props.polledHistoryUpdate])
+
+  useEffect(() => {
+    if (props.isAuthed) {
+      if (props.historyRefreshTrigger?.resetPage) {
+        setHistoryPage(1)
+        void loadHistoryPage(1, { showBusy: false })
+      } else {
+        void loadHistoryPage(historyPage, { showBusy: false })
+      }
+    } else {
+      setHistory([])
+      setHistoryPage(1)
+      setHistoryTotal(0)
+    }
+  }, [props.isAuthed, props.historyRefreshTrigger])
 
   const estimatedGenerationPointCost = useMemo(() => {
     const taskCount = clampCount(Number(count) || 1)
