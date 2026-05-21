@@ -419,16 +419,10 @@ function App() {
     
     
     
-    const [referenceImageName, setReferenceImageName] = useState('')
-    const [referenceImageSource, setReferenceImageSource] = useState<ReferenceImageSource>('none')
-    const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
     
     const [emailNotifyOnComplete, setEmailNotifyOnComplete] = useState(false)
     
     const [showRegisterPassword, setShowRegisterPassword] = useState(false)
-    const [referenceImageUploading, setReferenceImageUploading] = useState(false)
-    
-    const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
     const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
     const [adminOpen, setAdminOpen] = useState(() => window.location.pathname.startsWith('/admin'))
     const [adminStats, setAdminStats] = useState<AdminStatsResponse | null>(null)
@@ -501,7 +495,6 @@ function App() {
     emailNotifyPointCost,
     imageGeneratePointCost,
     points?.totalCredits,
-    (homeStateRef.current.referenceImages || []).length,
     ])
     const promptGalleryItems = useMemo(
     () =>
@@ -1380,6 +1373,7 @@ function App() {
 
     const requestSize = resolveSelectedSize(homeStateRef.current.size, homeStateRef.current.customWidth, homeStateRef.current.customHeight)
     const taskCount = clampCount(homeStateRef.current.count)
+    const selectedReferenceImages = homeStateRef.current.referenceImages || []
     const requestSnapshot = {
       prompt: promptText,
       size: requestSize,
@@ -1387,9 +1381,9 @@ function App() {
       count: taskCount,
       quality: homeStateRef.current.quality,
       outputFormat: homeStateRef.current.outputFormat,
-      referenceImageUrl: (homeStateRef.current.referenceImages || [])[0]?.url || (homeStateRef.current.referenceImageURL || '').trim() || undefined,
-      referenceImageUrls: (homeStateRef.current.referenceImages || []).map((item: any) => item.url).filter(Boolean),
-      referenceImages,
+      referenceImageUrl: selectedReferenceImages[0]?.url || (homeStateRef.current.referenceImageURL || '').trim() || undefined,
+      referenceImageUrls: selectedReferenceImages.map((item: any) => item.url).filter(Boolean),
+      referenceImages: selectedReferenceImages,
       emailNotifyOnComplete: emailNotifyAvailable && emailNotifyOnComplete,
     } satisfies TaskRequestSnapshot
     const startedAt = Date.now()
