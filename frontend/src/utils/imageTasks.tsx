@@ -4,6 +4,8 @@ import type { ImageTaskDetailResponse, ImageTaskItem } from '../types/api';
 import type { GenerationProgress, GenerationStatus, TaskRequestSnapshot } from '../types/app';
 import { getTaskStatusLabel } from '../utils/helpers';
 import { sizeOptions, styleOptions, qualityOptions, outputFormatOptions } from '../constants/app';
+import { api } from '../api/client';
+import type { DownloadedFile } from '../api/client';
 
 export function formatPreviewOptionValue(value: string | undefined, options: { value: string; label: string }[]) {
   if (!value) return '-'
@@ -15,23 +17,11 @@ export function normalizeReferenceImagesFromSnapshot(snapshot: TaskRequestSnapsh
   return snapshot.referenceImages.filter((img) => typeof img === 'string' || (img && typeof img.url === 'string'))
 }
 
-export function normalizeImageUrlForDedupe(url: string) {
-  try {
-    const u = new URL(url)
-    u.search = ''
-    return u.toString()
-  } catch {
-    return url.split('?')[0]
-  }
-}
 
-export function isLikelyThumbnailUrl(url: string) {
-  return url.includes('thumbnail') || url.includes('w=') || url.includes('width=')
-}
 
-export function buildImageElapsedSeconds(total: number, elapsed: number, existing: number[]) {
-  return [elapsed]
-}
+
+
+
 
 export function getImageTaskStatusLabel(status: string): string {
   return getTaskStatusLabel(status)
@@ -275,3 +265,181 @@ export function clampCount(value: number): number {
   }
   return Math.min(6, Math.max(1, Math.floor(value)))
 }
+export function normalizeElapsedSeconds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) {
+    return []
+  }
+  return values
+    .map((value) => Math.max(0, Math.floor(Number(value || 0))))
+    .filter((value) => Number.isFinite(value))
+}
+
+export function buildImageElapsedSeconds(
+  total: number,
+  elapsedSeconds: number,
+  existing: number[] = [],
+  completed = 0,
+  status: GenerationStatus | string = 'running',
+): number[] {
+  const count = Math.max(1, Math.floor(Number(total || 0)))
+  const safeElapsed = Math.max(0, Math.floor(Number(elapsedSeconds || 0)))
+  const persisted = normalizeElapsedSeconds(existing).slice(0, count)
+  if (status !== 'running') {
+    return persisted.length > 0 ? persisted : Array.from({ length: count }, () => safeElapsed)
+  }
+  const completedCount = Math.min(count, Math.max(0, Math.floor(Number(completed || 0))))
+  const result = persisted.slice(0, completedCount)
+  if (result.length < count) {
+    result.push(safeElapsed)
+  }
+  return result
+}
+
+export function limitGenerationProgresses(progresses: GenerationProgress[], maxItems = 6): GenerationProgress[] {
+  return progresses
+    .filter((item) => item.taskId)
+    .slice(0, maxItems)
+}
+
+export function normalizeGenerationStatus(status: string): GenerationStatus {
+  switch (status) {
+    case 'success':
+      return 'success'
+    case 'failed':
+      return 'failed'
+    case 'running':
+    case 'generating':
+    default:
+      return 'running'
+  }
+}
+
+export function progressFromImageTaskItem(item: ImageTaskItem): GenerationProgress {
+  const taskCount = Math.max(1, clampCount(Number(item.requestedCount || item.costCredits || item.costPoints)))
+  const status = normalizeGenerationStatus(item.status)
+  return {
+    taskId: item.id,
+    prompt: item.prompt,
+    status,
+    startedAt: new Date(item.createdAt).getTime() || Date.now(),
+    elapsedSeconds: 0,
+    imageElapsedSeconds: buildImageElapsedSeconds(taskCount, 0, item.imageElapsedSeconds, status === 'running' ? normalizeImageURLs(item.imageUrls, item.imageUrl).length : taskCount, status),
+    total: taskCount,
+    completed: status === 'running' ? 0 : taskCount,
+    success: status === 'success' ? taskCount : 0,
+    running: status === 'running' ? taskCount : 0,
+    attempt: 1,
+    backendUrl: api.API_BASE_URL,
+    message: `任务 ${item.id} ${getImageTaskStatusLabel(item.status)}`,
+  }
+}
+
+export function parseImageSize(size: string): { width: number; height: number } | null {
+  const match = size.trim().toLowerCase().match(/^(\d+)x(\d+)$/)
+  if (!match) {
+    return null
+  }
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width, height }
+}
+
+export function normalizeImageUrlForDedupe(rawUrl: string): string {
+  const trimmed = rawUrl.trim()
+  if (!trimmed) {
+    return ''
+  }
+  try {
+    const parsed = new URL(trimmed)
+    return normalizeImageUrlPath(parsed.pathname)
+  } catch {
+    return normalizeImageUrlPath(trimmed)
+  }
+}
+
+export function isLikelyThumbnailUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl)
+    return parsed.pathname.includes('/thumbs/')
+  } catch {
+    return rawUrl.includes('/thumbs/')
+  }
+}
+
+export function normalizeImageUrlPath(pathname: string): string {
+  return pathname
+    .replace(/\\/g, '/')
+    .replace(/\/thumbs\//g, '/')
+    .replace(/\/+/g, '/')
+}
+
+export function getDownloadCacheKey(taskId: string, imageIndex: number): string {
+  return `${taskId}:${Math.max(0, Math.floor(imageIndex || 0))}`
+}
+
+export function trimDownloadFileCache(cache: Map<string, DownloadedFile>, maxItems = 12): void {
+  while (cache.size > maxItems) {
+    const oldestKey = cache.keys().next().value
+    if (!oldestKey) {
+      return
+    }
+    cache.delete(oldestKey)
+  }
+}
+
+export function toPreview(item: ImageTaskItem): ImageTaskDetailResponse {
+  return {
+    taskId: item.id,
+    requestedCount: item.requestedCount || getPreviewRequestedCount(item, 0),
+    prompt: item.prompt,
+    imageUrl: item.imageUrl,
+    imageUrls: limitImageURLs(normalizeImageURLs(item.imageUrls, item.imageUrl), item.requestedCount),
+    imageElapsedSeconds: normalizeElapsedSeconds(item.imageElapsedSeconds),
+    thumbnailUrl: item.thumbnailUrl,
+    thumbnailUrls: limitImageURLs(normalizeImageURLs(item.thumbnailUrls, item.thumbnailUrl), item.requestedCount),
+    costPoints: item.costPoints,
+    costCredits: item.costCredits,
+    freeCreditsCost: item.freeCreditsCost,
+    paidCreditsCost: item.paidCreditsCost,
+    creditSource: item.creditSource,
+    emailNotifyEnabled: item.emailNotifyEnabled,
+    emailNotifyCostPoints: item.emailNotifyCostPoints,
+    status: item.status,
+    requestParams: item.requestParams,
+    errorMessage: item.errorMessage,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  }
+}
+
+export function detailToPreview(detail: ImageTaskDetailResponse): ImageTaskDetailResponse {
+  return {
+    taskId: detail.taskId,
+    requestedCount: detail.requestedCount || getPreviewRequestedCount(detail, 0),
+    prompt: detail.prompt,
+    imageUrl: detail.imageUrl,
+    imageUrls: limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount),
+    imageElapsedSeconds: normalizeElapsedSeconds(detail.imageElapsedSeconds),
+    thumbnailUrl: detail.thumbnailUrl,
+    thumbnailUrls: limitImageURLs(normalizeImageURLs(detail.thumbnailUrls, detail.thumbnailUrl), detail.requestedCount),
+    provider: detail.provider,
+    providerTaskId: detail.providerTaskId,
+    providerResponse: detail.providerResponse,
+    costPoints: detail.costPoints,
+    costCredits: detail.costCredits,
+    freeCreditsCost: detail.freeCreditsCost,
+    paidCreditsCost: detail.paidCreditsCost,
+    creditSource: detail.creditSource,
+    emailNotifyEnabled: detail.emailNotifyEnabled,
+    emailNotifyCostPoints: detail.emailNotifyCostPoints,
+    status: detail.status,
+    requestParams: detail.requestParams,
+    errorMessage: detail.errorMessage,
+    createdAt: detail.createdAt,
+    updatedAt: detail.updatedAt,
+  }
+}
+
