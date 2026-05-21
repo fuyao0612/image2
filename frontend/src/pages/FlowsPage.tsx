@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { api } from '@/api/client';
 import type { PointsLogItem, CreditLogItem } from '@/types/api';
 import { useAppContext } from '@/contexts/AppContext';
-import { Wallet, Sparkles } from "lucide-react";
-import { FlowLogType, FlowLogTabButton, PointsLogRow, CreditLogRow, PanelPagination } from "../App";
+import { Wallet, Sparkles } from 'lucide-react';
+import type { FlowLogType } from '@/types/app';
+import { FlowLogTabButton, PointsLogRow, CreditLogRow, PanelPagination } from '@/components/shared';
 
 const FLOW_LOG_PAGE_SIZE = 10;
 

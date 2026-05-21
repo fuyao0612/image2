@@ -3,10 +3,11 @@ import { api } from '@/api/client';
 import type { InviteInfoResponse, PointsResponse } from '@/types/api';
 import type { PasswordChangeForm } from '@/types/app';
 import { useAppContext } from '@/contexts/AppContext';
-import { UserRound, LoaderCircle, BadgeCheck, Gift, Copy, ShieldCheck, KeyRound, EyeOff, Eye } from "lucide-react";
-import { getUserRoleLabel, MiniStat, RewardLines, buildInviteLink, formatInviteReward, Field } from "../App";
-import { UserInfo, BillingSettingsResponse } from "../types/api";
-import { BusyAction } from "../App";
+import { UserRound, LoaderCircle, BadgeCheck, Gift, Copy, ShieldCheck, KeyRound, EyeOff, Eye } from 'lucide-react';
+import { getUserRoleLabel, buildInviteLink, formatInviteReward } from '@/utils/helpers';
+import { MiniStat, RewardLines, Field } from '@/components/shared';
+import type { UserInfo, BillingSettingsResponse } from '@/types/api';
+import type { BusyAction } from '@/types/app';
 
 function isSameShanghaiDay(dateString: string | null) {
   if (!dateString) return false;

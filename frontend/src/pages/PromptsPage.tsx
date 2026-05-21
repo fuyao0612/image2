@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo, useRef, ChangeEvent, DragEvent, Clipboard
 import { api } from '@/api/client';
 import type { PromptGalleryItem } from '@/types/app';
 import { useAppContext } from '@/contexts/AppContext';
-import { Heart, Upload, ArrowUpDown, ChevronDown, Search, XCircle, LoaderCircle, ImagePlus, Send, Image } from "lucide-react";
-import { PromptCard, Field, PromptDetailDialog, parsePromptTagString, copyTextToClipboard } from "../App";
-import { PromptSortMode } from "../App";
+import { Heart, Upload, ArrowUpDown, ChevronDown, Search, XCircle, LoaderCircle, ImagePlus, Send, Image } from 'lucide-react';
+import { parsePromptTagString, copyTextToClipboard } from '@/utils/helpers';
+import { PromptCard, PromptDetailDialog, Field } from '@/components/shared';
+import type { PromptSortMode } from '@/types/app';
 
 const featuredPromptItems: PromptGalleryItem[] = [];
 

@@ -3,8 +3,8 @@ import { KeyRound } from 'lucide-react';
 import { api } from '@/api/client';
 import type { PackageItem } from '@/types/api';
 import { useAppContext } from '@/contexts/AppContext';
-import { LoaderCircle } from "lucide-react";
-import { BusyAction } from "../App";
+import { LoaderCircle } from 'lucide-react';
+import type { BusyAction } from '@/types/app';
 
 export function RechargePage() {
   const { token, currentUser, setBusy, handleApiError, setPoints, busy, setMessage, points } = useAppContext();

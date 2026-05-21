@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { api } from '@/api/client';
 import type { ProductItem, ProductCategoryItem } from '@/types/api';
 import { useAppContext } from '@/contexts/AppContext';
-import { Search, ShoppingBag } from "lucide-react";
-import { money } from "../App";
+import { Search, ShoppingBag } from 'lucide-react';
+import { money } from '@/utils/helpers';
 import { RechargeConfirmDialog } from "./RechargePage";
 
 export function ProductsPage() {

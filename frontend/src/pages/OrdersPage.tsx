@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { api } from '@/api/client';
 import type { UserActivityItem } from '@/types/api';
 import { useAppContext } from '@/contexts/AppContext';
-import { getActivityShortLabel, getActivityRecordLabel, formatDateTime, getActivityRecordValue, PanelPagination } from "../App";
-import { ReceiptText } from "lucide-react";
-import { PageHeader } from "../App";
+import { getActivityShortLabel, getActivityRecordLabel, formatDateTime, getActivityRecordValue } from '@/utils/helpers';
+import { PanelPagination, PageHeader } from '@/components/shared';
+import { ReceiptText } from 'lucide-react';
 
 const ACTIVITY_PAGE_SIZE = 10;
 
