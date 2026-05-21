@@ -89,6 +89,8 @@ import { RechargePage } from "./pages/RechargePage";
 import { ProductsPage } from "./pages/ProductsPage";
 import { PromptsPage } from "./pages/PromptsPage";
 import { RechargeConfirmDialog } from "./pages/RechargePage";
+import { AppProvider } from './contexts/AppContext';
+import type { AppContextType } from './contexts/AppContext';
 
 type AuthMode = 'login' | 'register' | 'reset'
 type AppPage = 'home' | 'orders' | 'profile' | 'flows' | 'recharge' | 'prompts' | 'products'
@@ -2132,8 +2134,23 @@ function App() {
     }
     }, [previewImageIndex, previewImageURLs.length])
 
+    // ── Unified context value for child pages ──────────────────────────
+    // App.tsx owns all shared state; pages read/write through this context.
+    const appContextValue = useMemo<AppContextType>(() => ({
+      userTheme, setUserTheme,
+      token, setToken: (t: string) => setToken(t),
+      currentUser, setCurrentUser,
+      points, setPoints,
+      billingSettings, setBillingSettings,
+      busy, setBusy,
+      message, setMessage,
+      logout: handleLogout,
+      handleApiError,
+    }), [userTheme, token, currentUser, points, billingSettings, busy, message])
+
     if (!isAuthed) {
     return (
+      <AppProvider value={appContextValue}>
       <div className="auth-light-shell min-h-screen bg-slate-950 text-slate-100">
         <TopNotice message={message} onDismiss={() => setMessage('')} />
         <main className="flex min-h-screen flex-col items-center justify-center px-4 py-8">
@@ -2500,20 +2517,24 @@ function App() {
           <IcpFooter className="mt-6" />
         </main>
       </div>
+      </AppProvider>
     )
     }
 
     if (isAuthed && adminOpen) {
     return (
+      <AppProvider value={appContextValue}>
       <AdminConsole
         currentUser={currentUser}
         onBackToApp={handleExitAdmin}
         onLogout={handleLogoutRequest}
       />
+      </AppProvider>
     )
     }
 
     return (
+    <AppProvider value={appContextValue}>
     <div
       className="user-glass-shell min-h-screen w-full max-w-[100dvw] overflow-x-hidden bg-slate-950 text-slate-100"
       data-user-theme={userTheme}
@@ -2960,6 +2981,7 @@ function App() {
       ) : null}
 
     </div>
+    </AppProvider>
     )
 }
 
