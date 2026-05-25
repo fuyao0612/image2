@@ -282,10 +282,8 @@ func (s *Service) markProviderKeySuccess(ctx context.Context, keyID uint64) {
 	if keyID == 0 {
 		return
 	}
-	now := time.Now()
 	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(map[string]any{
 		"success_count": gorm.Expr("success_count + ?", 1),
-		"last_used_at":  &now,
 		"last_error":    "",
 		"status":        model.ImageProviderKeyStatusActive,
 	}).Error
@@ -294,15 +292,31 @@ func (s *Service) markProviderKeySuccess(ctx context.Context, keyID uint64) {
 	}
 }
 
+func (s *Service) markProviderKeyCall(ctx context.Context, keyID uint64) {
+	if keyID == 0 {
+		return
+	}
+	now := time.Now()
+	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(map[string]any{
+		"call_count":   gorm.Expr("call_count + ?", 1),
+		"last_used_at": &now,
+	}).Error
+	if err != nil {
+		log.Printf("更新生图 Key 调用次数失败 (keyID=%d): %v", keyID, err)
+	}
+}
+
 func (s *Service) markProviderKeyFailure(ctx context.Context, keyID uint64, reason string, lowBalance bool) {
 	if keyID == 0 {
 		return
 	}
+	now := time.Now()
 	updates := map[string]any{
 		"failure_count": gorm.Expr("failure_count + ?", 1),
 		"last_error":    truncateProviderMessage(reason),
 	}
 	if lowBalance {
+		updates["last_used_at"] = &now
 		updates["status"] = model.ImageProviderKeyStatusLowBalance
 	}
 	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(updates).Error
@@ -334,27 +348,28 @@ func (s *Service) submitImageTaskWithProviderPoolSkip(ctx context.Context, taskI
 		_ = s.db.WithContext(ctx).Model(&model.ImageTask{}).
 			Where("id = ? AND user_id = ?", taskID, userID).
 			Updates(map[string]any{"provider": currentProvider.Name(), "provider_key_id": key.ID}).Error
+		s.markProviderKeyCall(ctx, key.ID)
 		result, err := currentProvider.Submit(ctx, req)
 		if err == nil {
 			if result.Status == model.ImageTaskStatusFailed {
 				message := providerFailureMessage(result, nil)
-				s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
 				if isProviderBalanceError(message) {
+					s.markProviderKeyFailure(ctx, key.ID, message, true)
 					lastResult = result
 					log.Printf("生图 Key %d 余额不足，尝试切换下一把 Key: %s", key.ID, message)
 					continue
 				}
+				return result, currentProvider, key.ID, nil
 			}
-			s.markProviderKeySuccess(ctx, key.ID)
 			return result, currentProvider, key.ID, nil
 		}
 		lastResult = result
 		lastErr = err
 		message := providerFailureMessage(result, err)
-		s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
 		if shouldStopProviderSubmitFailover(result, err) || strings.TrimSpace(result.ProviderTaskID) != "" {
 			return result, currentProvider, key.ID, err
 		}
+		s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
 		log.Printf("生图 Key %d 提交失败，尝试切换下一把 Key: %s", key.ID, message)
 		continue
 	}
@@ -413,6 +428,10 @@ func isProviderCooldownError(message string) bool {
 }
 
 func providerKeyToDTO(key model.ImageProviderKey) dto.AdminProviderKeyItem {
+	callCount := key.CallCount
+	if callCount == 0 && (key.SuccessCount > 0 || key.FailureCount > 0) {
+		callCount = key.SuccessCount + key.FailureCount
+	}
 	return dto.AdminProviderKeyItem{
 		ID:                strconv.FormatUint(key.ID, 10),
 		Name:              key.Name,
@@ -424,6 +443,7 @@ func providerKeyToDTO(key model.ImageProviderKey) dto.AdminProviderKeyItem {
 		IsUsing:           key.IsUsing,
 		Priority:          key.Priority,
 		AutoSwitchEnabled: key.AutoSwitchEnabled,
+		CallCount:         callCount,
 		SuccessCount:      key.SuccessCount,
 		FailureCount:      key.FailureCount,
 		LastUsedAt:        key.LastUsedAt,

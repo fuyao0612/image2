@@ -27,6 +27,8 @@ import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
+const CUSTOM_SIZE_MAX_ASPECT_RATIO = 3
+const FOUR_K_PIXELS = 3840 * 2160
 const CUSTOM_SIZE_LIMIT_MESSAGE = '自定义尺寸不符合要求：宽度和高度最高 3840，总像素必须在 655,360-8,294,400 之间。'
 
 function parseCustomDimension(value: string | number): number {
@@ -48,6 +50,27 @@ function resolveSelectedSize(size: string, width: string | number, height: strin
   const safeHeight = Math.min(CUSTOM_SIZE_MAX_SIDE, Math.max(1, Math.floor(parseCustomDimension(height) || 1024)))
   return `${safeWidth}x${safeHeight}`
 }
+
+function parseSelectedSize(size: string, width: string | number, height: string | number): { width: number; height: number } | null {
+  const resolved = resolveSelectedSize(size, width, height)
+  const match = resolved.trim().toLowerCase().match(/^(\d+)x(\d+)$/)
+  if (!match) {
+    return null
+  }
+  return {
+    width: Number(match[1]),
+    height: Number(match[2]),
+  }
+}
+
+function isFourKOrLargerSize(size: string, width: string | number, height: string | number): boolean {
+  const parsed = parseSelectedSize(size, width, height)
+  if (!parsed) {
+    return false
+  }
+  return parsed.width * parsed.height >= FOUR_K_PIXELS
+}
+
 function validateSelectedSize(size: string, width: string | number, height: string | number): string | null {
   if (size !== 'custom') {
     return null
@@ -69,6 +92,15 @@ function validateSelectedSize(size: string, width: string | number, height: stri
   const totalPixels = normalizedWidth * normalizedHeight
   if (totalPixels < CUSTOM_SIZE_MIN_PIXELS || totalPixels > CUSTOM_SIZE_MAX_PIXELS) {
     return CUSTOM_SIZE_LIMIT_MESSAGE
+  }
+  if (normalizedWidth % 16 !== 0 || normalizedHeight % 16 !== 0) {
+    return '自定义尺寸的宽度和高度都必须是 16 的倍数。'
+  }
+
+  const longerSide = Math.max(normalizedWidth, normalizedHeight)
+  const shorterSide = Math.min(normalizedWidth, normalizedHeight)
+  if (longerSide > shorterSide * CUSTOM_SIZE_MAX_ASPECT_RATIO) {
+    return '自定义尺寸宽高比不能超过 3:1，请把宽度和高度调得更接近一些。'
   }
 
   return null
@@ -108,6 +140,7 @@ export function HomePage(props: HomePageProps) {
   const [outputFormat, setOutputFormat] = useState('default')
   const [customWidth, setCustomWidth] = useState('1024')
   const [customHeight, setCustomHeight] = useState('1024')
+  const qualityAutoOnly = isFourKOrLargerSize(size, customWidth, customHeight)
   const [referenceImageURL, setReferenceImageURL] = useState('')
   const [referenceImagesDialogOpen, setReferenceImagesDialogOpen] = useState(false)
   const [showNetworkImageInput, setShowNetworkImageInput] = useState(false)
@@ -118,6 +151,12 @@ export function HomePage(props: HomePageProps) {
   const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([])
   const [referenceImageUploading, setReferenceImageUploading] = useState(false)
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (qualityAutoOnly && quality !== 'auto') {
+      setQuality('auto')
+    }
+  }, [quality, qualityAutoOnly])
 
   async function uploadLocalReferenceImage(file?: File) {
     if (!file) {
@@ -630,6 +669,7 @@ function handleApplyPreviewDetail() {
     }
 
     const requestSize = resolveSelectedSize(size, customWidth, customHeight)
+    const requestQuality = isFourKOrLargerSize(size, customWidth, customHeight) ? 'auto' : quality
     const taskCount = props.clampCount(count)
     const selectedReferenceImages = referenceImages || []
     const requestSnapshot = {
@@ -637,7 +677,7 @@ function handleApplyPreviewDetail() {
       size: requestSize,
       style: style,
       count: taskCount,
-      quality: quality,
+      quality: requestQuality,
       outputFormat: outputFormat,
       referenceImageUrl: selectedReferenceImages[0]?.url || (referenceImageURL || '').trim() || undefined,
       referenceImageUrls: selectedReferenceImages.map((item) => item.url).filter(Boolean),
@@ -1102,8 +1142,8 @@ function handleApplyPreviewDetail() {
                           className="h-11 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-100 outline-none transition focus:border-violet-400"
                         >
                           {qualityOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
+                            <option key={option.value} value={option.value} disabled={qualityAutoOnly && option.value !== 'auto'}>
+                              {option.value === 'auto' ? '自动，4k以上图片仅支持该选项' : option.label}
                             </option>
                           ))}
                         </select>

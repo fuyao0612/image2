@@ -217,7 +217,7 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 	}
 
 	style := strings.TrimSpace(req.Style)
-	quality := strings.TrimSpace(req.Quality)
+	quality := normalizeImageQualityForSize(req.Quality, size)
 	outputFormat := strings.TrimSpace(req.OutputFormat)
 	imagePointCost := s.settingInt64(systemSettingKeyImageGeneratePointCost, 20)
 	if imagePointCost <= 0 {
@@ -574,6 +574,15 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 				if err := incrementImagesGeneratedTotal(tx, int64(requestedCount)); err != nil {
 					return err
 				}
+				if task.ProviderKeyID > 0 {
+					if err := tx.Model(&model.ImageProviderKey{}).Where("id = ?", task.ProviderKeyID).Updates(map[string]any{
+						"success_count": gorm.Expr("success_count + ?", 1),
+						"last_error":    "",
+						"status":        model.ImageProviderKeyStatusActive,
+					}).Error; err != nil {
+						return err
+					}
+				}
 				user, err := s.lockUser(tx, userID)
 				if err != nil {
 					return err
@@ -619,6 +628,15 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 			}
 			if err := incrementImagesGeneratedTotal(tx, int64(settlement.Succeeded)); err != nil {
 				return err
+			}
+			if task.ProviderKeyID > 0 {
+				if err := tx.Model(&model.ImageProviderKey{}).Where("id = ?", task.ProviderKeyID).Updates(map[string]any{
+					"success_count": gorm.Expr("success_count + ?", 1),
+					"last_error":    "",
+					"status":        model.ImageProviderKeyStatusActive,
+				}).Error; err != nil {
+					return err
+				}
 			}
 
 			notice = &imageTaskFailureNotice{
@@ -720,6 +738,18 @@ func (s *Service) failImageTaskAndRefundV2(taskID uint64, userID uint64, result 
 			}
 			balance = user.FreeCredits + user.PaidCredits
 			return nil
+		}
+		if task.ProviderKeyID > 0 {
+			updates := map[string]any{
+				"failure_count": gorm.Expr("failure_count + ?", 1),
+				"last_error":    adminMessage,
+			}
+			if isProviderBalanceError(adminMessage) {
+				updates["status"] = model.ImageProviderKeyStatusLowBalance
+			}
+			if err := tx.Model(&model.ImageProviderKey{}).Where("id = ?", task.ProviderKeyID).Updates(updates).Error; err != nil {
+				return err
+			}
 		}
 
 		notice = &imageTaskFailureNotice{
@@ -837,8 +867,10 @@ func successfulImageTaskURLs(task model.ImageTask, result provider.GenerateResul
 		requestedCount = 1
 	}
 	referenceImageURL := referenceImageURLFromRequestParams(task.RequestParams)
-	urls := imageURLsFromTask(task)
-	urls = mergeStringURLs(urls, normalizeGeneratedImageURLs(result, requestedCount, referenceImageURL))
+	urls := normalizeGeneratedImageURLs(result, requestedCount, referenceImageURL)
+	if len(urls) == 0 {
+		urls = imageURLsFromTask(task)
+	}
 	urls = filterUsableTaskImageURLs(urls)
 	urls = normalizeGeneratedImageURLs(provider.GenerateResult{ImageURLs: urls}, requestedCount, "")
 	if len(urls) > requestedCount {

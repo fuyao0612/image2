@@ -406,6 +406,7 @@ export interface RedeemCodeResponse {
 export interface BillingSettingsResponse {
   imageGeneratePointCost: number
   imageGenerationEnabled: boolean
+  imageFailureNotifyEnabled: boolean
   emailNotifyEnabled: boolean
   emailNotifyPointCost: number
   checkinPoints: number
@@ -419,6 +420,7 @@ export interface BillingSettingsResponse {
 export interface UpdateBillingSettingsRequest {
   imageGeneratePointCost: number
   imageGenerationEnabled: boolean
+  imageFailureNotifyEnabled: boolean
   emailNotifyEnabled: boolean
   emailNotifyPointCost: number
   checkinPoints: number
@@ -550,6 +552,8 @@ export interface AdminImageTaskItem {
   creditSource?: string
   status: string
   provider?: string
+  providerKeyId?: string
+  providerKeyName?: string
   providerTaskId?: string
   providerResponse?: string
   requestParams?: string
@@ -820,6 +824,7 @@ export interface AdminProviderKeyItem {
   isUsing: boolean
   priority: number
   autoSwitchEnabled: boolean
+  callCount: number
   successCount: number
   failureCount: number
   lastUsedAt?: string | null

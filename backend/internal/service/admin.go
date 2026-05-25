@@ -540,15 +540,21 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 	}
 	userIDs := make([]uint64, 0, len(tasks))
 	seenUserIDs := make(map[uint64]struct{}, len(tasks))
+	keyIDs := make([]uint64, 0, len(tasks))
+	seenKeyIDs := make(map[uint64]struct{}, len(tasks))
 	for _, task := range tasks {
-		if task.UserID == 0 {
-			continue
+		if task.UserID != 0 {
+			if _, ok := seenUserIDs[task.UserID]; !ok {
+				seenUserIDs[task.UserID] = struct{}{}
+				userIDs = append(userIDs, task.UserID)
+			}
 		}
-		if _, ok := seenUserIDs[task.UserID]; ok {
-			continue
+		if task.ProviderKeyID > 0 {
+			if _, ok := seenKeyIDs[task.ProviderKeyID]; !ok {
+				seenKeyIDs[task.ProviderKeyID] = struct{}{}
+				keyIDs = append(keyIDs, task.ProviderKeyID)
+			}
 		}
-		seenUserIDs[task.UserID] = struct{}{}
-		userIDs = append(userIDs, task.UserID)
 	}
 	usernames := make(map[uint64]string, len(userIDs))
 	if len(userIDs) > 0 {
@@ -560,6 +566,16 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 			usernames[user.ID] = user.Username
 		}
 	}
+	providerKeyNames := make(map[uint64]string, len(keyIDs))
+	if len(keyIDs) > 0 {
+		var keys []model.ImageProviderKey
+		if err := s.db.WithContext(ctx).Select("id", "name").Where("id IN ?", keyIDs).Find(&keys).Error; err != nil {
+			return dto.AdminListImageTasksResponse{}, err
+		}
+		for _, key := range keys {
+			providerKeyNames[key.ID] = key.Name
+		}
+	}
 	items := make([]dto.AdminImageTaskItem, 0, len(tasks))
 	for _, task := range tasks {
 		thumbURLs := s.thumbnailURLsFromTask(ctx, task)
@@ -569,6 +585,10 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 			adminErrorMessage = providerFailureAdminMessage(provider.GenerateResult{
 				RawResponse: task.ProviderResponse,
 			}, nil)
+		}
+		providerKeyID := ""
+		if task.ProviderKeyID > 0 {
+			providerKeyID = strconv.FormatUint(task.ProviderKeyID, 10)
 		}
 		items = append(items, dto.AdminImageTaskItem{
 			ID:                    strconv.FormatUint(task.ID, 10),
@@ -588,6 +608,8 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 			CreditSource:          task.CreditSource,
 			Status:                string(task.Status),
 			Provider:              task.Provider,
+			ProviderKeyID:         providerKeyID,
+			ProviderKeyName:       providerKeyNames[task.ProviderKeyID],
 			ProviderTaskID:        task.ProviderTaskID,
 			ProviderResponse:      task.ProviderResponse,
 			RequestParams:         task.RequestParams,

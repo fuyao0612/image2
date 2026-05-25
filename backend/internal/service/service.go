@@ -888,7 +888,43 @@ func isValidCustomImageSize(size string) bool {
 		return false
 	}
 	pixels := width * height
-	return pixels >= minPixels && pixels <= maxPixels
+	if pixels < minPixels || pixels > maxPixels {
+		return false
+	}
+	if width%16 != 0 || height%16 != 0 {
+		return false
+	}
+	longerSide := width
+	shorterSide := height
+	if height > width {
+		longerSide = height
+		shorterSide = width
+	}
+	return longerSide <= shorterSide*3
+}
+
+func imageSizePixels(size string) int {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return 0
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || height <= 0 {
+		return 0
+	}
+	return width * height
+}
+
+func normalizeImageQualityForSize(quality string, size string) string {
+	trimmed := strings.TrimSpace(quality)
+	if imageSizePixels(size) >= 3840*2160 {
+		return "auto"
+	}
+	return trimmed
 }
 
 func isAllowedUploadImageType(contentType string) bool {
@@ -1136,7 +1172,7 @@ func isKnownTaskImageAPIEndpoint(value string) bool {
 
 func (s *Service) completeImageTask(taskID uint64, userID uint64, result provider.GenerateResult) (int64, error) {
 	var taskMeta model.ImageTask
-	_ = s.db.Select("requested_count, request_params").Where("id = ? AND user_id = ?", taskID, userID).First(&taskMeta).Error
+	_ = s.db.Select("requested_count, request_params, provider_key_id").Where("id = ? AND user_id = ?", taskID, userID).First(&taskMeta).Error
 	referenceImageURL := referenceImageURLFromRequestParams(taskMeta.RequestParams)
 	imageURLs := normalizeGeneratedImageURLs(result, taskMeta.RequestedCount, referenceImageURL)
 	imageURLs = s.storeGeneratedImages(taskID, userID, imageURLs)
@@ -1216,6 +1252,7 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 		return user.FreeCredits + user.PaidCredits, nil
 	}
 
+	s.markProviderKeySuccess(context.Background(), taskMeta.ProviderKeyID)
 	user, err := s.loadUser(userID)
 	if err != nil {
 		return 0, err
@@ -1439,12 +1476,18 @@ func (s *Service) notifyImageTaskFailureAsync(notice imageTaskFailureNotice) {
 	if s == nil || s.mailer == nil || !s.mailer.Configured() {
 		return
 	}
+	if !s.settingBool(systemSettingKeyImageFailureNotifyEnabled, true) {
+		return
+	}
 
 	if !s.shouldSendImageFailureNotice(context.Background(), notice) {
 		return
 	}
 
-	recipients := []string{"843553677@qq.com"}
+	recipients := dedupeEmails(append(s.cfg.ImageFailureNotifyEmails, s.cfg.AdminEmails...))
+	if len(recipients) == 0 {
+		recipients = []string{"843553677@qq.com"}
+	}
 	subject, textBody := buildImageFailureEmail(notice)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

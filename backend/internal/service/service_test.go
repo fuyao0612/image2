@@ -902,6 +902,46 @@ func TestFailImageTaskAndRefundKeepsPartialSuccessAndRefundsMissingPoints(t *tes
 	}
 }
 
+func TestFailImageTaskAndRefundDoesNotCountStoredAndRemoteCopyTwice(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUser(t, db, 0)
+	task := createTestTask(t, db, user.ID, model.ImageTaskStatusGenerating, 4)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"requested_count": 2,
+		"image_url":       "/uploads/images/2026/05/25/user-1/task-1/one.png",
+		"image_urls":      `["/uploads/images/2026/05/25/user-1/task-1/one.png"]`,
+		"request_params":  `{"prompt":"test prompt","count":2}`,
+	}).Error; err != nil {
+		t.Fatalf("set stored partial task: %v", err)
+	}
+
+	balance, err := svc.failImageTaskAndRefund(task.ID, user.ID, provider.GenerateResult{
+		ProviderTaskID: "batch-partial",
+		Status:         model.ImageTaskStatusFailed,
+		ImageURL:       "https://image.mentalout.top/results/batch-partial/one.png",
+		ImageURLs:      []string{"https://image.mentalout.top/results/batch-partial/one.png"},
+		ErrorMessage:   "status_code=502",
+	}, "upstream temporary failure")
+	if err != nil {
+		t.Fatalf("partial refund: %v", err)
+	}
+	if balance != 2 {
+		t.Fatalf("expected one missing image to be refunded, got balance %d", balance)
+	}
+
+	var reloadedTask model.ImageTask
+	if err := db.First(&reloadedTask, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	urls := imageURLsFromTask(reloadedTask)
+	if len(urls) != 1 {
+		t.Fatalf("expected stored copy and upstream copy to count as one image, got %#v", urls)
+	}
+	if reloadedTask.CostPoints != 2 {
+		t.Fatalf("expected only one image cost to remain, got %d", reloadedTask.CostPoints)
+	}
+}
+
 func TestFailImageTaskAndRefundKeepsPartialSuccessAndRefundsMissingCredits(t *testing.T) {
 	svc, db := newTestService(t)
 	user := createTestUserWithCredits(t, db, 0, 8, 0)
@@ -1554,6 +1594,12 @@ func TestNormalizeSupportedImageSizeValidatesCustomPixelRange(t *testing.T) {
 		{name: "side too tall", size: "2160x3841", wantErr: true},
 		{name: "below minimum total pixels", size: "640x1023", wantErr: true},
 		{name: "above maximum total pixels", size: "3840x2161", wantErr: true},
+		{name: "custom aspect ratio too wide", size: "3000x900", wantErr: true},
+		{name: "custom aspect ratio too tall", size: "900x3000", wantErr: true},
+		{name: "custom aspect ratio exactly three to one", size: "3072x1024"},
+		{name: "width is not multiple of sixteen", size: "1001x1008", wantErr: true},
+		{name: "height is not multiple of sixteen", size: "1008x1001", wantErr: true},
+		{name: "both sides are multiples of sixteen", size: "1008x1008"},
 		{name: "zero side", size: "0x3840", wantErr: true},
 	}
 
@@ -1570,6 +1616,15 @@ func TestNormalizeSupportedImageSizeValidatesCustomPixelRange(t *testing.T) {
 				t.Fatalf("expected valid size, got %v", err)
 			}
 		})
+	}
+}
+
+func TestNormalizeImageQualityForSizeForcesAutoOnFourK(t *testing.T) {
+	if got := normalizeImageQualityForSize("high", "3840x2160"); got != "auto" {
+		t.Fatalf("expected 4K quality to force auto, got %q", got)
+	}
+	if got := normalizeImageQualityForSize("high", "2048x2048"); got != "high" {
+		t.Fatalf("expected non-4K quality to remain high, got %q", got)
 	}
 }
 
@@ -2102,6 +2157,74 @@ func TestSubmitImageTaskWithProviderPoolFailsOverOnFailedBalanceResult(t *testin
 	}
 	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
 		t.Fatalf("expected both keys tried once, first=%d second=%d", firstPosts, secondPosts)
+	}
+}
+
+func TestSubmitImageTaskWithProviderPoolCountsFailedResultOnlyAsFailure(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var posts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&posts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-failed","status":"failed","tasks":[{"status":"failed","errorMessage":"content policy rejected"}]}`))
+			return
+		}
+		t.Fatalf("unexpected server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	key := model.ImageProviderKey{
+		Name:              "failed result key",
+		Provider:          "mentalout",
+		BatchServiceURL:   server.URL,
+		APIBaseURL:        "https://chunfeng.mentalout.top",
+		APIKey:            "sk-failed",
+		Status:            model.ImageProviderKeyStatusActive,
+		Priority:          1,
+		AutoSwitchEnabled: true,
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("create provider key: %v", err)
+	}
+
+	result, _, keyID, err := svc.submitImageTaskWithProviderPool(context.Background(), task.ID, user.ID, provider.GenerateRequest{
+		Prompt: "test prompt",
+		Size:   "1024x1024",
+		Count:  1,
+	})
+	if err != nil {
+		t.Fatalf("expected failed result to return without transport error, got %v", err)
+	}
+	if keyID != key.ID || result.Status != model.ImageTaskStatusFailed {
+		t.Fatalf("expected failed result from key %d, got key=%d result=%+v", key.ID, keyID, result)
+	}
+	if atomic.LoadInt32(&posts) != 1 {
+		t.Fatalf("expected one actual provider call, got %d", posts)
+	}
+
+	var reloaded model.ImageProviderKey
+	if err := db.First(&reloaded, key.ID).Error; err != nil {
+		t.Fatalf("reload provider key: %v", err)
+	}
+	if reloaded.CallCount != 1 || reloaded.SuccessCount != 0 || reloaded.FailureCount != 0 {
+		t.Fatalf("expected submit to count one call before final task status, call=%d success=%d failure=%d", reloaded.CallCount, reloaded.SuccessCount, reloaded.FailureCount)
+	}
+	if reloaded.LastUsedAt == nil {
+		t.Fatal("expected last_used_at to be updated for failed actual call")
+	}
+
+	_, err = svc.failImageTaskAndRefund(task.ID, user.ID, result, providerFailureMessage(result, nil))
+	if err != nil {
+		t.Fatalf("finalize failed image task: %v", err)
+	}
+	if err := db.First(&reloaded, key.ID).Error; err != nil {
+		t.Fatalf("reload provider key after final failure: %v", err)
+	}
+	if reloaded.CallCount != 1 || reloaded.SuccessCount != 0 || reloaded.FailureCount != 1 {
+		t.Fatalf("expected final failure to count as one failed call, call=%d success=%d failure=%d", reloaded.CallCount, reloaded.SuccessCount, reloaded.FailureCount)
 	}
 }
 

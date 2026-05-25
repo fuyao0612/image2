@@ -114,6 +114,8 @@ type AdminImageTaskItem struct {
 	CreditSource          string    `json:"creditSource"`
 	Status                string    `json:"status"`
 	Provider              string    `json:"provider,omitempty"`
+	ProviderKeyID         string    `json:"providerKeyId,omitempty"`
+	ProviderKeyName       string    `json:"providerKeyName,omitempty"`
 	ProviderTaskID        string    `json:"providerTaskId,omitempty"`
 	ProviderResponse      string    `json:"providerResponse,omitempty"`
 	RequestParams         string    `json:"requestParams,omitempty"`
@@ -290,6 +292,7 @@ type AdminProviderKeyItem struct {
 	IsUsing           bool       `json:"isUsing"`
 	Priority          int        `json:"priority"`
 	AutoSwitchEnabled bool       `json:"autoSwitchEnabled"`
+	CallCount         int64      `json:"callCount"`
 	SuccessCount      int64      `json:"successCount"`
 	FailureCount      int64      `json:"failureCount"`
 	LastUsedAt        *time.Time `json:"lastUsedAt,omitempty"`

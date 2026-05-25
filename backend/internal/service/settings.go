@@ -17,6 +17,7 @@ import (
 const (
 	systemSettingKeyImageGeneratePointCost        = "billing.image_generate_point_cost"
 	systemSettingKeyImageGenerationEnabled        = "image.generation_enabled"
+	systemSettingKeyImageFailureNotifyEnabled     = "image.failure_notify_enabled"
 	systemSettingKeyEmailNotifyEnabled            = "email_notify.enabled"
 	systemSettingKeyEmailNotifyPointCost          = "email_notify.point_cost"
 	systemSettingKeyCheckinPoints                 = "billing.checkin_points"
@@ -42,6 +43,7 @@ func defaultSystemSettings(cfg config.Config) map[string]string {
 	return map[string]string{
 		systemSettingKeyImageGeneratePointCost:        strconv.FormatInt(imageCost, 10),
 		systemSettingKeyImageGenerationEnabled:        "true",
+		systemSettingKeyImageFailureNotifyEnabled:     "true",
 		systemSettingKeyEmailNotifyEnabled:            "false",
 		systemSettingKeyEmailNotifyPointCost:          "1",
 		systemSettingKeyCheckinPoints:                 strconv.FormatInt(checkinPoints, 10),
@@ -116,6 +118,7 @@ func (s *Service) BillingSettings(ctx context.Context) (dto.BillingSettingsRespo
 	return dto.BillingSettingsResponse{
 		ImageGeneratePointCost:        s.settingInt64(systemSettingKeyImageGeneratePointCost, 20),
 		ImageGenerationEnabled:        s.settingBool(systemSettingKeyImageGenerationEnabled, true),
+		ImageFailureNotifyEnabled:     s.settingBool(systemSettingKeyImageFailureNotifyEnabled, true),
 		EmailNotifyEnabled:            s.settingBool(systemSettingKeyEmailNotifyEnabled, false),
 		EmailNotifyPointCost:          s.settingInt64(systemSettingKeyEmailNotifyPointCost, 1),
 		CheckinPoints:                 s.settingInt64(systemSettingKeyCheckinPoints, 3),
@@ -171,6 +174,7 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 	after := dto.BillingSettingsResponse{
 		ImageGeneratePointCost:        req.ImageGeneratePointCost,
 		ImageGenerationEnabled:        settingBoolValue(req.ImageGenerationEnabled, true),
+		ImageFailureNotifyEnabled:     settingBoolValue(req.ImageFailureNotifyEnabled, true),
 		EmailNotifyEnabled:            settingBoolValue(req.EmailNotifyEnabled, false),
 		EmailNotifyPointCost:          emailNotifyPointCost,
 		CheckinPoints:                 checkinPoints,
@@ -184,6 +188,7 @@ func (s *Service) UpdateBillingSettings(ctx context.Context, adminID uint64, req
 	updates := map[string]string{
 		systemSettingKeyImageGeneratePointCost:        strconv.FormatInt(req.ImageGeneratePointCost, 10),
 		systemSettingKeyImageGenerationEnabled:        settingBoolString(req.ImageGenerationEnabled, true),
+		systemSettingKeyImageFailureNotifyEnabled:     settingBoolString(req.ImageFailureNotifyEnabled, true),
 		systemSettingKeyEmailNotifyEnabled:            settingBoolString(req.EmailNotifyEnabled, false),
 		systemSettingKeyEmailNotifyPointCost:          strconv.FormatInt(emailNotifyPointCost, 10),
 		systemSettingKeyCheckinPoints:                 strconv.FormatInt(checkinPoints, 10),

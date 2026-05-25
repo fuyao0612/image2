@@ -4,6 +4,7 @@ package dto
 type BillingSettingsResponse struct {
 	ImageGeneratePointCost        int64 `json:"imageGeneratePointCost"`
 	ImageGenerationEnabled        bool  `json:"imageGenerationEnabled"`
+	ImageFailureNotifyEnabled     bool  `json:"imageFailureNotifyEnabled"`
 	EmailNotifyEnabled            bool  `json:"emailNotifyEnabled"`
 	EmailNotifyPointCost          int64 `json:"emailNotifyPointCost"`
 	CheckinPoints                 int64 `json:"checkinPoints"`
@@ -18,6 +19,7 @@ type BillingSettingsResponse struct {
 type UpdateBillingSettingsRequest struct {
 	ImageGeneratePointCost        int64  `json:"imageGeneratePointCost" binding:"required,min=1"`
 	ImageGenerationEnabled        *bool  `json:"imageGenerationEnabled"`
+	ImageFailureNotifyEnabled     *bool  `json:"imageFailureNotifyEnabled"`
 	EmailNotifyEnabled            *bool  `json:"emailNotifyEnabled"`
 	EmailNotifyPointCost          *int64 `json:"emailNotifyPointCost" binding:"required,min=0"`
 	CheckinPoints                 *int64 `json:"checkinPoints" binding:"required,min=0"`

@@ -425,8 +425,8 @@ export function PreviewImageStage({
         )}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="mt-4 flex flex-nowrap items-center justify-between gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={onPrevious}
@@ -454,7 +454,7 @@ export function PreviewImageStage({
           type="button"
           onClick={onSaveCurrent}
           disabled={!currentImageUrl}
-          className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-700 bg-slate-900 px-2.5 text-xs text-slate-200 transition hover:border-violet-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 sm:gap-2 sm:px-3 sm:text-sm"
         >
           <Download className="h-4 w-4" />
           保存当前图片

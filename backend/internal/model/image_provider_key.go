@@ -27,6 +27,7 @@ type ImageProviderKey struct {
 	IsUsing           bool                   `gorm:"not null;default:false;index;comment:当前手动指定使用" json:"isUsing"`
 	Priority          int                    `gorm:"not null;default:100;index;comment:优先级，数字越小越优先" json:"priority"`
 	AutoSwitchEnabled bool                   `gorm:"not null;default:true;comment:失败时是否参与自动切换" json:"autoSwitchEnabled"`
+	CallCount         int64                  `gorm:"not null;default:0;comment:实际调用次数" json:"callCount"`
 	SuccessCount      int64                  `gorm:"not null;default:0;comment:成功次数" json:"successCount"`
 	FailureCount      int64                  `gorm:"not null;default:0;comment:失败次数" json:"failureCount"`
 	LastUsedAt        *time.Time             `gorm:"comment:最近使用时间" json:"lastUsedAt,omitempty"`
