@@ -199,7 +199,7 @@ func (c *Client) StoreRemoteImages(ctx context.Context, imageURLs []string, keyP
 			continue
 		}
 
-		data, contentType, ext, err := c.downloadWithRetry(ctx, trimmed)
+		data, contentType, ext, err := c.downloadStoredOrRemote(ctx, trimmed)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -227,6 +227,17 @@ func (c *Client) StoreRemoteImages(ctx context.Context, imageURLs []string, keyP
 		storedURLs = mergeURLs(storedURLs, []string{storedURL})
 	}
 	return storedURLs, firstErr
+}
+
+func (c *Client) downloadStoredOrRemote(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+	if c != nil && c.local != nil {
+		if data, contentType, ext, ok, err := c.local.ReadByURL(rawURL); ok {
+			return data, contentType, ext, err
+		} else if err != nil {
+			return nil, "", "", err
+		}
+	}
+	return c.downloadWithRetry(ctx, rawURL)
 }
 
 func (c *Client) downloadWithRetry(ctx context.Context, rawURL string) ([]byte, string, string, error) {

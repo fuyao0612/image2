@@ -17,7 +17,7 @@ export function WechatSaveGuide({
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭保存提示" onClick={onClose} />
       <div className="relative flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
@@ -67,7 +67,7 @@ export function ReferenceImagesDialog({
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭参考图列表" onClick={onClose} />
       <div className="relative flex max-h-[82vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl">
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
@@ -87,6 +87,9 @@ export function ReferenceImagesDialog({
         <div className="space-y-3 overflow-y-auto p-3">
           {images.map((image, index) => (
             <div key={`${image.url}-${index}`} className="flex items-center gap-3 rounded-2xl bg-white p-3 shadow-sm">
+              <span className="reference-image-index inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold shadow-sm">
+                {index + 1}
+              </span>
               <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
                 <img src={image.url} alt={image.name || `参考图 ${index + 1}`} className="h-full w-full object-cover" />
               </div>
@@ -127,14 +130,21 @@ export function PreviewDetailDialog({
   const promptText = parsed?.prompt?.trim() || preview.prompt || '未填写'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="prompt-detail-modal-root fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭图片详情" onClick={onClose} />
-      <div className="relative flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+      <div className="prompt-detail-modal-panel relative flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
           <div className="min-w-0">
             <h2 className="text-base font-medium text-slate-50">提示词详情</h2>
             <p className="mt-1 text-xs text-slate-400">只展示提示词和生成选项，方便直接复用。</p>
           </div>
+          <button
+            type="button"
+            onClick={onApply}
+            className="prompt-detail-apply-top inline-flex h-9 items-center justify-center rounded-md bg-violet-500 px-3 text-sm font-medium text-white transition hover:bg-violet-600"
+          >
+            涓€閿簲鐢?
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -238,7 +248,7 @@ export function TaskHistoryPanel({
                 onClick={() => onSelect(item)}
                 className={`relative flex w-full items-start gap-3 overflow-hidden rounded-lg border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/30 ${
                   selectedTaskId === item.id
-                    ? 'border-violet-300 bg-violet-50 shadow-md ring-2 ring-violet-300/40'
+                    ? 'border-violet-300 bg-violet-50 shadow-[0_8px_28px_rgba(139,92,246,0.18)] ring-2 ring-violet-300/50 ring-offset-1 ring-offset-white'
                     : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/50'
                 }`}
               >
@@ -311,7 +321,7 @@ export function TaskDetailPanel({
         </span>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3">
         <MiniStat label="完成" value={`${completedCount}/${totalCount}`} />
         <MiniStat label="耗时·s" value={elapsedText} />
         <MiniStat label="消耗" value={formatTaskCost(preview, totalCount)} />
@@ -355,7 +365,8 @@ export function PreviewImageStage({
   const [failedDisplayURLs, setFailedDisplayURLs] = useState<Set<string>>(() => new Set())
   const imageReloadedRef = useRef<string>('')
   const canNavigate = imageURLs.length > 1
-  const thumbnailSlots = createCenteredThumbnailSlots(thumbnailURLs.length > 0 ? thumbnailURLs : imageURLs, currentIndex, 5)
+  const thumbnailSourceURLs = imageURLs.map((imageUrl, index) => thumbnailURLs[index] || imageUrl)
+  const thumbnailSlots = createCenteredThumbnailSlots(thumbnailSourceURLs, currentIndex, 5)
   const currentDisplayUrl = displayCandidates.find((candidate) => !failedDisplayURLs.has(candidate)) ?? ''
   const emptyMessage = getPreviewEmptyMessage(preview.status)
 
@@ -450,31 +461,34 @@ export function PreviewImageStage({
         </button>
       </div>
 
-      {hasImages ? (
-        <div className="mt-4 grid grid-cols-5 gap-2">
-          {thumbnailSlots.map((slot, slotIndex) =>
-            slot ? (
-              <button
-                key={slot.index}
-                type="button"
-                onClick={() => onSelectThumbnail(slot.index)}
-                className={`aspect-square overflow-hidden rounded-md border transition ${
-                  slot.index === currentIndex ? 'border-violet-400' : 'border-slate-800 hover:border-slate-600'
-                }`}
-              >
-                <img
-                  key={`${preview.taskId}:thumb:${slot.index}:${slot.imageUrl}`}
-                  src={slot.imageUrl}
-                  alt={`缩略图 ${slot.index + 1}`}
-                  className="h-full w-full object-cover"
-                />
-              </button>
-            ) : (
-              <div key={`empty-${slotIndex}`} className="aspect-square rounded-md border border-dashed border-slate-800 bg-slate-900/40" />
-            ),
-          )}
-        </div>
-      ) : null}
+      <div className="mt-4 grid grid-cols-5 gap-2">
+        {thumbnailSlots.map((slot, slotIndex) =>
+          slot ? (
+            <button
+              key={slot.index}
+              type="button"
+              onClick={() => onSelectThumbnail(slot.index)}
+              className={`aspect-square overflow-hidden rounded-md border transition ${
+                slot.index === currentIndex
+                  ? 'border-violet-400 ring-2 ring-violet-300/40 shadow-[0_0_0_1px_rgba(196,181,253,0.35)]'
+                  : 'border-slate-800 hover:border-slate-600'
+              }`}
+            >
+              <img
+                key={`${preview.taskId}:thumb:${slot.index}:${slot.imageUrl}`}
+                src={slot.imageUrl}
+                alt={`缩略图 ${slot.index + 1}`}
+                className="h-full w-full object-cover"
+              />
+            </button>
+          ) : (
+            <div
+              key={`empty-${slotIndex}`}
+              className="aspect-square rounded-md border border-dashed border-slate-800/80 bg-slate-900/20"
+            />
+          ),
+        )}
+      </div>
     </div>
   )
 }

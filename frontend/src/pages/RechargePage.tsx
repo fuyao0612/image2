@@ -5,6 +5,7 @@ import type { PackageItem } from '@/types/api';
 import { useAppContext } from '@/contexts/AppContext';
 import { LoaderCircle } from 'lucide-react';
 import type { BusyAction } from '@/types/app';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 export function RechargePage() {
   const { token, currentUser, setBusy, handleApiError, setPoints, busy, setMessage, points } = useAppContext();
@@ -19,6 +20,7 @@ export function RechargePage() {
     confirmLabel: string;
     href?: string;
   }>({ open: false, title: '', lines: [], confirmLabel: '' });
+  useBodyScrollLock(rechargeConfirmDialog.open)
 
   async function loadPackages() {
     try {
@@ -295,22 +297,22 @@ export function RechargeConfirmDialog({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="plain-modal-root fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭兑换码购买确认" onClick={onCancel} />
-      <div className="relative w-full max-w-sm rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
-        <div className="px-4 py-4 text-center">
-          <h2 className="text-base font-medium text-slate-50">{title}</h2>
-          <div className="mt-3 space-y-1 text-sm leading-6 text-slate-300">
+      <div className="plain-modal-panel relative w-full max-w-sm overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.34)]">
+        <div className="border-b border-slate-200 bg-white px-4 py-4 text-center">
+          <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+          <div className="mt-3 space-y-1 text-sm leading-6 text-slate-800">
             {lines.map((line) => (
               <div key={line}>{line}</div>
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-2 border-t border-slate-800">
+        <div className="grid grid-cols-2 border-t border-slate-200/90 bg-white">
           <button
             type="button"
             onClick={onCancel}
-            className="h-12 border-r border-slate-800 text-sm font-medium text-slate-300 transition hover:bg-slate-900 hover:text-white"
+            className="h-12 border-r border-slate-200/90 text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-950"
           >
             取消
           </button>
@@ -318,7 +320,7 @@ export function RechargeConfirmDialog({
             type="button"
             onClick={onConfirm}
             disabled={busy}
-            className="inline-flex h-12 items-center justify-center gap-2 text-sm font-medium text-violet-300 transition hover:bg-slate-900 hover:text-violet-200 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-12 items-center justify-center gap-2 bg-violet-100 text-sm font-semibold text-violet-700 transition hover:bg-violet-200 hover:text-violet-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
             {confirmLabel}

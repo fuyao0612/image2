@@ -129,6 +129,49 @@ func TestStoreRemoteImagesDropsDuplicateImageContent(t *testing.T) {
 	}
 }
 
+func TestStoreRemoteImagesDedupesStoredAndRemoteCopies(t *testing.T) {
+	t.Parallel()
+
+	imageData := testPNGBytes(t, color.RGBA{R: 48, G: 96, B: 180, A: 255})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(imageData)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	client, err := New(Config{
+		Driver:        "local",
+		LocalDir:      dir,
+		PublicBaseURL: "http://localhost:8080",
+		PublicPath:    "/uploads",
+		Timeout:       time.Second,
+		MaxBytes:      1024 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("new storage client: %v", err)
+	}
+
+	originalURL, err := client.StoreBytes(context.Background(), imageData, "images/test/task-same", "image/png", "first.png")
+	if err != nil {
+		t.Fatalf("store original bytes: %v", err)
+	}
+
+	urls, err := client.StoreRemoteImages(context.Background(), []string{
+		originalURL,
+		server.URL + "/result.png",
+	}, "images/test/task-same")
+	if err != nil {
+		t.Fatalf("store remote images: %v", err)
+	}
+	if len(urls) != 1 {
+		t.Fatalf("expected duplicate stored and remote copies to collapse into one url, got %#v", urls)
+	}
+	if !strings.Contains(urls[0], "/uploads/") {
+		t.Fatalf("expected to keep a stored url, got %#v", urls)
+	}
+}
+
 func TestDownloadRemoteImageRejectsFakeImageBody(t *testing.T) {
 	t.Parallel()
 

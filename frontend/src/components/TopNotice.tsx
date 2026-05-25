@@ -32,7 +32,7 @@ export function TopNotice({
 
   const notice = (
     <div className="top-notice-root pointer-events-none fixed inset-x-0 top-3 z-[100] flex justify-center px-4" role="status" aria-live="polite">
-      <div className="w-full max-w-[22rem] rounded-lg border border-slate-700/90 bg-slate-950/95 px-3 py-2 text-xs leading-5 text-slate-100 shadow-xl shadow-slate-950/30 backdrop-blur sm:text-sm sm:leading-6">
+      <div className="top-notice-capsule w-full max-w-[22rem] px-4 py-2.5 text-sm font-medium">
         <div className="whitespace-pre-wrap break-words">{message}</div>
       </div>
     </div>

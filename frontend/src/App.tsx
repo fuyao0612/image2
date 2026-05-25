@@ -93,6 +93,7 @@ import { RechargeConfirmDialog } from "./pages/RechargePage";
 import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { AppProvider } from './contexts/AppContext';
 import type { AppContextType } from './contexts/AppContext';
+import { useBodyScrollLock } from './hooks/useBodyScrollLock';
 import { sizeOptions, CUSTOM_SIZE_MAX_SIDE, styleOptions, qualityOptions, outputFormatOptions, HISTORY_PAGE_SIZE, FREE_REFERENCE_IMAGE_COUNT, MAX_REFERENCE_IMAGES, GENERATION_WAITING_NOTICE } from './constants/app';
 import { getImageTaskStatusLabel, limitImageURLs, normalizeImageURLs, getPreviewRequestedCount, isPartialImageTaskStatus, getTaskStatusBadgeClass, formatTaskCost, getTaskCreditCost, getPreviewElapsedSeconds, formatElapsedTriplet, buildPreviewImageCandidates, createCenteredThumbnailSlots, getPreviewEmptyMessage, highlightSearchText, getGenerationStatusLabel, buildPreviewRequestOptions, parseTaskRequestParams, clampCount, normalizeElapsedSeconds, buildImageElapsedSeconds, normalizeGenerationStatus, detailToPreview, toPreview, getDownloadCacheKey, trimDownloadFileCache } from './utils/imageTasks';
 import { MiniStat, PanelPagination } from './components/shared';
@@ -402,8 +403,9 @@ function App() {
     title: '',
     })
     const [rechargeConfirmDialog, setRechargeConfirmDialog] = useState<RechargeConfirmDialogState>({
-    open: false,
+      open: false,
     })
+    useBodyScrollLock(announcementDialogOpen || rechargeConfirmDialog.open)
     const [serverPromptItems, setServerPromptItems] = useState<PromptGalleryItem[]>([])
     const [promptSubmission, setPromptSubmission] = useState({
     title: '',
@@ -448,6 +450,16 @@ function App() {
       // Ignore storage errors; the visual state still works for the current session.
     }
     }, [userTheme])
+
+    useEffect(() => {
+    const surface = isAuthed && !adminOpen ? `user-${userTheme}` : adminOpen ? 'admin' : 'auth'
+    document.documentElement.dataset.appSurface = surface
+    document.body.dataset.appSurface = surface
+    return () => {
+      delete document.documentElement.dataset.appSurface
+      delete document.body.dataset.appSurface
+    }
+    }, [adminOpen, isAuthed, userTheme])
 
 
     useEffect(() => {
@@ -1754,26 +1766,26 @@ function AnnouncementDialog({
   const normalItems = items.filter((item) => item.kind !== 'pinned')
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div className="announcement-dialog-root fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6" role="dialog" aria-modal="true">
       {!forced ? (
         <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭公告" onClick={onClose} />
       ) : null}
-      <div className="relative flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
+      <div className="announcement-dialog-panel relative flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.32)]">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-base font-medium text-slate-50">
-              <Megaphone className="h-4 w-4 text-amber-300" />
+            <div className="flex items-center gap-2 text-base font-medium text-slate-950">
+              <Megaphone className="h-4 w-4 text-orange-600" />
               公告
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              {forced ? '请先阅读置顶公告并标记已读。' : '查看平台置顶公告和普通公告。'}
+            <p className="mt-2 inline-flex max-w-full items-center rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-700 shadow-sm">
+              {forced ? '请先阅读置顶公告并标记已读。' : '需将全部置顶公告标为已读方可关闭'}
             </p>
           </div>
           {!forced ? (
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:border-slate-400 hover:text-slate-950"
               aria-label="关闭公告"
             >
               <XCircle className="h-4 w-4" />
@@ -1781,8 +1793,8 @@ function AnnouncementDialog({
           ) : null}
         </div>
 
-        <div className="grid min-h-0 flex-1 overflow-hidden md:grid-cols-[260px_minmax(0,1fr)]">
-          <div className="order-2 min-h-0 max-h-[34vh] overflow-y-auto border-t border-slate-800 p-3 md:order-1 md:max-h-none md:border-r md:border-t-0">
+        <div className="announcement-dialog-body grid min-h-0 flex-1 overflow-hidden md:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="announcement-dialog-list order-2 min-h-0 max-h-[34vh] overflow-y-auto border-t border-slate-200 bg-slate-50 p-3 md:order-1 md:max-h-none md:border-r md:border-t-0">
             {items.length ? (
               <div className="space-y-3">
                 {pinnedItems.length ? (
@@ -1799,46 +1811,46 @@ function AnnouncementDialog({
             )}
           </div>
 
-          <div className="order-1 flex min-h-0 flex-col md:order-2">
-            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="announcement-dialog-content order-1 flex min-h-0 flex-col md:order-2">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
               {activeItem ? (
                 <article>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded-md px-2 py-1 text-xs ${activeItem.kind === 'pinned' ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-300'}`}>
+                    <span className={`rounded-md px-2 py-1 text-xs ${activeItem.kind === 'pinned' ? 'bg-orange-50 text-orange-700' : 'bg-slate-100 text-slate-600'}`}>
                       {activeItem.kind === 'pinned' ? '置顶' : '普通'}
                     </span>
-                    <span className={`rounded-md px-2 py-1 text-xs ${activeItem.isRead ? 'bg-emerald-500/15 text-emerald-200' : 'bg-rose-500/15 text-rose-200'}`}>
+                    <span className={`rounded-md px-2 py-1 text-xs ${activeItem.isRead ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
                       {activeItem.isRead ? '已读' : '未读'}
                     </span>
                     <span className="text-xs text-slate-500">更新于 {formatDateTime(activeItem.updatedAt)}</span>
                   </div>
-                  <h2 className="mt-4 text-xl font-semibold text-slate-50">{activeItem.title}</h2>
-                  <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-300">
+                  <h2 className="mt-4 text-xl font-semibold text-slate-950">{activeItem.title}</h2>
+                  <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">
                     {activeItem.content}
                   </div>
                   {activeItem.imageUrl ? (
-                    <div className="mt-6 border-t border-slate-800 pt-5">
+                    <div className="mt-6 border-t border-slate-200 pt-5">
                       <img
                         src={activeItem.imageUrl}
                         alt={`${activeItem.title} 底部图片`}
-                        className="max-h-[420px] max-w-full rounded-lg border border-slate-700 bg-slate-900 object-contain"
+                        className="max-h-[420px] max-w-full rounded-lg border border-slate-200 bg-slate-50 object-contain"
                       />
                     </div>
                   ) : null}
                 </article>
               ) : (
-                <div className="flex min-h-[240px] items-center justify-center rounded-md border border-dashed border-slate-700 bg-slate-900/50 text-sm text-slate-500">
+                <div className="flex min-h-[240px] items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">
                   请选择一条公告
                 </div>
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-slate-800 px-4 py-3">
+            <div className="announcement-dialog-footer flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3">
               {!forced ? (
                 <button
                   type="button"
                   onClick={onClose}
-                  className="inline-flex h-10 items-center justify-center rounded-md border border-slate-700 px-4 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white"
+                  className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-white px-4 text-sm text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
                 >
                   关闭
                 </button>
@@ -1847,7 +1859,7 @@ function AnnouncementDialog({
                 type="button"
                 onClick={onMarkRead}
                 disabled={!activeItem || activeItem.isRead}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-4 text-sm text-emerald-100 transition hover:border-emerald-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 text-sm text-emerald-700 transition hover:border-emerald-400 hover:text-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 标记已读
@@ -1882,18 +1894,18 @@ function AnnouncementListGroup({
               key={item.id}
               type="button"
               onClick={() => onSelect(item.id)}
-              className={`relative w-full rounded-md border px-3 py-2 text-left transition ${
+              className={`announcement-list-item relative w-full rounded-md border px-3 py-2 text-left transition ${
                 active
-                  ? 'border-amber-300 bg-amber-400/15 text-slate-50 shadow-[0_0_0_1px_rgba(251,191,36,0.38),0_12px_28px_rgba(251,191,36,0.12)] ring-1 ring-amber-300/40'
-                  : 'border-slate-800 bg-slate-900/70 text-slate-300 hover:border-slate-600 hover:text-white'
+                  ? 'is-active border-orange-300 bg-orange-50 text-slate-950 shadow-[0_10px_24px_rgba(249,115,22,0.12)] ring-1 ring-orange-200'
+                  : 'border-slate-200 bg-white text-slate-700 shadow-sm hover:border-orange-200 hover:bg-orange-50/70'
               }`}
             >
-              {active ? <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-amber-300" /> : null}
-              <div className="flex items-start justify-between gap-2">
-                <span className="line-clamp-2 text-sm font-medium">{item.title}</span>
-                {!item.isRead ? <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-rose-400" /> : null}
+              {active ? <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-violet-400" /> : null}
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.title}</span>
+                <span className="shrink-0 text-xs text-slate-500">{formatDateOnly(item.updatedAt)}</span>
+                {!item.isRead ? <span className="h-2 w-2 shrink-0 rounded-full bg-rose-400" /> : null}
               </div>
-              <div className="mt-1 text-xs text-slate-500">{formatDateOnly(item.updatedAt)}</div>
             </button>
           )
         })}
@@ -1940,15 +1952,15 @@ function AppSidebar({
   const labelClass = ''
   return (
     <aside
-      className={`app-shell__sidebar flex h-screen min-w-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-950 ${
+      className={`app-shell__sidebar flex h-screen min-w-0 flex-col overflow-hidden border-r border-white/10 bg-slate-950/95 ${
         open ? '' : 'pointer-events-none'
       }`}
     >
-      <div className="flex h-20 items-center gap-2 border-b border-slate-800 px-3">
+      <div className="flex h-20 items-center gap-2 border-b border-white/10 bg-white/5 px-3">
         <button
           type="button"
           onClick={onCloseMobile}
-          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white"
+          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/5 text-slate-200 transition hover:border-violet-300 hover:bg-white/10 hover:text-white"
           title="关闭侧边栏"
         >
           <XCircle className="h-5 w-5" />
@@ -1956,7 +1968,7 @@ function AppSidebar({
         <button
           type="button"
           onClick={onToggleCollapsed}
-          className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-200 transition hover:border-violet-400 hover:text-white"
+          className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/5 text-slate-200 transition hover:border-violet-300 hover:bg-white/10 hover:text-white"
           title={collapsed ? '展开侧边栏' : '收起侧边栏'}
         >
           {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
@@ -1983,7 +1995,7 @@ function AppSidebar({
               className={`flex h-12 w-full min-w-0 items-center gap-3 rounded-md px-3 text-left text-sm transition ${
                 active
                   ? 'bg-violet-500 text-slate-950 shadow-lg shadow-violet-950/25'
-                  : 'text-slate-300 hover:bg-slate-900 hover:text-white'
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white'
               }`}
               title={item.label}
             >
@@ -2040,7 +2052,13 @@ function AppTopBar({
     return () => window.removeEventListener('mousedown', handlePointerDown)
   }, [])
 
-  function renderUserMenu(ref: React.RefObject<HTMLDivElement>) {
+  useEffect(() => {
+    if (sidebarOpen) {
+      setUserMenuOpen(false)
+    }
+  }, [sidebarOpen])
+
+  function renderUserMenu(ref: React.RefObject<HTMLDivElement>, placement: 'desktop' | 'mobile') {
     return (
           <div
             ref={ref}
@@ -2065,7 +2083,7 @@ function AppTopBar({
             </button>
 
             {userMenuOpen ? (
-              <div className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[152px] rounded-md border border-slate-800 bg-slate-900 p-1 shadow-2xl shadow-black/40">
+              <div className={`app-user-menu-panel app-user-menu-panel-solid ${placement === 'mobile' ? 'fixed right-2 top-[68px] z-[70] min-w-[176px] max-w-[calc(100vw-16px)]' : 'absolute right-0 top-[calc(100%+4px)] z-50 min-w-[152px]'} rounded-md border border-slate-800 bg-slate-900 p-1 shadow-2xl shadow-black/40`}>
                 <button
                   type="button"
                   onClick={onToggleUserTheme}
@@ -2187,7 +2205,7 @@ function AppTopBar({
         </div>
 
         <div className="flex min-w-0 shrink-0 items-center gap-2 text-sm">
-          {renderUserMenu(desktopUserMenuRef)}
+          {renderUserMenu(desktopUserMenuRef, 'desktop')}
         </div>
       </div>
 
@@ -2220,7 +2238,7 @@ function AppTopBar({
           </button>
         </nav>
         <div className="app-mobile-user-slot flex items-center justify-end">
-          {renderUserMenu(mobileUserMenuRef)}
+          {renderUserMenu(mobileUserMenuRef, 'mobile')}
         </div>
       </div>
     </header>

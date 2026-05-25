@@ -6,6 +6,7 @@ import { Heart, Upload, ArrowUpDown, ChevronDown, Search, XCircle, LoaderCircle,
 import { parsePromptTagString, copyTextToClipboard } from '@/utils/helpers';
 import { PromptCard, PromptDetailDialog, Field } from '@/components/shared';
 import type { PromptSortMode } from '@/types/app';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 const featuredPromptItems: PromptGalleryItem[] = [];
 
@@ -155,6 +156,7 @@ export function PromptPlaza({
   const [sortOpen, setSortOpen] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [activeDetailId, setActiveDetailId] = useState<string | null>(null)
+  useBodyScrollLock(showSubmissionModal || Boolean(activeDetailId))
   const [submissionImageUploading, setSubmissionImageUploading] = useState(false)
   const [submissionDragActive, setSubmissionDragActive] = useState(false)
   const [submissionImageName, setSubmissionImageName] = useState('')
@@ -448,21 +450,21 @@ export function PromptPlaza({
       </div>
 
       {showSubmissionModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true">
           <button
             type="button"
             className="absolute inset-0"
             aria-label="关闭上传分享"
             onClick={() => setShowSubmissionModal(false)}
           />
-          <div className="relative flex max-h-[86dvh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-            <div className="shrink-0 border-b border-slate-800 px-4 py-3">
+          <div className="relative flex max-h-[86dvh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.3)]">
+            <div className="shrink-0 border-b border-slate-200/80 px-4 py-3">
               <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-100">上传分享</h3>
               <button
                 type="button"
                 onClick={() => setShowSubmissionModal(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:border-slate-400 hover:text-slate-900"
               >
                 <XCircle className="h-4 w-4" />
               </button>
@@ -473,7 +475,7 @@ export function PromptPlaza({
                 <input
                   value={submission.title}
                   onChange={(event) => onSubmissionChange({ ...submission, title: event.target.value })}
-                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
+                  className="w-full rounded-md border border-slate-200 bg-white/90 px-3 py-2 text-sm text-slate-900 outline-none focus:border-violet-400"
                   placeholder="给这个灵感起个名字"
                 />
               </Field>
@@ -486,7 +488,7 @@ export function PromptPlaza({
                   onDragLeave={handleSubmissionPromptDrag}
                   onDrop={(event) => void handleSubmissionPromptDrop(event)}
                   onPaste={(event) => void handleSubmissionPromptPaste(event)}
-                  className={`min-h-28 w-full resize-y rounded-md border bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400 ${
+                  className={`min-h-28 w-full resize-y rounded-md border bg-white/90 px-3 py-2 text-sm text-slate-900 outline-none focus:border-violet-400 ${
                     submissionDragActive ? 'border-violet-400 ring-2 ring-violet-400/20' : 'border-slate-700'
                   }`}
                   placeholder="写下完整提示词，也可以拖入或粘贴本地图片作为缩略图"
@@ -503,7 +505,7 @@ export function PromptPlaza({
                           nextTags[index] = event.target.value
                           onSubmissionChange({ ...submission, tags: nextTags })
                         }}
-                        className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
+                        className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white/90 px-3 py-2 text-sm text-slate-900 outline-none focus:border-violet-400"
                         placeholder={`标签 ${index + 1}`}
                       />
                       {index === 0 ? (
@@ -540,11 +542,11 @@ export function PromptPlaza({
                     setSubmissionImageName('')
                     onSubmissionChange({ ...submission, previewUrl: event.target.value })
                   }}
-                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-400"
+                  className="w-full rounded-md border border-slate-200 bg-white/90 px-3 py-2 text-sm text-slate-900 outline-none focus:border-violet-400"
                   placeholder="https://..."
                 />
               </Field>
-              <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3">
+              <div className="rounded-lg border border-slate-200/80 bg-white/80 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"

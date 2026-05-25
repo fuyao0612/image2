@@ -5,6 +5,7 @@ import { useAppContext } from '@/contexts/AppContext';
 import { Search, ShoppingBag } from 'lucide-react';
 import { money } from '@/utils/helpers';
 import { RechargeConfirmDialog } from "./RechargePage";
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 export function ProductsPage() {
   const { token, setMessage } = useAppContext();
@@ -22,6 +23,7 @@ export function ProductsPage() {
     confirmLabel: string;
     href?: string;
   }>({ open: false, title: '', lines: [], confirmLabel: '' });
+  useBodyScrollLock(Boolean(activeProduct) || rechargeConfirmDialog.open)
 
   async function loadProductsPage() {
     try {
@@ -216,9 +218,9 @@ export function ProductDetailDialog({
 }) {
   const imageUrl = item.previewUrl || item.previewThumbUrl
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
+    <div className="plain-modal-root fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0" aria-label="关闭商品详情" onClick={onClose} />
-      <div className="relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+      <div className="plain-modal-panel relative flex max-h-[84dvh] w-full max-w-[420px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <h3 className="line-clamp-2 text-xl font-black tracking-tight text-slate-950 dark:text-slate-100">{item.name}</h3>
           {item.shortDescription ? (

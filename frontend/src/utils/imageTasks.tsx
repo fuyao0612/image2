@@ -1,8 +1,8 @@
 import React from 'react';
 import type { ReactNode } from 'react';
 import type { ImageTaskDetailResponse, ImageTaskItem } from '../types/api';
-import type { GenerationProgress, GenerationStatus, TaskRequestSnapshot } from '../types/app';
-import { getTaskStatusLabel } from '../utils/helpers';
+import type { GenerationProgress, GenerationStatus, ReferenceImageItem, TaskRequestSnapshot } from '../types/app';
+import { getReferenceImageNameFromURL, getTaskStatusLabel, syncPrimaryReferenceImage } from '../utils/helpers';
 import { CUSTOM_SIZE_MAX_SIDE, sizeOptions, styleOptions, qualityOptions, outputFormatOptions } from '../constants/app';
 import { api } from '../api/client';
 import type { DownloadedFile } from '../api/client';
@@ -12,9 +12,36 @@ export function formatPreviewOptionValue(value: string | undefined, options: { v
   return options.find((o) => o.value === value)?.label || value
 }
 
-export function normalizeReferenceImagesFromSnapshot(snapshot: TaskRequestSnapshot | null) {
-  if (!snapshot?.referenceImages) return []
-  return snapshot.referenceImages.filter((img) => typeof img === 'string' || (img && typeof img.url === 'string'))
+export function normalizeReferenceImagesFromSnapshot(snapshot: TaskRequestSnapshot | null): ReferenceImageItem[] {
+  if (!snapshot) return []
+
+  const images: ReferenceImageItem[] = []
+  const seen = new Set<string>()
+  const addImage = (rawURL: unknown, rawName?: unknown, rawSource?: unknown) => {
+    if (typeof rawURL !== 'string') return
+    const url = rawURL.trim()
+    if (!url || seen.has(url)) return
+    seen.add(url)
+    images.push({
+      url,
+      name: typeof rawName === 'string' && rawName.trim() ? rawName.trim() : getReferenceImageNameFromURL(url) || '参考图片',
+      source: rawSource === 'local' || rawSource === 'network' ? rawSource : 'network',
+    })
+  }
+
+  for (const image of snapshot.referenceImages ?? []) {
+    if (typeof image === 'string') {
+      addImage(image)
+    } else if (image && typeof image === 'object') {
+      addImage(image.url, image.name, image.source)
+    }
+  }
+  for (const url of snapshot.referenceImageUrls ?? []) {
+    addImage(url)
+  }
+  addImage(snapshot.referenceImageUrl)
+
+  return syncPrimaryReferenceImage(images)
 }
 
 
@@ -490,4 +517,3 @@ export function parsePreviewSizeState(size?: string): { size: string; customWidt
     customHeight: clampDimension(Number(match[2])),
   }
 }
-

@@ -23,6 +23,7 @@ import type { ReferenceImageSource, ReferenceImageItem, TaskRequestSnapshot, Gen
 import { syncPrimaryReferenceImage, getReferenceImageNameFromURL, getReferenceImageExtraPointCost, isWeChatBrowser, triggerImageDownload } from '../utils/helpers';
 import { RechargeConfirmDialog } from './RechargePage';
 import { WechatSaveGuide, ReferenceImagesDialog, PreviewDetailDialog, TaskHistoryPanel, TaskDetailPanel, PreviewImageStage, PromptSearchOverlay, GenerationProgressPanel, GenerationProgressCard, ProgressStat } from '../components/home';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 const CUSTOM_SIZE_MIN_PIXELS = 655360
 const CUSTOM_SIZE_MAX_PIXELS = 8294400
@@ -97,8 +98,9 @@ export interface HomePageProps {
 export function HomePage(props: HomePageProps) {
   const [generationProgresses, setGenerationProgresses] = useState<GenerationProgress[]>([]);
   const [prompt, setPrompt] = useState('')
-    let pollingTaskIdsRef = useRef<Set<string>>(new Set());
-    const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId);
+  const pollingTaskIdsRef = useRef<Set<string>>(new Set())
+  const manualPreviewSuppressedTaskIdRef = useRef<string | null>(null)
+  const hasRunningGeneration = generationProgresses.some((item) => item.status === 'running' && item.taskId)
   const [size, setSize] = useState('1024x1024')
   const [style, setStyle] = useState('')
   const [count, setCount] = useState(1)
@@ -257,6 +259,7 @@ export function HomePage(props: HomePageProps) {
     imageUrl: '',
     title: '',
   })
+  useBodyScrollLock(generateConfirmOpen || referenceImagesDialogOpen || previewDetailOpen || wechatSaveGuide.open)
   const downloadFileCacheRef = useRef<Map<string, import('../api/client').DownloadedFile>>(new Map())
   const downloadPendingRef = useRef<Map<string, Promise<import('../api/client').DownloadedFile>>>(new Map())
 
@@ -301,11 +304,13 @@ useEffect(() => {
 
 function handleSelectTask(item: ImageTaskItem) {
     if (preview.taskId === item.id) {
+      manualPreviewSuppressedTaskIdRef.current = item.id
       setPreview(emptyPreview)
       setPreviewImageIndex(0)
       setPreviewDetailOpen(false)
       return
     }
+    manualPreviewSuppressedTaskIdRef.current = null
     const nextPreview = toPreview(item)
     setPreview(nextPreview)
     setPreviewImageIndex(0)
@@ -423,14 +428,20 @@ async function handleOpenPreviewDetail() {
     setPreviewDetailOpen(true)
     }
 
-async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
+  async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailResponse | null> {
     if (!taskId || taskId === '-') {
+      return null
+    }
+    if (manualPreviewSuppressedTaskIdRef.current === taskId) {
       return null
     }
 
     try {
       const detail = await api.getImageTask(taskId)
       const nextPreview = detailToPreview(detail)
+      if (manualPreviewSuppressedTaskIdRef.current === taskId) {
+        return null
+      }
       setPreview((current) => (current.taskId === taskId ? nextPreview : current))
       return nextPreview
     } catch (error) {
@@ -440,6 +451,7 @@ async function loadPreviewTaskDetail(taskId: string): Promise<ImageTaskDetailRes
     }
 
 function handleApplyPreviewDetail() {
+    manualPreviewSuppressedTaskIdRef.current = null
     const parsed = parseTaskRequestParams(preview.requestParams)
     const promptText = parsed?.prompt?.trim() || preview.prompt.trim()
 
@@ -759,6 +771,7 @@ function handleApplyPreviewDetail() {
             try {
               const detail = await api.getImageTask(taskId)
               if (!pollingTaskIdsRef.current.has(taskId)) return
+              const previewSuppressed = manualPreviewSuppressedTaskIdRef.current === taskId
 
               const detailCount = getPreviewRequestedCount(detail, 1)
               const imageURLs = limitImageURLs(normalizeImageURLs(detail.imageUrls, detail.imageUrl), detail.requestedCount || detailCount)
@@ -769,10 +782,12 @@ function handleApplyPreviewDetail() {
               const nextMessage = detail.status === 'failed' ? detail.errorMessage ?? '生成失败' : imageURLs.length > 0 ? `已拿到 ${imageURLs.length} 张图片` : '任务已完成'
 
               // LOCAL Update Preview
-              setPreview((current) => {
-                if (current.taskId !== taskId && current.taskId !== '-' && current.taskId) return current;
-                return detailToPreview(detail)
-              });
+              if (!previewSuppressed) {
+                setPreview((current) => {
+                  if (current.taskId !== taskId && current.taskId !== '-' && current.taskId) return current
+                  return detailToPreview(detail)
+                })
+              }
               
               // LOCAL Update History
               setHistory(current => current.map(item => {
@@ -854,8 +869,8 @@ function handleApplyPreviewDetail() {
   return (
     <div className={props.activePage === 'home' ? 'block' : 'hidden'}>
               <div className="space-y-4">
-                <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)_360px]">
-                  <section className="min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
+                <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[360px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)_340px]">
+                  <section className="min-w-0 overflow-visible rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
                     <div className="flex items-center justify-between">
                       <div>
                         <h2 className="text-lg font-medium text-slate-50">提示词</h2>
@@ -1133,7 +1148,7 @@ function handleApplyPreviewDetail() {
                     </div>
                   </section>
 
-                  <section className="min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
+                  <section className="min-w-0 overflow-visible rounded-lg border border-slate-800 bg-slate-900/60 p-3 shadow-panel sm:p-4">
                     <div className="flex items-center justify-between">
                       <div>
                         <h2 className="text-lg font-medium text-slate-50">展示区</h2>
@@ -1149,26 +1164,32 @@ function handleApplyPreviewDetail() {
                       </button>
                     </div>
 
-                <PreviewImageStage
-                  preview={preview}
-                  imageURLs={previewImageURLs}
-                  thumbnailURLs={previewThumbnailURLs}
-                  activeIndex={previewImageIndex}
-                  onPrevious={handlePreviousPreviewImage}
-                  onNext={handleNextPreviewImage}
-                  onSaveCurrent={handleSaveCurrentImage}
-                  onSelectThumbnail={setPreviewImageIndex}
-                  onImageLoadError={loadPreviewTaskDetail}
-                />
+                    <div className="mt-4 grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
+                      <div className="min-w-0 space-y-4">
+                        <PreviewImageStage
+                          preview={preview}
+                          imageURLs={previewImageURLs}
+                          thumbnailURLs={previewThumbnailURLs}
+                          activeIndex={previewImageIndex}
+                          onPrevious={handlePreviousPreviewImage}
+                          onNext={handleNextPreviewImage}
+                          onSaveCurrent={handleSaveCurrentImage}
+                          onSelectThumbnail={setPreviewImageIndex}
+                          onImageLoadError={loadPreviewTaskDetail}
+                        />
+                      </div>
 
-                <TaskDetailPanel
-                  preview={preview}
-                  progress={generationProgresses.find((item) => item.taskId === preview.taskId) ?? null}
-                />
+                      <div className="min-w-0 space-y-4">
+                        <TaskDetailPanel
+                          preview={preview}
+                          progress={generationProgresses.find((item) => item.taskId === preview.taskId) ?? null}
+                        />
+                      </div>
+                    </div>
               </section>
 
-                  <aside className="min-w-0 space-y-4 overflow-hidden">
-                  <TaskHistoryPanel
+                  <aside className="min-w-0 space-y-4 overflow-visible xl:col-start-2 xl:row-start-2 2xl:col-start-3 2xl:row-start-1">
+                    <TaskHistoryPanel
                       items={history}
                       page={historyPage}
                       pageSize={HISTORY_PAGE_SIZE}
