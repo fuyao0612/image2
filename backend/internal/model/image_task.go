@@ -6,9 +6,10 @@ import "time"
 type ImageTaskStatus string
 
 const (
-	ImageTaskStatusGenerating ImageTaskStatus = "generating"
-	ImageTaskStatusSuccess    ImageTaskStatus = "success"
-	ImageTaskStatusFailed     ImageTaskStatus = "failed"
+	ImageTaskStatusGenerating     ImageTaskStatus = "generating"
+	ImageTaskStatusSuccess        ImageTaskStatus = "success"
+	ImageTaskStatusPartialSuccess ImageTaskStatus = "partial_success"
+	ImageTaskStatusFailed         ImageTaskStatus = "failed"
 )
 
 const (

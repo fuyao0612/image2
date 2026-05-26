@@ -217,7 +217,7 @@ export interface ListCreditLogsResponse {
 
 export interface UserActivityItem {
   id: string
-  recordType: 'image_task' | 'points_log' | 'credit_log' | 'recharge_order'
+  recordType: 'image_task' | 'points_log' | 'credit_log' | 'recharge_order' | 'login_log'
   title: string
   description: string
   status?: string
@@ -543,6 +543,7 @@ export interface AdminImageTaskItem {
   imageUrls?: string[]
   thumbnailUrl?: string
   thumbnailUrls?: string[]
+  imageElapsedSeconds?: number[]
   costPoints: number
   costCredits: number
   freeCreditsCost?: number

@@ -178,7 +178,16 @@ func (s *Service) loadUserActivityRecordsPage(ctx context.Context, userID uint64
 		return nil, 0, err
 	}
 
-	records := make([]userActivityRecord, 0, len(pointsLogs)+len(creditLogs)+len(imageTasks))
+	var loginLogTotal int64
+	if err := s.db.WithContext(ctx).Model(&model.SiteActionLog{}).Where("user_id = ? AND action = ?", userID, "user.login").Count(&loginLogTotal).Error; err != nil {
+		return nil, 0, err
+	}
+	var loginLogs []model.SiteActionLog
+	if err := s.db.WithContext(ctx).Where("user_id = ? AND action = ?", userID, "user.login").Order("created_at desc, id desc").Limit(limit).Find(&loginLogs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	records := make([]userActivityRecord, 0, len(pointsLogs)+len(creditLogs)+len(imageTasks)+len(loginLogs))
 	for _, item := range pointsLogs {
 		records = append(records, userActivityRecord{
 			ID:        fmt.Sprintf("points-%d", item.ID),
@@ -200,8 +209,15 @@ func (s *Service) loadUserActivityRecordsPage(ctx context.Context, userID uint64
 			Item:      s.imageTaskActivityItem(ctx, item),
 		})
 	}
+	for _, item := range loginLogs {
+		records = append(records, userActivityRecord{
+			ID:        fmt.Sprintf("login-%d", item.ID),
+			CreatedAt: item.CreatedAt,
+			Item:      s.loginLogActivityItem(item),
+		})
+	}
 
-	return records, pointsTotal + creditTotal + imageTaskTotal, nil
+	return records, pointsTotal + creditTotal + imageTaskTotal + loginLogTotal, nil
 }
 
 func pointsLogToDTO(item model.PointsLog) dto.PointsLogItem {
@@ -365,9 +381,22 @@ func imageTaskStatusTitle(status model.ImageTaskStatus) string {
 		return "生成中"
 	case model.ImageTaskStatusSuccess:
 		return "生成成功"
+	case model.ImageTaskStatusPartialSuccess:
+		return "部分成功"
 	case model.ImageTaskStatusFailed:
 		return "生成失败"
 	default:
 		return string(status)
+	}
+}
+
+func (s *Service) loginLogActivityItem(item model.SiteActionLog) dto.UserActivityItem {
+	return dto.UserActivityItem{
+		ID:          fmt.Sprintf("login-%d", item.ID),
+		RecordType:  "login_log",
+		Title:       item.Title,
+		Description: item.Description,
+		Status:      "success",
+		CreatedAt:   item.CreatedAt,
 	}
 }

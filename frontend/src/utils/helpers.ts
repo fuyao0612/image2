@@ -148,6 +148,8 @@ export function getActivityRecordLabel(recordType: UserActivityItem['recordType'
       return '积分'
     case 'credit_log':
       return '福利次数'
+    case 'login_log':
+      return '网页登录'
     default:
       return '记录'
   }
@@ -161,6 +163,8 @@ export function getActivityShortLabel(recordType: UserActivityItem['recordType']
       return '分'
     case 'credit_log':
       return '次'
+    case 'login_log':
+      return '登'
     default:
       return '记'
   }

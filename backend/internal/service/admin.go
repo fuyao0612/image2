@@ -512,7 +512,7 @@ func (s *Service) AdminListUserActivity(ctx context.Context, adminID uint64, tar
 	}, nil
 }
 
-func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, status string, keyword string, page int, pageSize int) (dto.AdminListImageTasksResponse, error) {
+func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, status string, keyword string, providerKeyID uint64, page int, pageSize int) (dto.AdminListImageTasksResponse, error) {
 	if err := s.RequireAdmin(ctx, adminID); err != nil {
 		return dto.AdminListImageTasksResponse{}, err
 	}
@@ -520,6 +520,9 @@ func (s *Service) AdminListImageTasks(ctx context.Context, adminID uint64, statu
 	query := s.db.WithContext(ctx).Model(&model.ImageTask{}).Joins("LEFT JOIN users ON users.id = image_tasks.user_id")
 	if status = strings.TrimSpace(status); status != "" {
 		query = query.Where("image_tasks.status = ?", status)
+	}
+	if providerKeyID > 0 {
+		query = query.Where("image_tasks.provider_key_id = ?", providerKeyID)
 	}
 	if keyword = strings.TrimSpace(keyword); keyword != "" {
 		like := "%" + keyword + "%"

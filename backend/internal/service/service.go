@@ -397,6 +397,7 @@ func (s *Service) Login(ctx context.Context, req dto.LoginRequest) (dto.AuthResp
 		return dto.AuthResponse{}, err
 	}
 	user.LastLoginAt = &now
+	_ = s.recordSiteActionLog(s.db.WithContext(ctx), "user", user.ID, "user.login", "user", strconv.FormatUint(user.ID, 10), "登录", "用户通过账号密码登录", "success", nil)
 	user = s.syncConfiguredAdminRole(user)
 
 	ttl := s.cfg.AccessTokenTTL
@@ -1199,8 +1200,13 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 	imageElapsedSeconds := normalizeImageElapsedSeconds(result.ImageElapsedSeconds, len(imageURLs))
 	imageElapsedSecondsJSON := marshalImageElapsedSeconds(imageElapsedSeconds)
 
+	status := model.ImageTaskStatusSuccess
+	if len(imageURLs) > 0 && len(imageURLs) < requestedCount {
+		status = model.ImageTaskStatusPartialSuccess
+	}
+
 	updates := map[string]any{
-		"status":                model.ImageTaskStatusSuccess,
+		"status":                status,
 		"image_url":             imageURL,
 		"image_urls":            string(imageURLsJSON),
 		"image_elapsed_seconds": imageElapsedSecondsJSON,
@@ -1252,7 +1258,7 @@ func (s *Service) completeImageTask(taskID uint64, userID uint64, result provide
 		return user.FreeCredits + user.PaidCredits, nil
 	}
 
-	s.markProviderKeySuccess(context.Background(), taskMeta.ProviderKeyID)
+	s.markProviderKeySuccess(context.Background(), taskMeta.ProviderKeyID, len(imageURLs))
 	user, err := s.loadUser(userID)
 	if err != nil {
 		return 0, err

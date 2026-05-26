@@ -444,7 +444,8 @@ func (h *Handler) AdminListImageTasks(c *gin.Context) {
 		return
 	}
 	page, pageSize := pagination(c)
-	resp, err := h.svc.AdminListImageTasks(c.Request.Context(), adminID, c.Query("status"), c.Query("keyword"), page, pageSize)
+	providerKeyID, _ := strconv.ParseUint(c.Query("providerKeyId"), 10, 64)
+	resp, err := h.svc.AdminListImageTasks(c.Request.Context(), adminID, c.Query("status"), c.Query("keyword"), providerKeyID, page, pageSize)
 	if err != nil {
 		h.writeServiceError(c, err)
 		return

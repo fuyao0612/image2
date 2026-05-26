@@ -2093,6 +2093,14 @@ function AppTopBar({
                   {userTheme === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                   {userTheme === 'light' ? '浅色模式' : '深色模式'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 hover:text-white"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  刷新页面
+                </button>
                 <div className="user-theme-menu-divider my-1 h-px bg-slate-800" />
                 <button
                   type="button"

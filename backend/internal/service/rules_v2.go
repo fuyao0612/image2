@@ -176,6 +176,17 @@ func (s *Service) getMeV2(ctx context.Context, userID uint64) (dto.UserInfo, err
 		return dto.UserInfo{}, err
 	}
 	user = s.syncConfiguredAdminRole(user)
+	
+	now := s.now()
+	if user.LastLoginAt == nil || now.Sub(*user.LastLoginAt) > time.Hour {
+		if err := s.db.Model(&model.User{}).Where("id = ?", user.ID).Update("last_login_at", now).Error; err == nil {
+			user.LastLoginAt = &now
+			_ = s.recordSiteActionLog(s.db.WithContext(ctx), "user", user.ID, "user.login", "user", strconv.FormatUint(user.ID, 10), "网页登录", "用户打开网页/自动登录", "success", map[string]any{
+				"loginAt": now.Format(time.RFC3339),
+			})
+		}
+	}
+	
 	return s.userInfoBalance(user), nil
 }
 

@@ -472,13 +472,22 @@ export async function adminListUsers(page = 1, pageSize = 10, keyword = '', stat
   return request<AdminListUsersResponse>(`/api/v1/admin/users?${params.toString()}`)
 }
 
-export async function adminListImageTasks(page = 1, pageSize = 10, status = '', keyword = ''): Promise<AdminListImageTasksResponse> {
+export async function adminListImageTasks(
+  page = 1,
+  pageSize = 10,
+  status = '',
+  keyword = '',
+  providerKeyId?: string
+): Promise<AdminListImageTasksResponse> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
   if (status.trim()) {
     params.set('status', status.trim())
   }
   if (keyword.trim()) {
     params.set('keyword', keyword.trim())
+  }
+  if (providerKeyId?.trim()) {
+    params.set('providerKeyId', providerKeyId.trim())
   }
   return request<AdminListImageTasksResponse>(`/api/v1/admin/image-tasks?${params.toString()}`)
 }

@@ -278,12 +278,12 @@ func (s *Service) loadProviderKey(ctx context.Context, id uint64) (model.ImagePr
 	return key, true, nil
 }
 
-func (s *Service) markProviderKeySuccess(ctx context.Context, keyID uint64) {
-	if keyID == 0 {
+func (s *Service) markProviderKeySuccess(ctx context.Context, keyID uint64, count int) {
+	if keyID == 0 || count <= 0 {
 		return
 	}
 	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(map[string]any{
-		"success_count": gorm.Expr("success_count + ?", 1),
+		"success_count": gorm.Expr("success_count + ?", count),
 		"last_error":    "",
 		"status":        model.ImageProviderKeyStatusActive,
 	}).Error
@@ -292,13 +292,13 @@ func (s *Service) markProviderKeySuccess(ctx context.Context, keyID uint64) {
 	}
 }
 
-func (s *Service) markProviderKeyCall(ctx context.Context, keyID uint64) {
-	if keyID == 0 {
+func (s *Service) markProviderKeyCall(ctx context.Context, keyID uint64, count int) {
+	if keyID == 0 || count <= 0 {
 		return
 	}
 	now := time.Now()
 	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(map[string]any{
-		"call_count":   gorm.Expr("call_count + ?", 1),
+		"call_count":   gorm.Expr("call_count + ?", count),
 		"last_used_at": &now,
 	}).Error
 	if err != nil {
@@ -348,7 +348,11 @@ func (s *Service) submitImageTaskWithProviderPoolSkip(ctx context.Context, taskI
 		_ = s.db.WithContext(ctx).Model(&model.ImageTask{}).
 			Where("id = ? AND user_id = ?", taskID, userID).
 			Updates(map[string]any{"provider": currentProvider.Name(), "provider_key_id": key.ID}).Error
-		s.markProviderKeyCall(ctx, key.ID)
+		requestedCount := req.Count
+		if requestedCount <= 0 {
+			requestedCount = 1
+		}
+		s.markProviderKeyCall(ctx, key.ID, requestedCount)
 		result, err := currentProvider.Submit(ctx, req)
 		if err == nil {
 			if result.Status == model.ImageTaskStatusFailed {
@@ -359,7 +363,13 @@ func (s *Service) submitImageTaskWithProviderPoolSkip(ctx context.Context, taskI
 					log.Printf("生图 Key %d 余额不足，尝试切换下一把 Key: %s", key.ID, message)
 					continue
 				}
+				if !key.IsUsing {
+					s.switchActiveProviderKey(ctx, key.ID)
+				}
 				return result, currentProvider, key.ID, nil
+			}
+			if !key.IsUsing {
+				s.switchActiveProviderKey(ctx, key.ID)
 			}
 			return result, currentProvider, key.ID, nil
 		}
@@ -532,4 +542,19 @@ func maskSecret(value string) string {
 
 func normalizeMentaloutAPIBaseURL(value string) string {
 	return strings.TrimRight(strings.TrimSpace(value), "/")
+}
+
+func (s *Service) switchActiveProviderKey(ctx context.Context, keyID uint64) {
+	if keyID == 0 {
+		return
+	}
+	_ = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.ImageProviderKey{}).Where("is_using = ?", true).Update("is_using", false).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Update("is_using", true).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }

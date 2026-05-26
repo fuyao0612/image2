@@ -2380,7 +2380,7 @@ func TestAdminListTaskAndRedeemKeywordFilters(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("update task: %v", err)
 	}
-	taskResp, err := svc.AdminListImageTasks(context.Background(), admin.ID, "", "skyline", 1, 10)
+	taskResp, err := svc.AdminListImageTasks(context.Background(), admin.ID, "", "skyline", 0, 1, 10)
 	if err != nil {
 		t.Fatalf("list tasks by keyword: %v", err)
 	}
@@ -2393,7 +2393,7 @@ func TestAdminListTaskAndRedeemKeywordFilters(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("update task email notify fields: %v", err)
 	}
-	taskResp, err = svc.AdminListImageTasks(context.Background(), admin.ID, "", "skyline", 1, 10)
+	taskResp, err = svc.AdminListImageTasks(context.Background(), admin.ID, "", "skyline", 0, 1, 10)
 	if err != nil {
 		t.Fatalf("list tasks after email notify update: %v", err)
 	}
@@ -2452,7 +2452,7 @@ func TestAdminListImageTasksSeparatesAdminErrorMessageFromUserMessage(t *testing
 		t.Fatalf("update failed task: %v", err)
 	}
 
-	resp, err := svc.AdminListImageTasks(context.Background(), admin.ID, "", "", 1, 20)
+	resp, err := svc.AdminListImageTasks(context.Background(), admin.ID, "", "", 0, 1, 20)
 	if err != nil {
 		t.Fatalf("list image tasks: %v", err)
 	}
