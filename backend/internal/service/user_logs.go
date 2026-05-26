@@ -179,11 +179,11 @@ func (s *Service) loadUserActivityRecordsPage(ctx context.Context, userID uint64
 	}
 
 	var loginLogTotal int64
-	if err := s.db.WithContext(ctx).Model(&model.SiteActionLog{}).Where("user_id = ? AND action = ?", userID, "user.login").Count(&loginLogTotal).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&model.SiteActionLog{}).Where("actor_type = ? AND actor_id = ? AND action = ?", "user", userID, "user.login").Count(&loginLogTotal).Error; err != nil {
 		return nil, 0, err
 	}
 	var loginLogs []model.SiteActionLog
-	if err := s.db.WithContext(ctx).Where("user_id = ? AND action = ?", userID, "user.login").Order("created_at desc, id desc").Limit(limit).Find(&loginLogs).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("actor_type = ? AND actor_id = ? AND action = ?", "user", userID, "user.login").Order("created_at desc, id desc").Limit(limit).Find(&loginLogs).Error; err != nil {
 		return nil, 0, err
 	}
 

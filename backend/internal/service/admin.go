@@ -248,9 +248,9 @@ func (s *Service) adminTaskTrends(ctx context.Context) ([]dto.AdminTaskTrendPoin
 		return nil, nil, nil, err
 	}
 
-	return buildTaskTrend(tasks, now, 24, time.Hour, "15:04"),
-		buildTaskTrend(tasks, now, 6, 12*time.Hour, "01/02 15:04"),
-		buildTaskTrend(tasks, now, 7, 24*time.Hour, "01/02"),
+	return buildTaskTrend(tasks, now, 48, 30*time.Minute, "15:04"),
+		buildTaskTrend(tasks, now, 24, 3*time.Hour, "01/02 15:04"),
+		buildTaskTrend(tasks, now, 14, 12*time.Hour, "01/02 15:04"),
 		nil
 }
 

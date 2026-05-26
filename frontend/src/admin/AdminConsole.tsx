@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   Activity,
   AlertTriangle,
   ArrowLeft,
@@ -1181,41 +1190,62 @@ function Overview({ stats }: { stats: AdminStatsResponse | null }) {
             ))}
           </div>
         </div>
-        <div className="mt-10 flex items-center justify-between text-sm">
-          <div className="flex gap-4">
-            <span className="inline-flex items-center gap-2">
-              <span className="h-2 w-5 rounded-full bg-emerald-400" />
-              成功
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <span className="h-2 w-5 rounded-full bg-rose-400" />
-              失败
-            </span>
-          </div>
-          <span className="text-slate-500">柱顶显示数值</span>
-        </div>
-        <div className="overview-bars mt-8 overflow-x-auto rounded-lg bg-white p-5">
+        <div className="mt-6 h-[340px] w-full pt-4">
           {points.length ? (
-            <div className="flex h-72 min-w-[760px] items-end gap-2 border-b border-slate-200 px-2">
-              {points.map((p, index) => (
-                <div
-                  key={`${p.label}-${index}`}
-                  className="flex min-w-8 flex-1 flex-col items-center gap-2"
-                >
-                  <div className="flex h-52 items-end gap-1 border-b-0 border-slate-100">
-                    <TrendBar
-                      value={p.success}
-                      max={max}
-                      color="bg-emerald-400"
-                    />
-                    <TrendBar value={p.failed} max={max} color="bg-rose-400" />
-                  </div>
-                  <span className="max-w-16 truncate text-xs text-slate-500">
-                    {p.label}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={points}
+                margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="colorSuccess" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#34d399" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorFailed" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#fb7185" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#fb7185" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis 
+                  dataKey="label" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#64748b', fontSize: 12 }}
+                  dy={10}
+                  minTickGap={20}
+                />
+                <YAxis 
+                  allowDecimals={false}
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#64748b', fontSize: 12 }} 
+                />
+                <RechartsTooltip 
+                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
+                  labelStyle={{ fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="success"
+                  name="成功"
+                  stroke="#34d399"
+                  strokeWidth={3}
+                  fillOpacity={1}
+                  fill="url(#colorSuccess)"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="failed"
+                  name="失败"
+                  stroke="#fb7185"
+                  strokeWidth={3}
+                  fillOpacity={1}
+                  fill="url(#colorFailed)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
           ) : (
             <Empty text="暂无趋势数据" />
           )}
@@ -3280,28 +3310,7 @@ function RedeemSummary({
     </div>
   );
 }
-function TrendBar({
-  value,
-  max,
-  color,
-}: {
-  value: number;
-  max: number;
-  color: string;
-}) {
-  return (
-    <div className="flex h-full w-4 items-end justify-center">
-      <div
-        className={`relative w-3 rounded-full ${color}`}
-        style={{ height: value ? Math.max(6, (value / max) * 190) : 3 }}
-      >
-        <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs font-bold text-slate-800">
-          {value}
-        </span>
-      </div>
-    </div>
-  );
-}
+
 function ResponsiveTable({
   headers,
   rows,

@@ -6,6 +6,8 @@ backend/.env.*
 !backend/.env.example
 !backend/.env.production.example
 backend/*.exe
+backend/.gobuildcache/
+backend/.gomodcache/
 backend/data/
 backend/*.db
 backend/*.sqlite

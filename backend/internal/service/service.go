@@ -2295,8 +2295,11 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 		log.Printf("异步生图任务 %d 已有提交中标记，跳过重复提交", taskID)
 		return
 	}
+	skippedKeyIDs := map[uint64]struct{}{}
+
+retrySubmit:
 	submitCtx, submitCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
-	submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPool(submitCtx, taskID, userID, provider.GenerateRequest{
+	submitted, activeProvider, providerKeyID, submitErr := s.submitImageTaskWithProviderPoolSkip(submitCtx, taskID, userID, provider.GenerateRequest{
 		Prompt:             input.Prompt,
 		Size:               input.Size,
 		Style:              input.Style,
@@ -2306,7 +2309,7 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 		ReferenceImageURL:  input.ReferenceImageURL,
 		ReferenceImageURLs: input.ReferenceImageURLs,
 		ReferenceImages:    s.referenceImagesForProvider(submitCtx, input.ReferenceImageURLs),
-	})
+	}, skippedKeyIDs)
 	submitCancel()
 
 	if submitErr != nil {
@@ -2393,13 +2396,22 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 	}
 
 	pollCtx, pollCancel := context.WithTimeout(context.Background(), s.cfg.ImageProviderTimeout)
-	defer pollCancel()
 
 	result, pollErr := s.pollImageTaskV2(pollCtx, taskID, userID, input.Count, activeProvider, batchID, submitted)
+	pollCancel()
 	if pollErr != nil {
 		if result.Status == model.ImageTaskStatusGenerating {
 			log.Printf("image task %d poll round timed out, keep generating for later recovery: %v", taskID, pollErr)
 			return
+		}
+		if providerKeyID > 0 {
+			rawFailure := providerFailureRawText(result, pollErr)
+			if isProviderBalanceError(rawFailure) || isProviderAuthError(rawFailure) {
+				s.markProviderKeyFailure(context.Background(), providerKeyID, rawFailure, isProviderBalanceError(rawFailure))
+				skippedKeyIDs[providerKeyID] = struct{}{}
+				log.Printf("image task %d provider key %d failed after polling, retrying with next key", taskID, providerKeyID)
+				goto retrySubmit
+			}
 		}
 		message := providerFailureMessage(result, pollErr)
 		balance, updateErr := s.failImageTaskAndRefund(taskID, userID, result, message)
@@ -2431,6 +2443,15 @@ func (s *Service) processImageTaskV2(taskID uint64, userID uint64, input imageTa
 		}
 		log.Printf("异步生图任务 %d 成功完成，当前余额 %d", taskID, balance)
 	case model.ImageTaskStatusFailed:
+		if providerKeyID > 0 {
+			rawFailure := providerFailureRawText(result, nil)
+			if isProviderBalanceError(rawFailure) || isProviderAuthError(rawFailure) {
+				s.markProviderKeyFailure(context.Background(), providerKeyID, rawFailure, isProviderBalanceError(rawFailure))
+				skippedKeyIDs[providerKeyID] = struct{}{}
+				log.Printf("image task %d provider key %d returned failed result after polling, retrying with next key", taskID, providerKeyID)
+				goto retrySubmit
+			}
+		}
 		message := providerFailureMessage(result, nil)
 		balance, updateErr := s.failImageTaskAndRefund(taskID, userID, result, message)
 		if updateErr != nil {

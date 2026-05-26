@@ -1417,6 +1417,109 @@ func TestProcessImageTaskV2SubmitsMultipleImagesAsSingleImageBatches(t *testing.
 	}
 }
 
+func TestProcessImageTaskV2RetriesNextKeyWhenPollReportsLowBalance(t *testing.T) {
+	svc, db := newTestService(t)
+	svc.cfg.ImageProviderPollInterval = time.Millisecond
+	svc.cfg.ImageProviderTimeout = time.Second
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+	if err := db.Model(&model.ImageTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"requested_count": 1,
+		"request_params":  `{"prompt":"test prompt","count":1}`,
+	}).Error; err != nil {
+		t.Fatalf("set task params: %v", err)
+	}
+
+	var firstPosts int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/batches":
+			atomic.AddInt32(&firstPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-low-balance","status":"running"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/batches/status":
+			_, _ = w.Write([]byte(`{"items":[{"id":"batch-low-balance","status":"failed","items":[{"status":"failed","errorMessage":"upstream http 403: quota left: 0.000000; code=insufficient_user_quota"}]}]}`))
+		default:
+			t.Fatalf("unexpected first server request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer firstServer.Close()
+
+	var secondPosts int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/batches":
+			atomic.AddInt32(&secondPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-success","status":"running"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/batches/status":
+			_, _ = w.Write([]byte(`{"items":[{"id":"batch-success","status":"succeeded","items":[{"status":"succeeded","imageUrl":"/results/batch-success/ok.png"}]}]}`))
+		default:
+			t.Fatalf("unexpected second server request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer secondServer.Close()
+
+	keys := []model.ImageProviderKey{
+		{
+			Name:              "low balance poll key",
+			Provider:          "mentalout",
+			BatchServiceURL:   firstServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-first",
+			Status:            model.ImageProviderKeyStatusActive,
+			IsUsing:           true,
+			Priority:          1,
+			AutoSwitchEnabled: true,
+		},
+		{
+			Name:              "backup key",
+			Provider:          "mentalout",
+			BatchServiceURL:   secondServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-second",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          2,
+			AutoSwitchEnabled: true,
+		},
+	}
+	if err := db.Create(&keys).Error; err != nil {
+		t.Fatalf("create provider keys: %v", err)
+	}
+
+	svc.processImageTaskV2(task.ID, user.ID, imageTaskGenerationInput{
+		Prompt:  "test prompt",
+		Size:    "1024x1024",
+		Count:   1,
+		Quality: "auto",
+	})
+
+	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
+		t.Fatalf("expected first key then backup key to be submitted once, first=%d second=%d", firstPosts, secondPosts)
+	}
+	var reloaded model.ImageTask
+	if err := db.First(&reloaded, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.Status != model.ImageTaskStatusSuccess {
+		t.Fatalf("expected task success after failover, got %s error=%q response=%q", reloaded.Status, reloaded.ErrorMessage, reloaded.ProviderResponse)
+	}
+	if reloaded.ProviderKeyID != keys[1].ID {
+		t.Fatalf("expected task to use backup key %d, got %d", keys[1].ID, reloaded.ProviderKeyID)
+	}
+	urls := imageURLsFromTask(reloaded)
+	if len(urls) != 1 || urls[0] != secondServer.URL+"/results/batch-success/ok.png" {
+		t.Fatalf("unexpected generated urls: %#v", urls)
+	}
+	var firstKey model.ImageProviderKey
+	if err := db.First(&firstKey, keys[0].ID).Error; err != nil {
+		t.Fatalf("load first key: %v", err)
+	}
+	if firstKey.Status != model.ImageProviderKeyStatusLowBalance {
+		t.Fatalf("expected first key low_balance, got %s", firstKey.Status)
+	}
+}
+
 func TestSuccessfulTaskIsNotRefundedLater(t *testing.T) {
 	svc, db := newTestService(t)
 	user := createTestUserWithCredits(t, db, 0, 8, 0)
@@ -2157,6 +2260,162 @@ func TestSubmitImageTaskWithProviderPoolFailsOverOnFailedBalanceResult(t *testin
 	}
 	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
 		t.Fatalf("expected both keys tried once, first=%d second=%d", firstPosts, secondPosts)
+	}
+}
+
+func TestSubmitImageTaskWithProviderPoolFailsOverOnInvalidKeySubmitError(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var firstPosts int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&firstPosts, 1)
+			http.Error(w, "Invalid token; code=invalid_api_key; type=new_api_error", http.StatusUnauthorized)
+			return
+		}
+		t.Fatalf("unexpected first server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer firstServer.Close()
+
+	var secondPosts int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&secondPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-second","status":"running"}`))
+			return
+		}
+		t.Fatalf("unexpected second server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer secondServer.Close()
+
+	keys := []model.ImageProviderKey{
+		{
+			Name:              "invalid key",
+			Provider:          "mentalout",
+			BatchServiceURL:   firstServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-invalid",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          1,
+			AutoSwitchEnabled: true,
+			IsUsing:           true,
+		},
+		{
+			Name:              "backup key",
+			Provider:          "mentalout",
+			BatchServiceURL:   secondServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-backup",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          2,
+			AutoSwitchEnabled: true,
+		},
+	}
+	if err := db.Create(&keys).Error; err != nil {
+		t.Fatalf("create provider keys: %v", err)
+	}
+
+	result, _, keyID, err := svc.submitImageTaskWithProviderPool(context.Background(), task.ID, user.ID, provider.GenerateRequest{
+		Prompt: "test prompt",
+		Size:   "1024x1024",
+		Count:  1,
+	})
+	if err != nil {
+		t.Fatalf("expected failover to backup key, got err=%v result=%+v", err, result)
+	}
+	if keyID != keys[1].ID {
+		t.Fatalf("expected backup key id %d, got %d", keys[1].ID, keyID)
+	}
+	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
+		t.Fatalf("expected both keys tried once, first=%d second=%d", firstPosts, secondPosts)
+	}
+
+	var firstKey model.ImageProviderKey
+	if err := db.First(&firstKey, keys[0].ID).Error; err != nil {
+		t.Fatalf("load first key: %v", err)
+	}
+	if firstKey.Status != model.ImageProviderKeyStatusError {
+		t.Fatalf("expected invalid key to be marked error, got %s", firstKey.Status)
+	}
+}
+
+func TestSubmitImageTaskWithProviderPoolFailsOverOnInvalidKeyFailedResult(t *testing.T) {
+	svc, db := newTestService(t)
+	user := createTestUserWithCredits(t, db, 0, 8, 0)
+	task := createTestCreditTask(t, db, user.ID, model.ImageTaskStatusGenerating, 1, 0)
+
+	var firstPosts int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&firstPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-invalid","status":"failed","tasks":[{"status":"failed","errorMessage":"upstream http 401: Invalid token; code=invalid_api_key; type=new_api_error"}]}`))
+			return
+		}
+		t.Fatalf("unexpected first server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer firstServer.Close()
+
+	var secondPosts int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/batches" {
+			atomic.AddInt32(&secondPosts, 1)
+			_, _ = w.Write([]byte(`{"id":"batch-second","status":"running"}`))
+			return
+		}
+		t.Fatalf("unexpected second server request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer secondServer.Close()
+
+	keys := []model.ImageProviderKey{
+		{
+			Name:              "invalid result key",
+			Provider:          "mentalout",
+			BatchServiceURL:   firstServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-invalid",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          1,
+			AutoSwitchEnabled: true,
+			IsUsing:           true,
+		},
+		{
+			Name:              "backup key",
+			Provider:          "mentalout",
+			BatchServiceURL:   secondServer.URL,
+			APIBaseURL:        "https://chunfeng.mentalout.top",
+			APIKey:            "sk-backup",
+			Status:            model.ImageProviderKeyStatusActive,
+			Priority:          2,
+			AutoSwitchEnabled: true,
+		},
+	}
+	if err := db.Create(&keys).Error; err != nil {
+		t.Fatalf("create provider keys: %v", err)
+	}
+
+	result, _, keyID, err := svc.submitImageTaskWithProviderPool(context.Background(), task.ID, user.ID, provider.GenerateRequest{
+		Prompt: "test prompt",
+		Size:   "1024x1024",
+		Count:  1,
+	})
+	if err != nil {
+		t.Fatalf("expected failover to backup key, got err=%v result=%+v", err, result)
+	}
+	if keyID != keys[1].ID {
+		t.Fatalf("expected backup key id %d, got %d", keys[1].ID, keyID)
+	}
+	if atomic.LoadInt32(&firstPosts) != 1 || atomic.LoadInt32(&secondPosts) != 1 {
+		t.Fatalf("expected both keys tried once, first=%d second=%d", firstPosts, secondPosts)
+	}
+
+	var firstKey model.ImageProviderKey
+	if err := db.First(&firstKey, keys[0].ID).Error; err != nil {
+		t.Fatalf("load first key: %v", err)
+	}
+	if firstKey.Status != model.ImageProviderKeyStatusError {
+		t.Fatalf("expected invalid result key to be marked error, got %s", firstKey.Status)
 	}
 }
 

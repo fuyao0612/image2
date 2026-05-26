@@ -176,7 +176,7 @@ func (s *Service) getMeV2(ctx context.Context, userID uint64) (dto.UserInfo, err
 		return dto.UserInfo{}, err
 	}
 	user = s.syncConfiguredAdminRole(user)
-	
+
 	now := s.now()
 	if user.LastLoginAt == nil || now.Sub(*user.LastLoginAt) > time.Hour {
 		if err := s.db.Model(&model.User{}).Where("id = ?", user.ID).Update("last_login_at", now).Error; err == nil {
@@ -186,7 +186,7 @@ func (s *Service) getMeV2(ctx context.Context, userID uint64) (dto.UserInfo, err
 			})
 		}
 	}
-	
+
 	return s.userInfoBalance(user), nil
 }
 
@@ -258,7 +258,6 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 
 	var responseData dto.CreateImageTaskResponse
 	var task model.ImageTask
-	shouldLaunch := true
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		user, err := s.lockUser(tx, userID)
 		if err != nil {
@@ -286,40 +285,6 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 		afterImagePoints := beforePoints - pointSpend
 		afterPoints := beforePoints - totalPointSpend
 		requestSnapshot, _ := json.Marshal(input)
-
-		var existing model.ImageTask
-		if err := tx.Where(
-			"user_id = ? AND status = ? AND request_params = ? AND created_at >= ?",
-			userID,
-			model.ImageTaskStatusGenerating,
-			string(requestSnapshot),
-			s.now().Add(-10*time.Minute),
-		).Order("created_at desc").First(&existing).Error; err == nil {
-			task = existing
-			shouldLaunch = false
-			responseData = dto.CreateImageTaskResponse{
-				TaskID:                strconv.FormatUint(existing.ID, 10),
-				Status:                string(existing.Status),
-				RequestedCount:        existing.RequestedCount,
-				ImageURL:              existing.ImageURL,
-				ImageURLs:             imageURLsFromTask(existing),
-				CostPoints:            existing.CostPoints,
-				CostCredits:           existing.CostCredits,
-				FreeCreditsCost:       existing.FreeCreditsCost,
-				PaidCreditsCost:       existing.PaidCreditsCost,
-				CreditSource:          existing.CreditSource,
-				Balance:               user.FreeCredits + user.PaidCredits,
-				PointsBalance:         user.PointsBalance,
-				FreeCreditsBalance:    user.FreeCredits,
-				PaidCreditsBalance:    user.PaidCredits,
-				TotalCreditsBalance:   user.FreeCredits + user.PaidCredits,
-				EmailNotifyEnabled:    existing.EmailNotifyEnabled,
-				EmailNotifyCostPoints: existing.EmailNotifyCostPoints,
-			}
-			return nil
-		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
 
 		creditSource := "free"
 		switch {
@@ -420,9 +385,7 @@ func (s *Service) createImageTaskV2(ctx context.Context, userID uint64, req dto.
 	}
 
 	_ = s.recordContentAudit(ctx, userID, "image_task", strconv.FormatUint(task.ID, 10), "prompt", prompt, decision)
-	if shouldLaunch {
-		s.launchImageTask(task.ID, userID, input)
-	}
+	s.launchImageTask(task.ID, userID, input)
 	return responseData, nil
 }
 

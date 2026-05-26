@@ -228,6 +228,7 @@ func (s *Service) ListActiveProviderKeys(ctx context.Context) ([]model.ImageProv
 		Where("provider = ? AND status IN ? AND auto_switch_enabled = ?", "mentalout", []model.ImageProviderKeyStatus{
 			model.ImageProviderKeyStatusActive,
 			model.ImageProviderKeyStatusLowBalance,
+			model.ImageProviderKeyStatusError,
 		}, true).
 		Order("is_using desc, priority asc, last_used_at asc, id asc").
 		Find(&keys).Error; err != nil {
@@ -318,6 +319,9 @@ func (s *Service) markProviderKeyFailure(ctx context.Context, keyID uint64, reas
 	if lowBalance {
 		updates["last_used_at"] = &now
 		updates["status"] = model.ImageProviderKeyStatusLowBalance
+	} else if isProviderAuthError(reason) {
+		updates["last_used_at"] = &now
+		updates["status"] = model.ImageProviderKeyStatusError
 	}
 	err := s.db.WithContext(ctx).Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Updates(updates).Error
 	if err != nil {
@@ -357,10 +361,17 @@ func (s *Service) submitImageTaskWithProviderPoolSkip(ctx context.Context, taskI
 		if err == nil {
 			if result.Status == model.ImageTaskStatusFailed {
 				message := providerFailureMessage(result, nil)
-				if isProviderBalanceError(message) {
-					s.markProviderKeyFailure(ctx, key.ID, message, true)
+				rawFailure := providerFailureRawText(result, nil)
+				if isProviderBalanceError(rawFailure) {
+					s.markProviderKeyFailure(ctx, key.ID, rawFailure, true)
 					lastResult = result
 					log.Printf("生图 Key %d 余额不足，尝试切换下一把 Key: %s", key.ID, message)
+					continue
+				}
+				if isProviderAuthError(rawFailure) {
+					s.markProviderKeyFailure(ctx, key.ID, rawFailure, false)
+					lastResult = result
+					log.Printf("provider key %d auth failed on submit result, trying next key: %s", key.ID, message)
 					continue
 				}
 				if !key.IsUsing {
@@ -376,10 +387,11 @@ func (s *Service) submitImageTaskWithProviderPoolSkip(ctx context.Context, taskI
 		lastResult = result
 		lastErr = err
 		message := providerFailureMessage(result, err)
+		rawFailure := providerFailureRawText(result, err)
 		if shouldStopProviderSubmitFailover(result, err) || strings.TrimSpace(result.ProviderTaskID) != "" {
 			return result, currentProvider, key.ID, err
 		}
-		s.markProviderKeyFailure(ctx, key.ID, message, isProviderBalanceError(message))
+		s.markProviderKeyFailure(ctx, key.ID, rawFailure, isProviderBalanceError(rawFailure))
 		log.Printf("生图 Key %d 提交失败，尝试切换下一把 Key: %s", key.ID, message)
 		continue
 	}
@@ -410,6 +422,22 @@ func shouldStopProviderSubmitFailover(result provider.GenerateResult, err error)
 	return isProviderTemporaryServerError(raw) || isProviderNetworkError(raw) || isProviderTimeoutError(raw)
 }
 
+func providerFailureRawText(result provider.GenerateResult, err error) string {
+	var parts []string
+	if text := strings.TrimSpace(result.ErrorMessage); text != "" {
+		parts = append(parts, text)
+	}
+	if text := strings.TrimSpace(result.RawResponse); text != "" {
+		parts = append(parts, text)
+	}
+	if err != nil {
+		if text := strings.TrimSpace(err.Error()); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func isProviderBalanceError(message string) bool {
 	lower := strings.ToLower(strings.TrimSpace(message))
 	if lower == "" {
@@ -435,6 +463,22 @@ func isProviderCooldownError(message string) bool {
 	return strings.Contains(lower, "model_cooldown") ||
 		strings.Contains(lower, "cooling down") ||
 		strings.Contains(lower, "cooldown")
+}
+
+func isProviderAuthError(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	code := extractProviderErrorCode(lower)
+	return code == "invalid_api_key" ||
+		code == "invalid_token" ||
+		strings.Contains(lower, "invalid token") ||
+		strings.Contains(lower, "incorrect api key") ||
+		strings.Contains(lower, "api key not found") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "http 401") ||
+		(strings.Contains(lower, "http 403") && !isProviderBalanceError(lower))
 }
 
 func providerKeyToDTO(key model.ImageProviderKey) dto.AdminProviderKeyItem {
@@ -549,12 +593,21 @@ func (s *Service) switchActiveProviderKey(ctx context.Context, keyID uint64) {
 		return
 	}
 	_ = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var before model.ImageProviderKey
+		if err := tx.First(&before, keyID).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&model.ImageProviderKey{}).Where("is_using = ?", true).Update("is_using", false).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&model.ImageProviderKey{}).Where("id = ?", keyID).Update("is_using", true).Error; err != nil {
 			return err
 		}
+		var after model.ImageProviderKey
+		if err := tx.First(&after, keyID).Error; err != nil {
+			return err
+		}
+		_ = recordAdminActionLog(tx, 0, "provider_key.use", "provider_key", strconv.FormatUint(keyID, 10), before, after, after.Name)
 		return nil
 	})
 }
