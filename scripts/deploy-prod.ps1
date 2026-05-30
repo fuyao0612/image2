@@ -1,7 +1,7 @@
 param(
   [string]$HostName = "jh612.top",
   [string]$UserName = "ubuntu",
-  [string]$KeyPath = "C:\Users\84355\.ssh\cjhtest.pem",
+  [string]$KeyPath = $env:IMAGE2_SSH_KEY,
   [string]$RemoteDir = "/home/ubuntu/image2",
   [switch]$Deploy,
   [switch]$SkipTests
@@ -42,6 +42,9 @@ Require-Command "tar"
 if ($Deploy) {
   Require-Command "ssh"
   Require-Command "scp"
+  if ([string]::IsNullOrWhiteSpace($KeyPath)) {
+    throw "Set IMAGE2_SSH_KEY or pass -KeyPath before deploying."
+  }
   if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH private key not found: $KeyPath"
   }

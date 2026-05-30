@@ -34,6 +34,11 @@ frontend/src/admin/AdminConsole.tsx.server-*
 
 # Deploy
 deploy/.env.production
+*.pem
+*.key
+*部署文档*.txt
+server-deploy*.txt
+服务器*.txt
 
 # IDE / OS
 .DS_Store
